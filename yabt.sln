@@ -1,0 +1,91 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.6.11819.183 stable
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Core", "src\Yabt.Core\Yabt.Core.csproj", "{F9512C65-3AD8-42C1-9F3F-F2E0E3998623}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Metadata", "src\Yabt.Metadata\Yabt.Metadata.csproj", "{0427BC8D-94D3-4D2B-A9A0-59B2D6356B18}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Packaging", "src\Yabt.Packaging\Yabt.Packaging.csproj", "{8B35D005-9043-41F1-BEA7-4E629B728063}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.AzureBlob", "src\Yabt.AzureBlob\Yabt.AzureBlob.csproj", "{3C25F038-C514-498F-BC15-B18CD7378765}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Sync", "src\Yabt.Sync\Yabt.Sync.csproj", "{3072B204-3877-4EDC-9786-DC5159D91947}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Cli", "src\Yabt.Cli\Yabt.Cli.csproj", "{59DD2410-A1AC-4833-9C55-361092B06E5F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{C92C132C-6018-4E38-B71B-4F9C64E3D9D7}"
+	ProjectSection(SolutionItems) = preProject
+		.editorconfig = .editorconfig
+		.gitignore = .gitignore
+		AGENT.md = AGENT.md
+		Directory.Build.props = Directory.Build.props
+		Directory.Packages.props = Directory.Packages.props
+		HUMAN.md = HUMAN.md
+		LICENSE = LICENSE
+		README.md = README.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{BDA4E899-03B4-43A1-AC2B-CA8FCB6543CF}"
+	ProjectSection(SolutionItems) = preProject
+		docs\architecture.md = docs\architecture.md
+		docs\folder-policy-format.md = docs\folder-policy-format.md
+		docs\manifest-format.md = docs\manifest-format.md
+		docs\storage-layout.md = docs\storage-layout.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "examples", "examples", "{862545BA-EE39-4945-8A60-FB40BC48F501}"
+	ProjectSection(SolutionItems) = preProject
+		examples\.backup-policy.mirror.json = examples\.backup-policy.mirror.json
+		examples\.backup-policy.package.json = examples\.backup-policy.package.json
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "spec", "spec", "{6DB32EB6-A817-4B7A-A373-00E8E4D2BE39}"
+	ProjectSection(SolutionItems) = preProject
+		spec\folder-policy.schema.json = spec\folder-policy.schema.json
+		spec\manifest.schema.json = spec\manifest.schema.json
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F9512C65-3AD8-42C1-9F3F-F2E0E3998623}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F9512C65-3AD8-42C1-9F3F-F2E0E3998623}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F9512C65-3AD8-42C1-9F3F-F2E0E3998623}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F9512C65-3AD8-42C1-9F3F-F2E0E3998623}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0427BC8D-94D3-4D2B-A9A0-59B2D6356B18}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0427BC8D-94D3-4D2B-A9A0-59B2D6356B18}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0427BC8D-94D3-4D2B-A9A0-59B2D6356B18}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0427BC8D-94D3-4D2B-A9A0-59B2D6356B18}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8B35D005-9043-41F1-BEA7-4E629B728063}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8B35D005-9043-41F1-BEA7-4E629B728063}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8B35D005-9043-41F1-BEA7-4E629B728063}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8B35D005-9043-41F1-BEA7-4E629B728063}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3C25F038-C514-498F-BC15-B18CD7378765}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3C25F038-C514-498F-BC15-B18CD7378765}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3C25F038-C514-498F-BC15-B18CD7378765}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3C25F038-C514-498F-BC15-B18CD7378765}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3072B204-3877-4EDC-9786-DC5159D91947}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3072B204-3877-4EDC-9786-DC5159D91947}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3072B204-3877-4EDC-9786-DC5159D91947}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3072B204-3877-4EDC-9786-DC5159D91947}.Release|Any CPU.Build.0 = Release|Any CPU
+		{59DD2410-A1AC-4833-9C55-361092B06E5F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{59DD2410-A1AC-4833-9C55-361092B06E5F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{59DD2410-A1AC-4833-9C55-361092B06E5F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{59DD2410-A1AC-4833-9C55-361092B06E5F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{BDA4E899-03B4-43A1-AC2B-CA8FCB6543CF} = {C92C132C-6018-4E38-B71B-4F9C64E3D9D7}
+		{862545BA-EE39-4945-8A60-FB40BC48F501} = {C92C132C-6018-4E38-B71B-4F9C64E3D9D7}
+		{6DB32EB6-A817-4B7A-A373-00E8E4D2BE39} = {C92C132C-6018-4E38-B71B-4F9C64E3D9D7}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {C808C5B7-4B46-4DA9-8F76-080585294DFF}
+	EndGlobalSection
+EndGlobal

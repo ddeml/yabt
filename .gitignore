@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+.vscode/
+TestResults/
+*.user
+*.suo
+*.sqlite
+*.db
+*.log
+artifacts/
+packages/
+*.7z
+*.tar.gz
+*.zip

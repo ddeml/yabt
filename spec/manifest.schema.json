@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/yabt/manifest.schema.json",
+  "title": "YABT package manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "sourcePath": { "type": "string" },
+    "createdAtUtc": { "type": "string", "format": "date-time" },
+    "archiveFormat": {
+      "type": "string",
+      "enum": ["sevenZip", "tarGzip", "zip"]
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "relativePath": { "type": "string" },
+          "length": { "type": "integer", "minimum": 0 },
+          "lastWriteTimeUtc": { "type": "string", "format": "date-time" },
+          "contentHash": { "type": ["string", "null"] }
+        },
+        "required": ["relativePath", "length", "lastWriteTimeUtc"]
+      }
+    },
+    "totalBytes": { "type": "integer", "minimum": 0 },
+    "manifestHash": { "type": "string" },
+    "packageName": { "type": ["string", "null"] }
+  },
+  "required": [
+    "sourcePath",
+    "createdAtUtc",
+    "archiveFormat",
+    "files",
+    "totalBytes",
+    "manifestHash"
+  ]
+}

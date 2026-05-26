@@ -1,0 +1,11 @@
+{
+  "mode": "package",
+  "format": "sevenZip",
+  "includePatterns": [
+    "**/*"
+  ],
+  "excludePatterns": [
+    "**/Thumbs.db",
+    "**/.DS_Store"
+  ]
+}

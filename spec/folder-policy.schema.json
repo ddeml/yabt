@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/yabt/folder-policy.schema.json",
+  "title": "YABT folder policy",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["mirror", "package", "auto"]
+    },
+    "format": {
+      "type": ["string", "null"],
+      "enum": ["sevenZip", "tarGzip", "zip", null]
+    },
+    "includePatterns": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "excludePatterns": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["mode"]
+}

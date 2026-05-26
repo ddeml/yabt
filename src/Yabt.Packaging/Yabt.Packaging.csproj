@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Yabt.Core\Yabt.Core.csproj" />
+    <ProjectReference Include="..\Yabt.Metadata\Yabt.Metadata.csproj" />
+  </ItemGroup>
+</Project>
