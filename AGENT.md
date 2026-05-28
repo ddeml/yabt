@@ -205,6 +205,8 @@ Only scaffold command structure until sync semantics are designed.
 - Always set a default for `CancellationToken` parameters in public methods.
 - Omit cancellation token arguments when the called API provides a default and there is no meaningful token to pass.
 - Pass `default` instead of `CancellationToken.None` when an explicit cancellation token argument is required and no real token is available.
+- For classes that have an `ILogger`, add a simple `_logger.LogTrace(nameof(MethodName));` at the start of each method.
+- Use source-generated `[LoggerMessage]` logging methods instead of direct `_logger.Log...()` calls whenever the direct call would trigger CA1873. Prefix generated logging methods with `Log`, implement them as `ILogger` extension methods, and call them like `_logger.LogSomething(...)`. Prefer focused internal partial logging helper classes near the consuming implementation.
 - Keep an empty line after method declarations or definitions.
 - Keep line endings consistent. Follow `.editorconfig` and `.gitattributes`; text files in this repository should use CRLF unless a file-specific rule says otherwise.
 - Options classes should use nullable properties, including value types where applicable.
