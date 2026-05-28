@@ -19,10 +19,22 @@ internal sealed class CommandRunner
 
         if (args.Count == 0 || args[0] is "help")
         {
-            return await rootCommand.Parse(["--help"]).InvokeAsync();
+            return await InvokeAsync(rootCommand, ["--help"], cancellationToken);
         }
 
-        return await rootCommand.Parse(args).InvokeAsync();
+        return await InvokeAsync(rootCommand, args, cancellationToken);
+    }
+
+    private static async Task<int> InvokeAsync
+    (
+        RootCommand rootCommand,
+        IReadOnlyList<string> args,
+        CancellationToken cancellationToken
+    )
+    {
+        return await rootCommand.Parse(args).InvokeAsync(
+            new InvocationConfiguration(),
+            cancellationToken);
     }
 
     private RootCommand CreateRootCommand()
