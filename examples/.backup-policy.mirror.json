@@ -1,6 +1,3 @@
 {
-  "mode": "mirror",
-  "format": null,
-  "includePatterns": [],
-  "excludePatterns": []
+  "format": "mirror"
 }

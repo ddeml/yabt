@@ -1,11 +1,13 @@
 {
-  "mode": "package",
-  "format": "sevenZip",
+  "format": "zip",
   "includePatterns": [
     "**/*"
   ],
   "excludePatterns": [
     "**/Thumbs.db",
     "**/.DS_Store"
-  ]
+  ],
+  "options": {
+    "compressionLevel": 6
+  }
 }

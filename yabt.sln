@@ -29,6 +29,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{BDA4E899-03B4-43A1-AC2B-CA8FCB6543CF}"
 	ProjectSection(SolutionItems) = preProject
+		docs\backup-root-format.md = docs\backup-root-format.md
 		docs\architecture.md = docs\architecture.md
 		docs\folder-policy-format.md = docs\folder-policy-format.md
 		docs\manifest-format.md = docs\manifest-format.md
@@ -37,12 +38,14 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{BDA4E899-0
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "examples", "examples", "{862545BA-EE39-4945-8A60-FB40BC48F501}"
 	ProjectSection(SolutionItems) = preProject
+		examples\.backup-root.json = examples\.backup-root.json
 		examples\.backup-policy.mirror.json = examples\.backup-policy.mirror.json
-		examples\.backup-policy.package.json = examples\.backup-policy.package.json
+		examples\.backup-policy.zip.json = examples\.backup-policy.zip.json
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "spec", "spec", "{6DB32EB6-A817-4B7A-A373-00E8E4D2BE39}"
 	ProjectSection(SolutionItems) = preProject
+		spec\backup-root.schema.json = spec\backup-root.schema.json
 		spec\folder-policy.schema.json = spec\folder-policy.schema.json
 		spec\manifest.schema.json = spec\manifest.schema.json
 	EndProjectSection

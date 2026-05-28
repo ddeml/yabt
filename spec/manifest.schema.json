@@ -7,9 +7,9 @@
   "properties": {
     "sourcePath": { "type": "string" },
     "createdAtUtc": { "type": "string", "format": "date-time" },
-    "archiveFormat": {
+    "format": {
       "type": "string",
-      "enum": ["sevenZip", "tarGzip", "zip"]
+      "minLength": 1
     },
     "files": {
       "type": "array",
@@ -27,14 +27,18 @@
     },
     "totalBytes": { "type": "integer", "minimum": 0 },
     "manifestHash": { "type": "string" },
-    "packageName": { "type": ["string", "null"] }
+    "packageName": {
+      "type": "string",
+      "minLength": 1
+    }
   },
   "required": [
     "sourcePath",
     "createdAtUtc",
-    "archiveFormat",
+    "format",
     "files",
     "totalBytes",
-    "manifestHash"
+    "manifestHash",
+    "packageName"
   ]
 }
