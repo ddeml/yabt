@@ -4,9 +4,9 @@ This file records durable project guidance for Codex and other AI agents working
 
 ## Project Goal
 
-YABT is a .NET 10 filesystem-to-Azure-Blob archival synchronization tool.
+YABT is a .NET 10 object-store archival synchronization tool.
 
-It should replicate ordinary folders into Azure Blob Storage in a way that remains directly inspectable, understandable, and restorable without proprietary tooling. The project runs primarily on Windows at first, but architecture should remain portable and Linux-compatible where practical.
+It should replicate ordinary folders into archive targets such as a plain filesystem, Azure Blob Storage, or WebDAV in a way that remains directly inspectable, understandable, and restorable without proprietary tooling. The project runs primarily on Windows at first, but architecture should remain portable and Linux-compatible where practical.
 
 The system is a long-term durable archival replication tool, not a proprietary backup repository format.
 
@@ -18,21 +18,22 @@ Do not over-explain basic programming concepts. Prefer concise engineering trade
 
 ## Architectural Principles
 
-- Azure Blob Storage must remain directly browsable with Azure Storage Explorer.
-- Restore should be symmetrical to backup/sync.
-- Blob layout should mirror the original folder hierarchy.
+- Archive targets must remain directly browsable with ordinary tools, such as the filesystem, Azure Storage Explorer, or WebDAV clients.
+- Backup and restore should be symmetrical where practical: source and target locations are both object stores, and the operation direction determines backup, restore, verification, or reconciliation behavior.
+- Archive object layout should mirror the original folder hierarchy.
 - The archive must remain understandable and restorable without proprietary tooling.
-- Standard archive formats should be used: 7z, tar.gz, zip.
+- Standard archive formats should be used when packaging is enabled.
 - Metadata should be stored in human-readable JSON files.
-- SQLite may be used only as a disposable cache or performance optimization.
-- SQLite must never be the authoritative source of truth.
+- Do not implement metadata caching initially. If a cache is added later, it may be used only as a disposable performance optimization.
+- Any future cache must never be the authoritative source of truth.
 - The filesystem plus metadata files are the source of truth.
-- Azure Blob Storage is the durable replica/archive target.
+- Object stores are durable replica/archive targets.
 - Prefer append-mostly behavior.
+- Do not store secrets in durable archive metadata. Use runtime configuration, OS credential stores, managed identity, environment-provided credentials, or external secret stores.
 
 ## Live And Hist
 
-The blob layout conceptually uses:
+The archive layout conceptually uses:
 
 ```text
 /live/...
@@ -47,7 +48,29 @@ Do not deduplicate `/live`.
 
 Future deduplication may occur only under `/hist`, and only through explicit reference placeholder JSON files. Do not implement deduplication until requested.
 
-## Packaging
+## Archive Root Metadata
+
+The archive root should contain a human-readable descriptor named:
+
+```text
+.backup-root.json
+```
+
+This file identifies the archive, records layout information, and describes known object stores by provider-owned string names.
+
+It may include an optional `rootRole` value such as `source` or `target` to indicate the intended default role of the root. The role is advisory; command direction still determines backup, restore, verification, or reconciliation behavior.
+
+It may contain non-secret connection details such as container names, endpoints, prefixes, and credential references. It must not contain account keys, SAS tokens, passwords, client secrets, or other credentials.
+
+Object store roles are operation-specific. A store may be a source, target, backup location, restore location, or reconciliation peer depending on the command.
+
+Initial object store providers:
+
+- `fileSystem`
+- `azureBlob`
+- `webDav`
+
+## Formats And Packaging
 
 Folders may optionally be packaged before upload. Packaging is controlled by metadata files inside folders.
 
@@ -57,17 +80,16 @@ The primary policy file name is:
 .backup-policy.json
 ```
 
-Supported policy modes:
+The policy file should use one provider-owned string value named `format`. Do not model durable format names as C# enums.
 
-- `mirror`: upload files individually.
-- `package`: package the folder into an archive before upload.
-- `auto`: allow the tool to decide later.
+Initial format providers:
 
-Initial archive formats:
-
-- `7z`
-- `tar.gz`
+- `mirror`
 - `zip`
+
+Do not differentiate durable `ArchiveFormat` and `PackageMode` concepts. Different folder representations are archive formats. Do not implement an `auto` format initially.
+
+Each archive format provider owns its format name and its backup, restore, and verification behavior. Do not keep a central format registry in `Yabt.Core`.
 
 Package artifacts should be immutable and named using:
 
@@ -78,10 +100,12 @@ Package artifacts should be immutable and named using:
 Example:
 
 ```text
-Vacation.20260524T120000Z.a91f3c2e.7z
+Vacation.20260524T120000Z.a91f3c2e.zip
 ```
 
 Older package versions should remain preserved.
+
+When a folder is packaged, the archive-side folder metadata should remain visible outside the package, near the package artifact and adjacent manifest. The source-side policy may live inside the source folder so it moves naturally with that folder.
 
 ## Manifests
 
@@ -94,6 +118,7 @@ Manifest data should include:
 
 - Source path.
 - Creation time.
+- Format provider name.
 - File list.
 - File count.
 - Total bytes.
@@ -132,7 +157,7 @@ Do not implement full scanning logic in the scaffold. Keep abstractions ready fo
 - Microsoft.Extensions.Logging
 - System.Text.Json
 - Azure.Storage.Blobs SDK
-- Microsoft.Data.Sqlite
+- WebDAV client support, to be selected when implementation starts
 
 Prefer async APIs throughout.
 
@@ -148,10 +173,14 @@ Expected high-level folders:
 - `spec`
 - `examples`
 
-Initial source projects:
+Expected source projects:
 
 - `Yabt.Core`
 - `Yabt.AzureBlob`
+- `Yabt.FileSystem`
+- `Yabt.WebDav`
+- `Yabt.Format.Mirror`
+- `Yabt.Format.Zip`
 - `Yabt.Packaging`
 - `Yabt.Metadata`
 - `Yabt.Sync`
@@ -177,10 +206,11 @@ Only scaffold command structure until sync semantics are designed.
 - Follow idiomatic modern C#.
 - Prefer small, explicit domain records and interfaces.
 - Keep Azure-specific types out of `Yabt.Core`.
-- Keep SQLite cache concerns out of durable model code.
+- Keep any future cache concerns out of durable model code.
 - Use async APIs for I/O and cloud operations.
 - Use `System.TimeProvider` instead of custom clock abstractions.
 - Use `System.Text.Json` for repository metadata formats.
+- Use provider-owned string constants for durable JSON identifiers such as format names and object store kinds. Avoid C# enums for these values.
 - Favor deterministic, inspectable behavior over clever hidden state.
 - Add abstractions when they protect architectural boundaries or simplify real complexity.
 - Avoid speculative implementation beyond the requested scaffold.
@@ -242,3 +272,4 @@ When addressing feedback:
 - Preserve user edits and Visual Studio-generated solution formatting.
 - Summarize exactly what changed and what was verified.
 - If a request affects architecture, update this file when the guidance should persist.
+- Remove feedback comments when the requested change is fully implemented and verified, but keep the original feedback text in the commit message for historical context.

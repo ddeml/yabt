@@ -1,31 +1,46 @@
 # Storage Layout
 
-Blob paths are ordinary object names with two top-level areas:
+Archive paths are ordinary object names with a root descriptor and two top-level data areas:
+
+```text
+/.backup-root.json
+/live/...
+/hist/...
+```
+
+The leading slash is conceptual. Azure Blob names are stored without it, for example `live/photos/2026/image.jpg`. Filesystem and WebDAV providers should expose equivalent ordinary paths.
+
+## Root Descriptor
+
+`.backup-root.json` identifies the root role, layout, and known object stores. It must not contain secrets.
+
+## Data Areas
 
 ```text
 /live/...
 /hist/...
 ```
 
-The leading slash is conceptual. Azure Blob names are stored without it, for example `live/photos/2026/image.jpg`.
-
 ## Live
 
 `/live` represents the current source filesystem state.
 
-For mirror-mode folders, files are uploaded individually under the same relative path:
+For folders using the `mirror` format, files are uploaded individually under the same relative path:
 
 ```text
 /live/Documents/report.docx
 /live/Photos/Vacation/img001.jpg
 ```
 
-For package-mode folders, the package artifact and adjacent manifest are visible objects:
+For folders using the `zip` format, the package artifact and adjacent manifest are visible objects:
 
 ```text
-/live/Photos/Vacation/Vacation.20260524T120000Z.a91f3c2e.7z
+/live/Photos/Vacation/.backup-policy.json
+/live/Photos/Vacation/Vacation.20260524T120000Z.a91f3c2e.zip
 /live/Photos/Vacation/Vacation.20260524T120000Z.a91f3c2e.manifest.json
 ```
+
+The folder policy or equivalent descriptor remains outside the package so a browser or restore tool can identify the folder representation without opening the package first.
 
 ## Hist
 
@@ -37,4 +52,4 @@ Future deduplication, if implemented, may exist only under `/hist` and must use 
 
 ## Browsability
 
-Azure Storage Explorer should show meaningful folder and file names. Package files should be standard archive formats, and manifests should be readable JSON.
+Browsers such as the local filesystem, Azure Storage Explorer, or WebDAV clients should show meaningful folder and file names. Package files should be standard archive formats, and metadata files should be readable JSON.

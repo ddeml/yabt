@@ -5,13 +5,9 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "mode": {
-      "type": "string",
-      "enum": ["mirror", "package", "auto"]
-    },
     "format": {
-      "type": ["string", "null"],
-      "enum": ["sevenZip", "tarGzip", "zip", null]
+      "type": "string",
+      "minLength": 1
     },
     "includePatterns": {
       "type": "array",
@@ -20,7 +16,11 @@
     "excludePatterns": {
       "type": "array",
       "items": { "type": "string" }
+    },
+    "options": {
+      "type": ["object", "null"],
+      "additionalProperties": true
     }
   },
-  "required": ["mode"]
+  "required": ["format"]
 }

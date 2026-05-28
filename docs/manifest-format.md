@@ -2,10 +2,10 @@
 
 Every package artifact should have two manifests:
 
-- An adjacent JSON file in blob storage.
-- An embedded JSON file inside the archive.
+- An adjacent JSON file in the archive target.
+- An embedded JSON file inside the package.
 
-The manifest describes what was packaged and makes archive inspection possible without a database.
+The manifest describes what was packaged and makes archive inspection possible without a database. It is evidence of a concrete artifact, not root configuration or folder policy intent.
 
 ## Draft Shape
 
@@ -13,7 +13,7 @@ The manifest describes what was packaged and makes archive inspection possible w
 {
   "sourcePath": "D:\\Photos\\Vacation",
   "createdAtUtc": "2026-05-24T12:00:00Z",
-  "archiveFormat": "sevenZip",
+  "format": "zip",
   "files": [
     {
       "relativePath": "img001.jpg",
@@ -24,19 +24,19 @@ The manifest describes what was packaged and makes archive inspection possible w
   ],
   "totalBytes": 4821031,
   "manifestHash": "sha256:a91f3c2e...",
-  "packageName": "Vacation.20260524T120000Z.a91f3c2e.7z"
+  "packageName": "Vacation.20260524T120000Z.a91f3c2e.zip"
 }
 ```
 
 ## Hashing
 
-The manifest hash should be computed over a deterministic canonical representation. The initial scaffold defines an `IManifestHasher` interface but does not implement canonicalization yet.
+The manifest hash should be computed over a deterministic canonical representation.
 
 ## Required Data
 
 - Source path.
 - Creation time in UTC.
-- Archive format.
+- Format provider name.
 - File list.
 - File count, derived from the file list.
 - Total byte count.
