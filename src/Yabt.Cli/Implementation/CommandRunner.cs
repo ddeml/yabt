@@ -1,12 +1,11 @@
-using Microsoft.Extensions.Logging;
+using System.CommandLine;
 using Yabt.Sync;
 
 namespace Yabt.Cli.Implementation;
 
 internal sealed class CommandRunner
 (
-    IArchiveSynchronizer _synchronizer,
-    ILogger<CommandRunner> _logger
+    IArchiveSynchronizer _synchronizer
 )
 {
     public async Task<int> RunAsync
@@ -15,39 +14,65 @@ internal sealed class CommandRunner
         CancellationToken cancellationToken = default
     )
     {
-        if (args.Count == 0 || IsHelp(args[0]))
+        var rootCommand = CreateRootCommand();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (args.Count == 0 || args[0] is "help")
         {
-            WriteUsage();
-            return 0;
+            return await rootCommand.Parse(["--help"]).InvokeAsync();
         }
 
-        var command = args[0];
-        if (!YabtCliCommandNames.Known.Contains(command))
-        {
-            _logger.LogError("Unknown command: {Command}", command);
-            WriteUsage();
-            return 2;
-        }
-
-        return command.ToLowerInvariant() switch
-        {
-            YabtCliCommandNames.Sync => await RunSyncAsync(args, cancellationToken),
-            YabtCliCommandNames.Restore => NotImplemented(command),
-            YabtCliCommandNames.Scan => NotImplemented(command),
-            YabtCliCommandNames.Verify => NotImplemented(command),
-            YabtCliCommandNames.Pack => NotImplemented(command),
-            YabtCliCommandNames.Reconcile => NotImplemented(command),
-            _ => 2,
-        };
+        return await rootCommand.Parse(args).InvokeAsync();
     }
 
-    private async Task<int> RunSyncAsync
-    (
-        IReadOnlyList<string> args,
-        CancellationToken cancellationToken
-    )
+    private RootCommand CreateRootCommand()
     {
-        var sourceRoot = args.Count > 1 ? args[1] : Directory.GetCurrentDirectory();
+        var rootCommand = new RootCommand("Archive folders to inspectable Azure Blob storage.");
+
+        rootCommand.Subcommands.Add(CreateSyncCommand());
+        foreach (var command in YabtCliCommandNames.Known
+                     .Where(command => command is not YabtCliCommandNames.Sync)
+                     .Order(StringComparer.OrdinalIgnoreCase))
+        {
+            rootCommand.Subcommands.Add(CreateScaffoldedCommand(command));
+        }
+
+        return rootCommand;
+    }
+
+    private Command CreateSyncCommand()
+    {
+        var sourceRootArgument = new Argument<string>("source-root")
+        {
+            Description = "Folder to synchronize.",
+            DefaultValueFactory = _ => Directory.GetCurrentDirectory(),
+        };
+
+        var command = new Command(YabtCliCommandNames.Sync, "Synchronize a folder to the archive.")
+        {
+            Arguments = { sourceRootArgument },
+        };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var sourceRoot = parseResult.GetValue(sourceRootArgument)
+                ?? Directory.GetCurrentDirectory();
+            return await RunSyncAsync(sourceRoot, cancellationToken);
+        });
+
+        return command;
+    }
+
+    private static Command CreateScaffoldedCommand(string commandName)
+    {
+        var command = new Command(commandName, "Scaffolded command.");
+        command.SetAction(_ => NotImplemented(commandName));
+
+        return command;
+    }
+
+    private async Task<int> RunSyncAsync(string sourceRoot, CancellationToken cancellationToken)
+    {
         var result = await _synchronizer.SyncAsync(
             new(sourceRoot, DryRun: true),
             cancellationToken);
@@ -60,21 +85,5 @@ internal sealed class CommandRunner
     {
         Console.WriteLine($"Command '{command}' is scaffolded but not implemented yet.");
         return 1;
-    }
-
-    private static bool IsHelp(string arg)
-    {
-        return arg is "-h" or "--help" or "help";
-    }
-
-    private static void WriteUsage()
-    {
-        Console.WriteLine("Usage: yabt <command> [options]");
-        Console.WriteLine();
-        Console.WriteLine("Commands:");
-        foreach (var command in YabtCliCommandNames.Known.Order(StringComparer.OrdinalIgnoreCase))
-        {
-            Console.WriteLine($"  {command}");
-        }
     }
 }
