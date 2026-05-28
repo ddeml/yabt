@@ -1,9 +1,9 @@
 using Microsoft.Extensions.Logging;
 using Yabt.Sync;
 
-namespace Yabt.Cli;
+namespace Yabt.Cli.Implementation;
 
-public sealed class CommandRunner
+internal sealed class CommandRunner
 (
     IArchiveSynchronizer _synchronizer,
     ILogger<CommandRunner> _logger
@@ -22,7 +22,7 @@ public sealed class CommandRunner
         }
 
         var command = args[0];
-        if (!CommandNames.Known.Contains(command))
+        if (!YabtCliCommandNames.Known.Contains(command))
         {
             _logger.LogError("Unknown command: {Command}", command);
             WriteUsage();
@@ -31,12 +31,12 @@ public sealed class CommandRunner
 
         return command.ToLowerInvariant() switch
         {
-            CommandNames.Sync => await RunSyncAsync(args, cancellationToken),
-            CommandNames.Restore => NotImplemented(command),
-            CommandNames.Scan => NotImplemented(command),
-            CommandNames.Verify => NotImplemented(command),
-            CommandNames.Pack => NotImplemented(command),
-            CommandNames.Reconcile => NotImplemented(command),
+            YabtCliCommandNames.Sync => await RunSyncAsync(args, cancellationToken),
+            YabtCliCommandNames.Restore => NotImplemented(command),
+            YabtCliCommandNames.Scan => NotImplemented(command),
+            YabtCliCommandNames.Verify => NotImplemented(command),
+            YabtCliCommandNames.Pack => NotImplemented(command),
+            YabtCliCommandNames.Reconcile => NotImplemented(command),
             _ => 2,
         };
     }
@@ -72,7 +72,7 @@ public sealed class CommandRunner
         Console.WriteLine("Usage: yabt <command> [options]");
         Console.WriteLine();
         Console.WriteLine("Commands:");
-        foreach (var command in CommandNames.Known.Order(StringComparer.OrdinalIgnoreCase))
+        foreach (var command in YabtCliCommandNames.Known.Order(StringComparer.OrdinalIgnoreCase))
         {
             Console.WriteLine($"  {command}");
         }

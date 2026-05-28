@@ -1,8 +1,8 @@
 using System.Collections.Frozen;
 
-namespace Yabt.Cli;
+namespace Yabt.Cli.Implementation;
 
-public static class CommandNames
+internal static class YabtCliCommandNames
 {
     public const string Sync = "sync";
     public const string Restore = "restore";

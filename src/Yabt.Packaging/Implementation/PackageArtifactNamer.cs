@@ -1,9 +1,9 @@
 using System.Text;
 using Yabt.Core.Models;
 
-namespace Yabt.Packaging;
+namespace Yabt.Packaging.Implementation;
 
-public static class PackageArtifactNamer
+internal static class PackageArtifactNamer
 {
     public static string CreatePackageName
     (

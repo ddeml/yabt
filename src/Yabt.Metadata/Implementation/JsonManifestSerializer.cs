@@ -1,9 +1,9 @@
 using System.Text.Json;
 using Yabt.Core.Models;
 
-namespace Yabt.Metadata;
+namespace Yabt.Metadata.Implementation;
 
-public sealed class JsonManifestSerializer(JsonSerializerOptions _jsonOptions) : IManifestSerializer
+internal sealed class JsonManifestSerializer(JsonSerializerOptions _jsonOptions) : IManifestSerializer
 {
     public JsonManifestSerializer()
         : this(JsonMetadataOptions.Create())

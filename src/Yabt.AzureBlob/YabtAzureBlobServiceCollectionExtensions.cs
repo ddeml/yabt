@@ -1,9 +1,12 @@
-using Microsoft.Extensions.DependencyInjection;
+using Yabt.AzureBlob;
+using Yabt.AzureBlob.Implementation;
 using Yabt.Core.Abstractions;
 
-namespace Yabt.AzureBlob;
+#pragma warning disable IDE0130
+namespace Microsoft.Extensions.DependencyInjection;
+#pragma warning restore IDE0130
 
-public static class ServiceCollectionExtensions
+public static class YabtAzureBlobServiceCollectionExtensions
 {
     public static IServiceCollection AddAzureBlobArchiveStore
     (

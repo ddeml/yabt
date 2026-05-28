@@ -184,6 +184,13 @@ Only scaffold command structure until sync semantics are designed.
 - Favor deterministic, inspectable behavior over clever hidden state.
 - Add abstractions when they protect architectural boundaries or simplify real complexity.
 - Avoid speculative implementation beyond the requested scaffold.
+- Put implementation classes and their satellite helper classes in a child namespace named `Implementation`.
+- Implementation and satellite helper classes should be `internal` unless a stronger restriction is possible.
+- Put extension method classes in the namespace of the extended type, such as `Microsoft.Extensions.DependencyInjection` for `IServiceCollection` extensions.
+- Suppress `IDE0130` on extension method files whose namespace intentionally differs from the folder structure.
+- Avoid duplicate class names even across different namespaces or projects. Prefer descriptive names such as `YabtSyncServiceCollectionExtensions`.
+- Prefer providing defaults for optional parameters and record constructor parameters.
+- Prefer nullable collection parameters when the collection is optional.
 - Place `using` directives before the file-scoped namespace in all C# files.
 - Prefer primary constructors where applicable. If a primary constructor parameter is used as the backing field, name it with the same underscore convention as a private field, for example `_logger`.
 - For method declarations with parameters split across multiple lines, put the opening and closing parentheses on their own lines.
@@ -199,6 +206,7 @@ Only scaffold command structure until sync semantics are designed.
 - Omit cancellation token arguments when the called API provides a default and there is no meaningful token to pass.
 - Pass `default` instead of `CancellationToken.None` when an explicit cancellation token argument is required and no real token is available.
 - Keep an empty line after method declarations or definitions.
+- Keep line endings consistent. Follow `.editorconfig` and `.gitattributes`; text files in this repository should use CRLF unless a file-specific rule says otherwise.
 - Options classes should use nullable properties, including value types where applicable.
 - Resolve options defaults in consumers or through explicit helper methods such as `GetEffective...`; do not hide defaults in non-null property initializers.
 - Use the `Microsoft.Extensions.Options` pattern for configuration where possible.

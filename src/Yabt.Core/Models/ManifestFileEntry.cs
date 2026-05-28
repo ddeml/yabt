@@ -5,5 +5,5 @@ public sealed record ManifestFileEntry
     string RelativePath,
     long Length,
     DateTimeOffset LastWriteTimeUtc,
-    string? ContentHash
+    string? ContentHash = default
 );

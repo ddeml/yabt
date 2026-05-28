@@ -1,9 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Yabt.Metadata;
+namespace Yabt.Metadata.Implementation;
 
-public static class JsonMetadataOptions
+internal static class JsonMetadataOptions
 {
     public static JsonSerializerOptions Create()
     {

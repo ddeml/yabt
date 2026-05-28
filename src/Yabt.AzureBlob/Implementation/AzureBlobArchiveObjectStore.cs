@@ -5,9 +5,9 @@ using System.Runtime.CompilerServices;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 
-namespace Yabt.AzureBlob;
+namespace Yabt.AzureBlob.Implementation;
 
-public sealed class AzureBlobArchiveObjectStore(IOptionsMonitor<AzureBlobArchiveOptions> _options) : IArchiveObjectStore
+internal sealed class AzureBlobArchiveObjectStore(IOptionsMonitor<AzureBlobArchiveOptions> _options) : IArchiveObjectStore
 {
     public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {

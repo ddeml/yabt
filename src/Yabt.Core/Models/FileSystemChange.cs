@@ -5,7 +5,7 @@ public sealed record FileSystemChange
     ChangeKind Kind,
     string SourcePath,
     string RelativePath,
-    long? Length,
-    DateTimeOffset? LastWriteTimeUtc,
-    string? PreviousRelativePath
+    long? Length = default,
+    DateTimeOffset? LastWriteTimeUtc = default,
+    string? PreviousRelativePath = default
 );

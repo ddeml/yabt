@@ -8,5 +8,5 @@ public sealed record ArchiveManifest
     IEnumerable<ManifestFileEntry> Files,
     long TotalBytes,
     string ManifestHash,
-    string? PackageName
+    string? PackageName = default
 );

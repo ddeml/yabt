@@ -1,9 +1,9 @@
 using System.Text.Json;
 using Yabt.Core.Models;
 
-namespace Yabt.Metadata;
+namespace Yabt.Metadata.Implementation;
 
-public sealed class JsonFolderPolicyReader(JsonSerializerOptions _jsonOptions) : IFolderPolicyReader
+internal sealed class JsonFolderPolicyReader(JsonSerializerOptions _jsonOptions) : IFolderPolicyReader
 {
     public JsonFolderPolicyReader()
         : this(JsonMetadataOptions.Create())

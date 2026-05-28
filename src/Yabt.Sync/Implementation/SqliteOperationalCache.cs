@@ -1,8 +1,8 @@
 using Microsoft.Data.Sqlite;
 
-namespace Yabt.Sync;
+namespace Yabt.Sync.Implementation;
 
-public sealed class SqliteOperationalCache(string _databasePath)
+internal sealed class SqliteOperationalCache(string _databasePath)
 {
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
