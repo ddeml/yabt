@@ -1,26 +1,26 @@
-using Yabt.AzureBlob;
-using Yabt.AzureBlob.Implementation;
 using Yabt.Core.Abstractions;
+using Yabt.WebDav;
+using Yabt.WebDav.Implementation;
 
 #pragma warning disable IDE0130
 namespace Microsoft.Extensions.DependencyInjection;
 #pragma warning restore IDE0130
 
-public static class YabtAzureBlobServiceCollectionExtensions
+public static class YabtWebDavServiceCollectionExtensions
 {
-    public static IServiceCollection AddYabtAzureBlobObjectStore
+    public static IServiceCollection AddYabtWebDavObjectStore
     (
         this IServiceCollection services,
         string? configSectionPath = null
     )
     {
-        var optionsBuilder = services.AddOptions<AzureBlobArchiveOptions>();
+        var optionsBuilder = services.AddOptions<WebDavArchiveOptions>();
         if (configSectionPath is not null)
         {
             optionsBuilder.BindConfiguration(configSectionPath);
         }
 
-        services.AddSingleton<IArchiveObjectStore, AzureBlobArchiveObjectStore>();
+        services.AddSingleton<IArchiveObjectStore, WebDavArchiveObjectStore>();
         return services;
     }
 }

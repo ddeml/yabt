@@ -4,9 +4,9 @@ public sealed record ArchiveManifest
 (
     string SourcePath,
     DateTimeOffset CreatedAtUtc,
-    ArchiveFormat ArchiveFormat,
+    string Format,
     IEnumerable<ManifestFileEntry> Files,
     long TotalBytes,
     string ManifestHash,
-    string? PackageName = default
+    string PackageName
 );

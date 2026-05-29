@@ -2,7 +2,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Yabt.Cli.Implementation;
-using Yabt.AzureBlob;
 using Yabt.Metadata;
 using Yabt.Packaging;
 
@@ -18,7 +17,11 @@ public static class CliProgram
         builder.Logging.AddConsole();
 
         builder.Services
-            .AddAzureBlobArchiveStore("AzureBlobArchive")
+            .AddYabtFileSystemObjectStore("ObjectStores:FileSystem")
+            .AddYabtAzureBlobObjectStore("ObjectStores:AzureBlob")
+            .AddYabtWebDavObjectStore("ObjectStores:WebDav")
+            .AddYabtMirrorFormatProvider()
+            .AddYabtZipFormatProvider("Formats:Zip")
             .AddYabtMetadata()
             .AddYabtPackaging()
             .AddYabtSync()

@@ -7,6 +7,7 @@ public sealed record ArchivePackageRequest
     string SourceDirectory,
     string OutputDirectory,
     FolderPolicy Policy,
-    ArchiveFormat Format,
+    string Format,
+    string PackageExtension,
     DateTimeOffset CreatedAtUtc
 );

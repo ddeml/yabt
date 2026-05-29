@@ -7,8 +7,16 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public static class YabtMetadataServiceCollectionExtensions
 {
-    public static IServiceCollection AddYabtMetadata(this IServiceCollection services)
+    public static IServiceCollection AddYabtMetadata
+    (
+        this IServiceCollection services,
+        string? configSectionPath = null
+    )
     {
+        _ = configSectionPath;
+
+        services.AddSingleton<IBackupRootReader, JsonBackupRootReader>();
+        services.AddSingleton<IBackupRootSerializer, JsonBackupRootSerializer>();
         services.AddSingleton<IFolderPolicyReader, JsonFolderPolicyReader>();
         services.AddSingleton<IManifestSerializer, JsonManifestSerializer>();
         return services;

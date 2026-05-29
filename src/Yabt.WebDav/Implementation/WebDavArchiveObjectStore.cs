@@ -2,15 +2,15 @@ using Microsoft.Extensions.Logging;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 
-namespace Yabt.AzureBlob.Implementation;
+namespace Yabt.WebDav.Implementation;
 
-internal sealed class AzureBlobArchiveObjectStore(ILogger<AzureBlobArchiveObjectStore> _logger) : IArchiveObjectStore
+internal sealed class WebDavArchiveObjectStore(ILogger<WebDavArchiveObjectStore> _logger) : IArchiveObjectStore
 {
     public Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogTrace(nameof(EnsureReadyAsync));
 
-        throw new NotImplementedException("Azure Blob object store is scaffolded but not implemented yet.");
+        throw new NotImplementedException("WebDAV object store is scaffolded but not implemented yet.");
     }
 
     public Task UploadAsync
@@ -24,7 +24,7 @@ internal sealed class AzureBlobArchiveObjectStore(ILogger<AzureBlobArchiveObject
     {
         _logger.LogTrace(nameof(UploadAsync));
 
-        throw new NotImplementedException("Azure Blob object store is scaffolded but not implemented yet.");
+        throw new NotImplementedException("WebDAV object store is scaffolded but not implemented yet.");
     }
 
     public Task<bool> ExistsAsync
@@ -35,7 +35,7 @@ internal sealed class AzureBlobArchiveObjectStore(ILogger<AzureBlobArchiveObject
     {
         _logger.LogTrace(nameof(ExistsAsync));
 
-        throw new NotImplementedException("Azure Blob object store is scaffolded but not implemented yet.");
+        throw new NotImplementedException("WebDAV object store is scaffolded but not implemented yet.");
     }
 
     public IAsyncEnumerable<ArchiveObjectInfo> ListAsync
@@ -47,7 +47,7 @@ internal sealed class AzureBlobArchiveObjectStore(ILogger<AzureBlobArchiveObject
     {
         _logger.LogTrace(nameof(ListAsync));
 
-        throw new NotImplementedException("Azure Blob object store is scaffolded but not implemented yet.");
+        throw new NotImplementedException("WebDAV object store is scaffolded but not implemented yet.");
     }
 
     public Task MoveAsync
@@ -59,6 +59,6 @@ internal sealed class AzureBlobArchiveObjectStore(ILogger<AzureBlobArchiveObject
     {
         _logger.LogTrace(nameof(MoveAsync));
 
-        throw new NotImplementedException("Azure Blob object store is scaffolded but not implemented yet.");
+        throw new NotImplementedException("WebDAV object store is scaffolded but not implemented yet.");
     }
 }
