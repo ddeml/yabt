@@ -30,14 +30,23 @@ internal sealed class JsonBackupRootSerializer(JsonSerializerOptions _jsonOption
         CancellationToken cancellationToken = default
     )
     {
-        var descriptor = await JsonSerializer.DeserializeAsync<BackupRootDescriptor>(
-            source,
-            _jsonOptions,
-            cancellationToken);
+        BackupRootDescriptor? descriptor;
+
+        try
+        {
+            descriptor = await JsonSerializer.DeserializeAsync<BackupRootDescriptor>(
+                source,
+                _jsonOptions,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtMetadataException("Backup root JSON could not be deserialized.", ex);
+        }
 
         if (descriptor is null)
         {
-            throw new InvalidDataException("Backup root JSON did not contain a descriptor object.");
+            throw new YabtMetadataException("Backup root JSON did not contain a descriptor object.");
         }
 
         if (!string.Equals(
@@ -45,7 +54,7 @@ internal sealed class JsonBackupRootSerializer(JsonSerializerOptions _jsonOption
                 BackupRootDescriptor.ExpectedDocumentType,
                 StringComparison.Ordinal))
         {
-            throw new InvalidDataException("Backup root JSON has an unexpected document type.");
+            throw new YabtMetadataException("Backup root JSON has an unexpected document type.");
         }
 
         return descriptor;

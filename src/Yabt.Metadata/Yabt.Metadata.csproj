@@ -3,6 +3,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Yabt.Common\Yabt.Common.csproj" />
     <ProjectReference Include="..\Yabt.Core\Yabt.Core.csproj" />
   </ItemGroup>
 </Project>

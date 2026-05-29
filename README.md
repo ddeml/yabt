@@ -33,6 +33,7 @@ The filesystem plus metadata files are the source of truth. Object stores such a
 ## Repository Layout
 
 - `src/Yabt.Core` contains durable domain concepts and cross-platform abstractions.
+- `src/Yabt.Common` contains shared cross-cutting primitives such as the base exception type.
 - `src/Yabt.Metadata` reads and writes human-readable JSON metadata.
 - `src/Yabt.Packaging` defines package building contracts and naming rules.
 - Format provider projects will own representations such as `mirror` and `zip`.

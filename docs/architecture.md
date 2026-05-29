@@ -49,6 +49,8 @@ Each format provider owns its backup, restore, and verification behavior. Backup
 
 `Yabt.Core` contains durable archive concepts and cross-platform abstractions. It should not contain Azure, WebDAV, CLI, or provider-specific format logic.
 
+`Yabt.Common` contains shared cross-cutting primitives that should not pull in provider dependencies.
+
 `Yabt.Metadata` handles JSON formats such as `.yabt-root.json`, `.yabt-policy.json`, and package manifests.
 
 Format provider projects implement folder representation behavior such as `mirror` and `zip`.

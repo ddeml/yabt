@@ -18,6 +18,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Yabt.AzureBlob\Yabt.AzureBlob.csproj" />
+    <ProjectReference Include="..\Yabt.Common\Yabt.Common.csproj" />
     <ProjectReference Include="..\Yabt.Core\Yabt.Core.csproj" />
     <ProjectReference Include="..\Yabt.FileSystem\Yabt.FileSystem.csproj" />
     <ProjectReference Include="..\Yabt.Format.Mirror\Yabt.Format.Mirror.csproj" />

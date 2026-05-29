@@ -23,10 +23,19 @@ internal sealed class JsonFolderPolicyReader(JsonSerializerOptions _jsonOptions)
         }
 
         await using var stream = File.OpenRead(policyPath);
-        var policy = await JsonSerializer.DeserializeAsync<FolderPolicy>(
-            stream,
-            _jsonOptions,
-            cancellationToken);
+        FolderPolicy? policy;
+
+        try
+        {
+            policy = await JsonSerializer.DeserializeAsync<FolderPolicy>(
+                stream,
+                _jsonOptions,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtMetadataException($"Folder policy JSON '{policyPath}' could not be deserialized.", ex);
+        }
 
         return policy ?? FolderPolicy.Default;
     }

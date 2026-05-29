@@ -10,6 +10,3 @@ TestResults/
 *.log
 artifacts/
 packages/
-*.7z
-*.tar.gz
-*.zip
