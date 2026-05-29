@@ -9,7 +9,7 @@ internal static class JsonMetadataOptions
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault,
             WriteIndented = true,
             PropertyNameCaseInsensitive = true,
         };
