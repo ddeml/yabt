@@ -5,7 +5,7 @@ The archive root descriptor identifies an archive tree and the object stores it 
 The draft file name is:
 
 ```text
-.backup-root.json
+.yabt-root.json
 ```
 
 This file belongs at the root of a source or archive tree. It should be human-readable and safe to copy, commit, inspect, and replicate.
@@ -49,7 +49,7 @@ The role is advisory. Commands still decide operation direction, and object stor
 
 ## Secrets
 
-Secrets must not be stored in `.backup-root.json`.
+Secrets must not be stored in `.yabt-root.json`.
 
 Store declarations may include a `credentialRef` value. Runtime configuration resolves that reference through mechanisms such as Azure identity, OS credential storage, environment variables, user secrets, or an external secret store.
 

@@ -53,7 +53,7 @@ Future deduplication may occur only under `/hist`, and only through explicit ref
 The archive root should contain a human-readable descriptor named:
 
 ```text
-.backup-root.json
+.yabt-root.json
 ```
 
 This file identifies the archive, records layout information, and describes known object stores by provider-owned string names.
@@ -77,7 +77,7 @@ Folders may optionally be packaged before upload. Packaging is controlled by met
 The primary policy file name is:
 
 ```text
-.backup-policy.json
+.yabt-policy.json
 ```
 
 The policy file should use one provider-owned string value named `format`. Do not model durable format names as C# enums.

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/yabt/backup-root.schema.json",
+  "$id": "https://example.invalid/yabt/yabt-root.schema.json",
   "title": "YABT backup root",
   "type": "object",
   "additionalProperties": false,

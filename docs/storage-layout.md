@@ -3,7 +3,7 @@
 Archive paths are ordinary object names with a root descriptor and two top-level data areas:
 
 ```text
-/.backup-root.json
+/.yabt-root.json
 /live/...
 /hist/...
 ```
@@ -12,7 +12,7 @@ The leading slash is conceptual. Azure Blob names are stored without it, for exa
 
 ## Root Descriptor
 
-`.backup-root.json` identifies the root role, layout, and known object stores. It must not contain secrets.
+`.yabt-root.json` identifies the root role, layout, and known object stores. It must not contain secrets.
 
 ## Data Areas
 
@@ -35,7 +35,7 @@ For folders using the `mirror` format, files are uploaded individually under the
 For folders using the `zip` format, the package artifact and adjacent manifest are visible objects:
 
 ```text
-/live/Photos/Vacation/.backup-policy.json
+/live/Photos/Vacation/.yabt-policy.json
 /live/Photos/Vacation/Vacation.20260524T120000Z.a91f3c2e.zip
 /live/Photos/Vacation/Vacation.20260524T120000Z.a91f3c2e.manifest.json
 ```
