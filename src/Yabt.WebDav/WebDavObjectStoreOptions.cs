@@ -7,4 +7,8 @@ public sealed class WebDavObjectStoreOptions
     public string? RootPath { get; init; }
 
     public string? CredentialRef { get; init; }
+
+    public string? UserName { get; init; }
+
+    public string? Password { get; init; }
 }
