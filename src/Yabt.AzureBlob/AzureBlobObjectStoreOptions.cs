@@ -11,5 +11,7 @@ public sealed class AzureBlobObjectStoreOptions
     /// </summary>
     public string? ContainerName { get; init; }
 
+    public string? Prefix { get; init; }
+
     public string GetEffectiveContainerName() => ContainerName ?? "archive";
 }

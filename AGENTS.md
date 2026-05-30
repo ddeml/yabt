@@ -213,7 +213,7 @@ Only scaffold command structure until sync semantics are designed.
 - Use `System.Text.Json` for repository metadata formats.
 - Use provider-owned string constants for durable JSON identifiers such as format names and object store kinds. Avoid C# enums for these values.
 - Keep the base `YabtException` in `Yabt.Common`; each YABT assembly should expose its own `YabtXxxException` derived from it.
-- When catching lower-level exceptions, prefer a single `catch (Exception ex)` and wrap with the assembly-specific YABT exception, including useful operation context such as object keys or metadata paths.
+- When catching lower-level exceptions, catch the base `Exception` type directly and wrap it with the assembly-specific YABT exception, including useful operation context such as object keys or metadata paths. Do not catch SDK- or provider-specific exception types such as Azure `RequestFailedException` solely to wrap them, and do not use exception filters as a fallback. This intentionally accepts deeper inner-exception chains when multiple layers add useful context.
 - Do not replace scaffold `NotImplementedException` throws with YABT exceptions.
 - When intentionally ignoring expected cleanup exceptions, log them at debug level instead of leaving an empty catch block.
 - Favor deterministic, inspectable behavior over clever hidden state.
