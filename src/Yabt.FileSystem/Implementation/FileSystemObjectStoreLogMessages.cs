@@ -1,10 +1,6 @@
-using Microsoft.Extensions.Logging;
-
-#pragma warning disable IDE0130
 namespace Microsoft.Extensions.Logging;
-#pragma warning restore IDE0130
 
-internal static partial class FileSystemArchiveObjectStoreLogMessages
+internal static partial class FileSystemObjectStoreLogMessages
 {
     [LoggerMessage(
         EventId = 2000,

@@ -6,11 +6,11 @@ using Yabt.Core.Models;
 
 namespace Yabt.FileSystem.Implementation;
 
-internal sealed class FileSystemArchiveObjectStore
+internal sealed class FileSystemObjectStore
 (
-    IOptionsMonitor<FileSystemArchiveOptions> _options,
-    ILogger<FileSystemArchiveObjectStore> _logger
-) : IArchiveObjectStore
+    IOptionsMonitor<FileSystemObjectStoreOptions> _options,
+    ILogger<FileSystemObjectStore> _logger
+) : IObjectStore
 {
     public Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {

@@ -1,6 +1,6 @@
 namespace Yabt.WebDav;
 
-public sealed class WebDavArchiveOptions
+public sealed class WebDavObjectStoreOptions
 {
     public Uri? Endpoint { get; init; }
 

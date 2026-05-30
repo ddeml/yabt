@@ -14,13 +14,13 @@ public static class YabtAzureBlobServiceCollectionExtensions
         string? configSectionPath = null
     )
     {
-        var optionsBuilder = services.AddOptions<AzureBlobArchiveOptions>();
+        var optionsBuilder = services.AddOptions<AzureBlobObjectStoreOptions>();
         if (configSectionPath is not null)
         {
             optionsBuilder.BindConfiguration(configSectionPath);
         }
 
-        services.AddSingleton<IArchiveObjectStore, AzureBlobArchiveObjectStore>();
+        services.AddSingleton<IObjectStore, AzureBlobObjectStore>();
         return services;
     }
 }

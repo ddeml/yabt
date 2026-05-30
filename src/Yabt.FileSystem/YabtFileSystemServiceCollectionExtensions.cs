@@ -14,13 +14,13 @@ public static class YabtFileSystemServiceCollectionExtensions
         string? configSectionPath = null
     )
     {
-        var optionsBuilder = services.AddOptions<FileSystemArchiveOptions>();
+        var optionsBuilder = services.AddOptions<FileSystemObjectStoreOptions>();
         if (configSectionPath is not null)
         {
             optionsBuilder.BindConfiguration(configSectionPath);
         }
 
-        services.AddSingleton<IArchiveObjectStore, FileSystemArchiveObjectStore>();
+        services.AddSingleton<IObjectStore, FileSystemObjectStore>();
         return services;
     }
 }

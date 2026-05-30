@@ -14,13 +14,13 @@ public static class YabtWebDavServiceCollectionExtensions
         string? configSectionPath = null
     )
     {
-        var optionsBuilder = services.AddOptions<WebDavArchiveOptions>();
+        var optionsBuilder = services.AddOptions<WebDavObjectStoreOptions>();
         if (configSectionPath is not null)
         {
             optionsBuilder.BindConfiguration(configSectionPath);
         }
 
-        services.AddSingleton<IArchiveObjectStore, WebDavArchiveObjectStore>();
+        services.AddSingleton<IObjectStore, WebDavObjectStore>();
         return services;
     }
 }

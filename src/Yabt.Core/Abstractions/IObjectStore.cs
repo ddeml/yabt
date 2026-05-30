@@ -2,7 +2,7 @@ using Yabt.Core.Models;
 
 namespace Yabt.Core.Abstractions;
 
-public interface IArchiveObjectStore
+public interface IObjectStore
 {
     Task EnsureReadyAsync(CancellationToken cancellationToken = default);
 
