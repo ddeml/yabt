@@ -18,9 +18,14 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Yabt.AzureBlob\Yabt.AzureBlob.csproj" />
+    <ProjectReference Include="..\Yabt.Common\Yabt.Common.csproj" />
     <ProjectReference Include="..\Yabt.Core\Yabt.Core.csproj" />
+    <ProjectReference Include="..\Yabt.FileSystem\Yabt.FileSystem.csproj" />
+    <ProjectReference Include="..\Yabt.Format.Mirror\Yabt.Format.Mirror.csproj" />
+    <ProjectReference Include="..\Yabt.Format.Zip\Yabt.Format.Zip.csproj" />
     <ProjectReference Include="..\Yabt.Metadata\Yabt.Metadata.csproj" />
     <ProjectReference Include="..\Yabt.Packaging\Yabt.Packaging.csproj" />
     <ProjectReference Include="..\Yabt.Sync\Yabt.Sync.csproj" />
+    <ProjectReference Include="..\Yabt.WebDav\Yabt.WebDav.csproj" />
   </ItemGroup>
 </Project>

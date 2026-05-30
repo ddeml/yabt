@@ -2,10 +2,10 @@ namespace Yabt.Core.Models;
 
 public sealed record FolderPolicy
 (
-    PackageMode Mode = PackageMode.Mirror,
-    ArchiveFormat? Format = default,
+    string Format = "mirror",
     IEnumerable<string>? IncludePatterns = default,
-    IEnumerable<string>? ExcludePatterns = default
+    IEnumerable<string>? ExcludePatterns = default,
+    object? Options = default
 )
 {
     public static FolderPolicy Default { get; } = new();

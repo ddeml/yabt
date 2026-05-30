@@ -2,6 +2,8 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.6.11819.183 stable
 MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Common", "src\Yabt.Common\Yabt.Common.csproj", "{01E88794-332E-4D39-86FE-9D2047E37E1A}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Core", "src\Yabt.Core\Yabt.Core.csproj", "{F9512C65-3AD8-42C1-9F3F-F2E0E3998623}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Metadata", "src\Yabt.Metadata\Yabt.Metadata.csproj", "{0427BC8D-94D3-4D2B-A9A0-59B2D6356B18}"
@@ -29,26 +31,34 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{BDA4E899-03B4-43A1-AC2B-CA8FCB6543CF}"
 	ProjectSection(SolutionItems) = preProject
-		docs\backup-root-format.md = docs\backup-root-format.md
+		docs\yabt-root-format.md = docs\yabt-root-format.md
 		docs\architecture.md = docs\architecture.md
-		docs\folder-policy-format.md = docs\folder-policy-format.md
+		docs\yabt-policy-format.md = docs\yabt-policy-format.md
 		docs\manifest-format.md = docs\manifest-format.md
 		docs\storage-layout.md = docs\storage-layout.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "examples", "examples", "{862545BA-EE39-4945-8A60-FB40BC48F501}"
 	ProjectSection(SolutionItems) = preProject
-		examples\.backup-root.json = examples\.backup-root.json
-		examples\.backup-policy.mirror.json = examples\.backup-policy.mirror.json
-		examples\.backup-policy.zip.json = examples\.backup-policy.zip.json
+		examples\.yabt-root.json = examples\.yabt-root.json
+		examples\.yabt-policy.mirror.json = examples\.yabt-policy.mirror.json
+		examples\.yabt-policy.zip.json = examples\.yabt-policy.zip.json
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "spec", "spec", "{6DB32EB6-A817-4B7A-A373-00E8E4D2BE39}"
 	ProjectSection(SolutionItems) = preProject
-		spec\backup-root.schema.json = spec\backup-root.schema.json
-		spec\folder-policy.schema.json = spec\folder-policy.schema.json
+		spec\yabt-root.schema.json = spec\yabt-root.schema.json
+		spec\yabt-policy.schema.json = spec\yabt-policy.schema.json
 		spec\manifest.schema.json = spec\manifest.schema.json
 	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.FileSystem", "src\Yabt.FileSystem\Yabt.FileSystem.csproj", "{A8CEE945-40EA-4627-AFF6-2BE03B83181C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.WebDav", "src\Yabt.WebDav\Yabt.WebDav.csproj", "{555B8049-F60D-4B9F-9C03-53AF2FEE75D2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Mirror", "src\Yabt.Format.Mirror\Yabt.Format.Mirror.csproj", "{3C993C9F-E176-4899-8A13-FE9C06AAD0C5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Zip", "src\Yabt.Format.Zip\Yabt.Format.Zip.csproj", "{545380FB-2A8B-4054-B997-521F35A86389}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -56,6 +66,10 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{01E88794-332E-4D39-86FE-9D2047E37E1A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{01E88794-332E-4D39-86FE-9D2047E37E1A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{01E88794-332E-4D39-86FE-9D2047E37E1A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{01E88794-332E-4D39-86FE-9D2047E37E1A}.Release|Any CPU.Build.0 = Release|Any CPU
 		{F9512C65-3AD8-42C1-9F3F-F2E0E3998623}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{F9512C65-3AD8-42C1-9F3F-F2E0E3998623}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F9512C65-3AD8-42C1-9F3F-F2E0E3998623}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -80,6 +94,22 @@ Global
 		{59DD2410-A1AC-4833-9C55-361092B06E5F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{59DD2410-A1AC-4833-9C55-361092B06E5F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{59DD2410-A1AC-4833-9C55-361092B06E5F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A8CEE945-40EA-4627-AFF6-2BE03B83181C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A8CEE945-40EA-4627-AFF6-2BE03B83181C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A8CEE945-40EA-4627-AFF6-2BE03B83181C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A8CEE945-40EA-4627-AFF6-2BE03B83181C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{555B8049-F60D-4B9F-9C03-53AF2FEE75D2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{555B8049-F60D-4B9F-9C03-53AF2FEE75D2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{555B8049-F60D-4B9F-9C03-53AF2FEE75D2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{555B8049-F60D-4B9F-9C03-53AF2FEE75D2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3C993C9F-E176-4899-8A13-FE9C06AAD0C5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3C993C9F-E176-4899-8A13-FE9C06AAD0C5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3C993C9F-E176-4899-8A13-FE9C06AAD0C5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3C993C9F-E176-4899-8A13-FE9C06AAD0C5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{545380FB-2A8B-4054-B997-521F35A86389}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{545380FB-2A8B-4054-B997-521F35A86389}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{545380FB-2A8B-4054-B997-521F35A86389}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{545380FB-2A8B-4054-B997-521F35A86389}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

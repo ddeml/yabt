@@ -30,11 +30,20 @@ internal sealed class JsonManifestSerializer(JsonSerializerOptions _jsonOptions)
         CancellationToken cancellationToken = default
     )
     {
-        var manifest = await JsonSerializer.DeserializeAsync<ArchiveManifest>(
-            source,
-            _jsonOptions,
-            cancellationToken);
+        ArchiveManifest? manifest;
 
-        return manifest ?? throw new InvalidDataException("Manifest JSON did not contain a manifest object.");
+        try
+        {
+            manifest = await JsonSerializer.DeserializeAsync<ArchiveManifest>(
+                source,
+                _jsonOptions,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtMetadataException("Manifest JSON could not be deserialized.", ex);
+        }
+
+        return manifest ?? throw new YabtMetadataException("Manifest JSON did not contain a manifest object.");
     }
 }

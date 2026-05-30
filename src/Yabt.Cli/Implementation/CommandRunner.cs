@@ -39,7 +39,7 @@ internal sealed class CommandRunner
 
     private RootCommand CreateRootCommand()
     {
-        var rootCommand = new RootCommand("Archive folders to inspectable Azure Blob storage.");
+        var rootCommand = new RootCommand("Replicate folders to inspectable object-store archives.");
 
         rootCommand.Subcommands.Add(CreateSyncCommand());
         foreach (var command in YabtCliCommandNames.Known

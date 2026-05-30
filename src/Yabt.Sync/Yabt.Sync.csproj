@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Yabt.Common\Yabt.Common.csproj" />
     <ProjectReference Include="..\Yabt.Core\Yabt.Core.csproj" />
     <ProjectReference Include="..\Yabt.Metadata\Yabt.Metadata.csproj" />
     <ProjectReference Include="..\Yabt.Packaging\Yabt.Packaging.csproj" />

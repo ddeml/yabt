@@ -10,21 +10,16 @@ internal static class PackageArtifactNamer
         string sourceDirectory,
         DateTimeOffset createdAtUtc,
         string manifestHash,
-        ArchiveFormat format
+        string extension
     )
     {
         var folderName = Path.GetFileName(Path.TrimEndingDirectorySeparator(sourceDirectory));
         var safeFolderName = SanitizeFileName(string.IsNullOrWhiteSpace(folderName) ? "root" : folderName);
-        var hashPrefix = manifestHash.Length <= 8 ? manifestHash : manifestHash[..8];
-        var extension = format switch
-        {
-            ArchiveFormat.SevenZip => "7z",
-            ArchiveFormat.TarGzip => "tar.gz",
-            ArchiveFormat.Zip => "zip",
-            _ => throw new ArgumentOutOfRangeException(nameof(format), format, null),
-        };
+        var normalizedHash = NormalizeHash(manifestHash);
+        var hashPrefix = normalizedHash.Length <= 8 ? normalizedHash : normalizedHash[..8];
+        var normalizedExtension = extension.Trim().TrimStart('.');
 
-        return $"{safeFolderName}.{createdAtUtc:yyyyMMddTHHmmssZ}.{hashPrefix}.{extension}";
+        return $"{safeFolderName}.{createdAtUtc:yyyyMMddTHHmmssZ}.{hashPrefix}.{normalizedExtension}";
     }
 
     private static string SanitizeFileName(string value)
@@ -38,5 +33,11 @@ internal static class PackageArtifactNamer
         }
 
         return builder.ToString();
+    }
+
+    private static string NormalizeHash(string value)
+    {
+        var separator = value.IndexOf(':', StringComparison.Ordinal);
+        return separator < 0 ? value : value[(separator + 1)..];
     }
 }

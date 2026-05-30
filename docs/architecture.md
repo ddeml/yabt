@@ -4,8 +4,8 @@ YABT separates durable archive truth from runtime convenience.
 
 The durable state is:
 
-- Root archive metadata such as `.backup-root.json`.
-- Per-folder metadata such as `.backup-policy.json`.
+- Root archive metadata such as `.yabt-root.json`.
+- Per-folder metadata such as `.yabt-policy.json`.
 - Human-readable manifests next to package artifacts.
 - Embedded manifests inside package artifacts.
 - Standard archive files when packaging is enabled.
@@ -49,7 +49,9 @@ Each format provider owns its backup, restore, and verification behavior. Backup
 
 `Yabt.Core` contains durable archive concepts and cross-platform abstractions. It should not contain Azure, WebDAV, CLI, or provider-specific format logic.
 
-`Yabt.Metadata` handles JSON formats such as `.backup-root.json`, `.backup-policy.json`, and package manifests.
+`Yabt.Common` contains shared cross-cutting primitives that should not pull in provider dependencies.
+
+`Yabt.Metadata` handles JSON formats such as `.yabt-root.json`, `.yabt-policy.json`, and package manifests.
 
 Format provider projects implement folder representation behavior such as `mirror` and `zip`.
 

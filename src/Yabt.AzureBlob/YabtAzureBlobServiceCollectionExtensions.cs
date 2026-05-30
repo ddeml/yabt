@@ -8,19 +8,19 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public static class YabtAzureBlobServiceCollectionExtensions
 {
-    public static IServiceCollection AddAzureBlobArchiveStore
+    public static IServiceCollection AddYabtAzureBlobObjectStore
     (
         this IServiceCollection services,
         string? configSectionPath = null
     )
     {
-        var optionsBuilder = services.AddOptions<AzureBlobArchiveOptions>();
+        var optionsBuilder = services.AddOptions<AzureBlobObjectStoreOptions>();
         if (configSectionPath is not null)
         {
             optionsBuilder.BindConfiguration(configSectionPath);
         }
 
-        services.AddSingleton<IArchiveObjectStore, AzureBlobArchiveObjectStore>();
+        services.AddSingleton<IObjectStore, AzureBlobObjectStore>();
         return services;
     }
 }

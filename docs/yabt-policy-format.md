@@ -5,7 +5,7 @@ Folder policy files define how a logical folder is represented by an archive for
 Policy files are named:
 
 ```text
-.backup-policy.json
+.yabt-policy.json
 ```
 
 In a source tree, the policy file lives inside the folder it describes, so it moves naturally when a folder is reorganized.

@@ -1,6 +1,6 @@
 namespace Yabt.AzureBlob;
 
-public sealed class AzureBlobArchiveOptions
+public sealed class AzureBlobObjectStoreOptions
 {
     public string? ConnectionString { get; init; }
 

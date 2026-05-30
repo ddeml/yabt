@@ -7,8 +7,14 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public static class YabtSyncServiceCollectionExtensions
 {
-    public static IServiceCollection AddYabtSync(this IServiceCollection services)
+    public static IServiceCollection AddYabtSync
+    (
+        this IServiceCollection services,
+        string? configSectionPath = null
+    )
     {
+        _ = configSectionPath;
+
         services.AddSingleton<IArchiveSynchronizer, ArchiveSynchronizer>();
         return services;
     }

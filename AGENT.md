@@ -53,7 +53,7 @@ Future deduplication may occur only under `/hist`, and only through explicit ref
 The archive root should contain a human-readable descriptor named:
 
 ```text
-.backup-root.json
+.yabt-root.json
 ```
 
 This file identifies the archive, records layout information, and describes known object stores by provider-owned string names.
@@ -77,7 +77,7 @@ Folders may optionally be packaged before upload. Packaging is controlled by met
 The primary policy file name is:
 
 ```text
-.backup-policy.json
+.yabt-policy.json
 ```
 
 The policy file should use one provider-owned string value named `format`. Do not model durable format names as C# enums.
@@ -175,6 +175,7 @@ Expected high-level folders:
 
 Expected source projects:
 
+- `Yabt.Common`
 - `Yabt.Core`
 - `Yabt.AzureBlob`
 - `Yabt.FileSystem`
@@ -211,6 +212,10 @@ Only scaffold command structure until sync semantics are designed.
 - Use `System.TimeProvider` instead of custom clock abstractions.
 - Use `System.Text.Json` for repository metadata formats.
 - Use provider-owned string constants for durable JSON identifiers such as format names and object store kinds. Avoid C# enums for these values.
+- Keep the base `YabtException` in `Yabt.Common`; each YABT assembly should expose its own `YabtXxxException` derived from it.
+- When catching lower-level exceptions, prefer a single `catch (Exception ex)` and wrap with the assembly-specific YABT exception, including useful operation context such as object keys or metadata paths.
+- Do not replace scaffold `NotImplementedException` throws with YABT exceptions.
+- When intentionally ignoring expected cleanup exceptions, log them at debug level instead of leaving an empty catch block.
 - Favor deterministic, inspectable behavior over clever hidden state.
 - Add abstractions when they protect architectural boundaries or simplify real complexity.
 - Avoid speculative implementation beyond the requested scaffold.
@@ -273,3 +278,4 @@ When addressing feedback:
 - Summarize exactly what changed and what was verified.
 - If a request affects architecture, update this file when the guidance should persist.
 - Remove feedback comments when the requested change is fully implemented and verified, but keep the original feedback text in the commit message for historical context.
+- Please leave git index untouched unless the user explicitly requests otherwise. If you need to change a file that is already staged, make the change but do not stage it. The user will review the change and stage it if they approve.

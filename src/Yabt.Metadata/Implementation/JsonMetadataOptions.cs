@@ -9,11 +9,11 @@ internal static class JsonMetadataOptions
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault,
             WriteIndented = true,
             PropertyNameCaseInsensitive = true,
         };
 
-        options.Converters.Add(new JsonStringEnumConverter());
         return options;
     }
 }
