@@ -110,6 +110,52 @@ internal sealed class WebDavObjectStore
         }
     }
 
+    public async Task<ArchiveObjectContent> OpenReadAsync
+    (
+        ArchiveObjectKey key,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(OpenReadAsync));
+
+        HttpResponseMessage? response = null;
+
+        try
+        {
+            var objectUri = GetObjectUri(key);
+
+            using var request = CreateRequest(HttpMethod.Get, objectUri);
+            response = await HttpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                using (response)
+                {
+                    await EnsureSuccessAsync(
+                        response,
+                        $"GET {objectUri.AbsoluteUri}",
+                        cancellationToken);
+                }
+            }
+
+            var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+
+            return new(
+                new WebDavResponseContentStream(stream, response),
+                response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream");
+        }
+        catch (Exception ex)
+        {
+            response?.Dispose();
+            throw new YabtWebDavException(
+                $"Open read failed for WebDAV object '{key.ToObjectPath()}'.",
+                ex);
+        }
+    }
+
     public async Task<bool> ExistsAsync
     (
         ArchiveObjectKey key,
@@ -805,5 +851,91 @@ internal sealed class WebDavNonDisposingStream(Stream _inner) : Stream
     public override ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class WebDavResponseContentStream(Stream _inner, IDisposable _response) : Stream
+{
+    public override bool CanRead => _inner.CanRead;
+
+    public override bool CanSeek => _inner.CanSeek;
+
+    public override bool CanWrite => _inner.CanWrite;
+
+    public override long Length => _inner.Length;
+
+    public override long Position
+    {
+        get => _inner.Position;
+        set => _inner.Position = value;
+    }
+
+    public override void Flush()
+    {
+        _inner.Flush();
+    }
+
+    public override Task FlushAsync(CancellationToken cancellationToken)
+    {
+        return _inner.FlushAsync(cancellationToken);
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        return _inner.Read(buffer, offset, count);
+    }
+
+    public override ValueTask<int> ReadAsync
+    (
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default
+    )
+    {
+        return _inner.ReadAsync(buffer, cancellationToken);
+    }
+
+    public override long Seek(long offset, SeekOrigin origin)
+    {
+        return _inner.Seek(offset, origin);
+    }
+
+    public override void SetLength(long value)
+    {
+        _inner.SetLength(value);
+    }
+
+    public override void Write(byte[] buffer, int offset, int count)
+    {
+        _inner.Write(buffer, offset, count);
+    }
+
+    public override ValueTask WriteAsync
+    (
+        ReadOnlyMemory<byte> buffer,
+        CancellationToken cancellationToken = default
+    )
+    {
+        return _inner.WriteAsync(buffer, cancellationToken);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _inner.Dispose();
+            _response.Dispose();
+        }
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await _inner.DisposeAsync();
+        }
+        finally
+        {
+            _response.Dispose();
+        }
     }
 }

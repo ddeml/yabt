@@ -82,6 +82,23 @@ public sealed class InMemoryObjectStore : IObjectStore
         }
     }
 
+    public Task<ArchiveObjectContent> OpenReadAsync
+    (
+        ArchiveObjectKey key,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(OpenReadAsync));
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var archiveObject = GetObject(key);
+        return Task.FromResult(new ArchiveObjectContent(
+            new MemoryStream(archiveObject.Content.ToArray(), writable: false),
+            archiveObject.ContentType,
+            archiveObject.Metadata));
+    }
+
     public Task<bool> ExistsAsync
     (
         ArchiveObjectKey key,

@@ -1,4 +1,6 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Yabt.Core.Abstractions;
+using Yabt.Format.Mirror;
 using Yabt.Format.Mirror.Implementation;
 
 #pragma warning disable IDE0130
@@ -13,8 +15,13 @@ public static class YabtMirrorFormatServiceCollectionExtensions
         string? configSectionPath = null
     )
     {
-        _ = configSectionPath;
+        var optionsBuilder = services.AddOptions<MirrorArchiveFormatProviderOptions>();
+        if (configSectionPath is not null)
+        {
+            optionsBuilder.BindConfiguration(configSectionPath);
+        }
 
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IArchiveFormatProvider, MirrorArchiveFormatProvider>();
         return services;
     }

@@ -85,6 +85,38 @@ internal sealed class FileSystemObjectStore
         }
     }
 
+    public Task<ArchiveObjectContent> OpenReadAsync
+    (
+        ArchiveObjectKey key,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(OpenReadAsync));
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            var path = GetObjectPath(GetRootPath(), key);
+            var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 81920,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+            return Task.FromResult(new ArchiveObjectContent(stream));
+        }
+        catch (Exception ex)
+        {
+            throw new YabtFileSystemException(
+                $"Open read failed for filesystem object '{key.ToObjectPath()}'.",
+                key,
+                innerException: ex);
+        }
+    }
+
     public Task<bool> ExistsAsync
     (
         ArchiveObjectKey key,
