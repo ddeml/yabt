@@ -8,31 +8,25 @@ using Yabt.Core.Models;
 
 namespace Yabt.Testing;
 
-public sealed class InMemoryObjectStore : IObjectStore
+public sealed class MemoryObjectStore
+(
+    TimeProvider timeProvider,
+    ILogger<MemoryObjectStore> logger
+) : IObjectStore
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly Dictionary<ArchiveObjectKey, StoredInMemoryArchiveObject> _objects = [];
-    private readonly TimeProvider _timeProvider;
-    private readonly ILogger<InMemoryObjectStore> _logger;
+    private readonly TimeProvider _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+    private readonly ILogger<MemoryObjectStore> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-    public InMemoryObjectStore()
+    public MemoryObjectStore()
         : this(TimeProvider.System)
     {
     }
 
-    public InMemoryObjectStore(TimeProvider timeProvider)
-        : this(timeProvider, NullLogger<InMemoryObjectStore>.Instance)
+    public MemoryObjectStore(TimeProvider timeProvider)
+        : this(timeProvider, NullLogger<MemoryObjectStore>.Instance)
     {
-    }
-
-    public InMemoryObjectStore
-    (
-        TimeProvider timeProvider,
-        ILogger<InMemoryObjectStore> logger
-    )
-    {
-        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public Task EnsureReadyAsync(CancellationToken cancellationToken = default)
@@ -139,7 +133,7 @@ public sealed class InMemoryObjectStore : IObjectStore
                     IsUnderPrefix(candidate.Key.RelativePath, normalizedPrefix))
                 .OrderBy(candidate => candidate.Key.RelativePath, StringComparer.Ordinal)
                 .Select(candidate => ToPublicObject(candidate.Key, candidate.Value))
-                .ToArray();
+                .ToList();
         }
 
         await Task.Yield();
@@ -301,7 +295,7 @@ public sealed class InMemoryObjectStore : IObjectStore
             relativePath.StartsWith($"{prefix}/", StringComparison.Ordinal);
     }
 
-    private static IReadOnlyDictionary<string, string> CopyMetadata
+    private static ReadOnlyDictionary<string, string> CopyMetadata
     (
         IReadOnlyDictionary<string, string> metadata
     )

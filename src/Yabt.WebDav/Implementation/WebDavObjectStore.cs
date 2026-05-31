@@ -361,20 +361,20 @@ internal sealed class WebDavObjectStore
     private async Task EnsureParentCollectionExistsAsync
     (
         WebDavPathContext pathContext,
-        IReadOnlyList<string> objectSegments,
+        string[] objectSegments,
         CancellationToken cancellationToken
     )
     {
         await EnsureConfiguredRootExistsAsync(pathContext, cancellationToken);
 
-        if (objectSegments.Count < 2)
+        if (objectSegments.Length < 2)
         {
             return;
         }
 
         await EnsureCollectionPathExistsAsync(
             pathContext,
-            objectSegments.Take(objectSegments.Count - 1),
+            objectSegments.Take(objectSegments.Length - 1),
             cancellationToken);
     }
 
@@ -499,15 +499,15 @@ internal sealed class WebDavObjectStore
         return builder.Uri;
     }
 
-    private static IReadOnlyList<string> NormalizeUriPathSegments(string value)
+    private static List<string> NormalizeUriPathSegments(string value)
     {
         var segments = SplitPathSegments(value);
         return segments
             .Select(Uri.UnescapeDataString)
-            .ToArray();
+            .ToList();
     }
 
-    private static IReadOnlyList<string> NormalizePathSegments(string? value)
+    private static string[] NormalizePathSegments(string? value)
     {
         var segments = SplitPathSegments(value);
         foreach (var segment in segments)
@@ -521,7 +521,7 @@ internal sealed class WebDavObjectStore
         return segments;
     }
 
-    private static IReadOnlyList<string> SplitPathSegments(string? value)
+    private static string[] SplitPathSegments(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -536,7 +536,7 @@ internal sealed class WebDavObjectStore
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
-    private static IReadOnlyList<ArchiveObjectInfo> ToArchiveObjects
+    private static List<ArchiveObjectInfo> ToArchiveObjects
     (
         ArchiveArea area,
         WebDavPathContext pathContext,
@@ -580,7 +580,7 @@ internal sealed class WebDavObjectStore
         return result;
     }
 
-    private static IReadOnlyList<string> GetHrefPathSegments(Uri baseUri, string href)
+    private static List<string> GetHrefPathSegments(Uri baseUri, string href)
     {
         var hrefUri = Uri.TryCreate(href, UriKind.Absolute, out var absoluteUri) ?
             absoluteUri :
@@ -591,16 +591,16 @@ internal sealed class WebDavObjectStore
 
     private static bool StartsWithSegments
     (
-        IReadOnlyList<string> value,
-        IReadOnlyList<string> prefix
+        List<string> value,
+        string[] prefix
     )
     {
-        if (value.Count < prefix.Count)
+        if (value.Count < prefix.Length)
         {
             return false;
         }
 
-        for (var index = 0; index < prefix.Count; index++)
+        for (var index = 0; index < prefix.Length; index++)
         {
             if (!string.Equals(value[index], prefix[index], StringComparison.Ordinal))
             {
