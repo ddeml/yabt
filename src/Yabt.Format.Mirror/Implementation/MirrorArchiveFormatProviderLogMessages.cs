@@ -29,4 +29,15 @@ internal static partial class MirrorArchiveFormatProviderLogMessages
         int extraCount,
         int unchangedCount
     );
+
+    [LoggerMessage(
+        EventId = 3002,
+        Level = LogLevel.Warning,
+        Message = "Mirror ignored duplicate {StoreRole} live object {RelativePath}.")]
+    public static partial void LogMirrorDuplicateLiveObjectIgnored
+    (
+        this ILogger logger,
+        string storeRole,
+        string relativePath
+    );
 }

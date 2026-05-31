@@ -177,8 +177,14 @@ internal sealed class MirrorArchiveFormatProvider
         await sourceStore.EnsureReadyAsync(cancellationToken);
         await targetStore.EnsureReadyAsync(cancellationToken);
 
-        var sourceObjects = await ListLiveObjectsAsync(sourceStore, cancellationToken);
-        var targetObjects = await ListLiveObjectsAsync(targetStore, cancellationToken);
+        var sourceObjects = await ListLiveObjectsAsync(
+            sourceStore,
+            "source",
+            cancellationToken);
+        var targetObjects = await ListLiveObjectsAsync(
+            targetStore,
+            "target",
+            cancellationToken);
         var summary = new MirrorArchiveObjectPairSummary();
         var bufferSize = GetEffectiveBufferSize();
 
@@ -247,12 +253,15 @@ internal sealed class MirrorArchiveFormatProvider
         return summary;
     }
 
-    private static async Task<SortedDictionary<string, ArchiveObjectInfo>> ListLiveObjectsAsync
+    private async Task<SortedDictionary<string, ArchiveObjectInfo>> ListLiveObjectsAsync
     (
         IObjectStore store,
+        string storeRole,
         CancellationToken cancellationToken
     )
     {
+        _logger.LogTrace(nameof(ListLiveObjectsAsync));
+
         var objects = new SortedDictionary<string, ArchiveObjectInfo>(StringComparer.Ordinal);
         var liveObjectsQuery = store.ListAsync(
             ArchiveArea.Live,
@@ -269,10 +278,13 @@ internal sealed class MirrorArchiveFormatProvider
                 continue;
             }
 
-            objects[relativePath] = archiveObject with //FIX: Duplicates should never happen. Work with TryAdd() and log a warning if a duplicate is found.
+            if (!objects.TryAdd(relativePath, archiveObject with
             {
                 Key = new(ArchiveArea.Live, relativePath),
-            };
+            }))
+            {
+                _logger.LogMirrorDuplicateLiveObjectIgnored(storeRole, relativePath);
+            }
         }
 
         return objects;

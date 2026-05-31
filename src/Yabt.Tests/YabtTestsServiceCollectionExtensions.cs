@@ -17,11 +17,11 @@ public static class YabtTestsServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddSingleton(provider => new InMemoryObjectStore(
+        services.AddSingleton(provider => new MemoryObjectStore(
             timeProvider ?? TimeProvider.System,
-            provider.GetService<ILogger<InMemoryObjectStore>>() ??
-                NullLogger<InMemoryObjectStore>.Instance));
-        services.AddSingleton<IObjectStore>(provider => provider.GetRequiredService<InMemoryObjectStore>());
+            provider.GetService<ILogger<MemoryObjectStore>>() ??
+                NullLogger<MemoryObjectStore>.Instance));
+        services.AddSingleton<IObjectStore>(provider => provider.GetRequiredService<MemoryObjectStore>());
 
         return services;
     }
@@ -29,14 +29,14 @@ public static class YabtTestsServiceCollectionExtensions
     public static IServiceCollection AddYabtInMemoryObjectStore
     (
         this IServiceCollection services,
-        InMemoryObjectStore objectStore
+        MemoryObjectStore objectStore
     )
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(objectStore);
 
         services.AddSingleton(objectStore);
-        services.AddSingleton<IObjectStore>(provider => provider.GetRequiredService<InMemoryObjectStore>());
+        services.AddSingleton<IObjectStore>(provider => provider.GetRequiredService<MemoryObjectStore>());
 
         return services;
     }

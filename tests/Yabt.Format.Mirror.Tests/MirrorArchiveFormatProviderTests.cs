@@ -31,8 +31,8 @@ public sealed class MirrorArchiveFormatProviderTests
         var providers = serviceProvider.GetServices<IArchiveFormatProvider>().ToArray();
         Assert.AreEqual(1, providers.Length);
         var provider = providers[0];
-        var sourceStore = new InMemoryObjectStore();
-        var targetStore = new InMemoryObjectStore();
+        var sourceStore = new MemoryObjectStore();
+        var targetStore = new MemoryObjectStore();
 
         await UploadTextAsync(sourceStore, "folder/file.txt", "source content");
 
@@ -50,8 +50,8 @@ public sealed class MirrorArchiveFormatProviderTests
         var providers = serviceProvider.GetServices<IArchiveFormatProvider>().ToArray();
         Assert.AreEqual(1, providers.Length);
         var provider = providers[0];
-        var sourceStore = new InMemoryObjectStore();
-        var targetStore = new InMemoryObjectStore();
+        var sourceStore = new MemoryObjectStore();
+        var targetStore = new MemoryObjectStore();
 
         await UploadTextAsync(sourceStore, "folder/file.txt", "restored content");
         await UploadTextAsync(targetStore, "folder/file.txt", "old content");
@@ -79,8 +79,8 @@ public sealed class MirrorArchiveFormatProviderTests
         var providers = serviceProvider.GetServices<IArchiveFormatProvider>().ToArray();
         Assert.AreEqual(1, providers.Length);
         var provider = providers[0];
-        var sourceStore = new InMemoryObjectStore();
-        var targetStore = new InMemoryObjectStore();
+        var sourceStore = new MemoryObjectStore();
+        var targetStore = new MemoryObjectStore();
 
         await UploadTextAsync(sourceStore, "folder/file.txt", "same content");
         await UploadTextAsync(targetStore, "folder/file.txt", "same content");
@@ -98,8 +98,8 @@ public sealed class MirrorArchiveFormatProviderTests
         var providers = serviceProvider.GetServices<IArchiveFormatProvider>().ToArray();
         Assert.AreEqual(1, providers.Length);
         var provider = providers[0];
-        var sourceStore = new InMemoryObjectStore();
-        var targetStore = new InMemoryObjectStore();
+        var sourceStore = new MemoryObjectStore();
+        var targetStore = new MemoryObjectStore();
 
         await UploadTextAsync(sourceStore, "folder/file.txt", "source content");
         await UploadTextAsync(targetStore, "folder/file.txt", "target content");
@@ -185,7 +185,7 @@ public sealed class MirrorArchiveFormatProviderTests
 
     private static async Task UploadTextAsync
     (
-        InMemoryObjectStore store,
+        MemoryObjectStore store,
         string relativePath,
         string content
     )
@@ -200,7 +200,7 @@ public sealed class MirrorArchiveFormatProviderTests
 
     private static void AssertTextObject
     (
-        InMemoryObjectStore store,
+        MemoryObjectStore store,
         ArchiveArea area,
         string relativePath,
         string expectedContent

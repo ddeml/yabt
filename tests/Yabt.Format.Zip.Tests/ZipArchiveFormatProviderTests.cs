@@ -97,8 +97,8 @@ public sealed class ZipArchiveFormatProviderTests
     {
         return new
         (
-            new InMemoryObjectStore(),
-            new InMemoryObjectStore(),
+            new MemoryObjectStore(),
+            new MemoryObjectStore(),
             CreateRoot("source-archive", "source"),
             CreateRoot("target-archive", "target"),
             new FolderPolicy(ZipArchiveFormatName.Value)
@@ -109,8 +109,8 @@ public sealed class ZipArchiveFormatProviderTests
     {
         return new
         (
-            new InMemoryObjectStore(),
-            new InMemoryObjectStore(),
+            new MemoryObjectStore(),
+            new MemoryObjectStore(),
             CreateRoot("source-archive", "source"),
             CreateRoot("target-archive", "target"),
             new FolderPolicy(ZipArchiveFormatName.Value)
@@ -121,8 +121,8 @@ public sealed class ZipArchiveFormatProviderTests
     {
         return new
         (
-            new InMemoryObjectStore(),
-            new InMemoryObjectStore(),
+            new MemoryObjectStore(),
+            new MemoryObjectStore(),
             CreateRoot("source-archive", "source"),
             CreateRoot("target-archive", "target"),
             new FolderPolicy(ZipArchiveFormatName.Value)

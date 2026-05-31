@@ -11,7 +11,18 @@ dotnet_style_qualification_for_property = false:suggestion
 dotnet_style_qualification_for_method = false:suggestion
 dotnet_style_qualification_for_event = false:suggestion
 csharp_style_namespace_declarations = file_scoped:warning
+
+# IDE0290: Use primary constructor
+dotnet_diagnostic.IDE0290.severity = warning
+
+# CA1873: Avoid potentially expensive logging
 dotnet_diagnostic.CA1873.severity = warning
+
+# CA1859: Use concrete types when possible for improved performance
+dotnet_diagnostic.CA1859.severity = warning
+
+# IDE0305: Simplify collection initialization
+dotnet_diagnostic.IDE0305.severity = none
 
 [*.{json,md,yml,yaml}]
 charset = utf-8
