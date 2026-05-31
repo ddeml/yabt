@@ -60,6 +60,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Mirror", "src\Y
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Zip", "src\Yabt.Format.Zip\Yabt.Format.Zip.csproj", "{545380FB-2A8B-4054-B997-521F35A86389}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Mirror.Tests", "tests\Yabt.Format.Mirror.Tests\Yabt.Format.Mirror.Tests.csproj", "{52AE6575-E25F-4B68-93A2-3D93B14B5596}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Zip.Tests", "tests\Yabt.Format.Zip.Tests\Yabt.Format.Zip.Tests.csproj", "{B0F8EB1B-44C1-47C3-9F5B-704B968E011D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -110,6 +114,14 @@ Global
 		{545380FB-2A8B-4054-B997-521F35A86389}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{545380FB-2A8B-4054-B997-521F35A86389}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{545380FB-2A8B-4054-B997-521F35A86389}.Release|Any CPU.Build.0 = Release|Any CPU
+		{52AE6575-E25F-4B68-93A2-3D93B14B5596}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{52AE6575-E25F-4B68-93A2-3D93B14B5596}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{52AE6575-E25F-4B68-93A2-3D93B14B5596}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{52AE6575-E25F-4B68-93A2-3D93B14B5596}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B0F8EB1B-44C1-47C3-9F5B-704B968E011D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B0F8EB1B-44C1-47C3-9F5B-704B968E011D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B0F8EB1B-44C1-47C3-9F5B-704B968E011D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B0F8EB1B-44C1-47C3-9F5B-704B968E011D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

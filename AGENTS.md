@@ -189,6 +189,14 @@ Expected source projects:
 
 Project boundaries may evolve, but keep storage adapters, domain models, metadata handling, packaging, sync orchestration, and CLI concerns separated.
 
+## Testing
+
+Use MSTest for unit tests.
+
+Maintain a separate test project for each tested main project. Name test projects by appending `.Tests` to the tested project name, for example `Yabt.Format.Mirror.Tests` for `Yabt.Format.Mirror`.
+
+A shared test assembly is acceptable only for shared test helpers or tests that address a corresponding shared production project directly.
+
 ## CLI
 
 Future command surface:
