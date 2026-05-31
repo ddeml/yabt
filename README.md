@@ -7,7 +7,7 @@ The initial target runtime is .NET 10 on Windows. The architecture keeps platfor
 ## Goals
 
 - Mirror the original folder hierarchy into directly browsable object stores.
-- Keep `/live` as the current filesystem state and `/hist` as preserved historical state.
+- Keep a configurable logical live branch for current state and a configurable history branch for preserved historical state.
 - Prefer append-mostly behavior for replaced or deleted content.
 - Store intent and metadata in human-readable JSON files.
 - Use standard archive formats such as zip when packaging folders.
@@ -19,7 +19,7 @@ The initial target runtime is .NET 10 on Windows. The architecture keeps platfor
 
 - No proprietary repository format.
 - No hidden mandatory catalog database.
-- No opaque block store for `/live`.
+- No opaque block store for the logical live branch.
 - No initial deduplication implementation.
 - No initial metadata cache.
 - No full synchronization engine in this scaffold.
@@ -42,7 +42,7 @@ The filesystem plus metadata files are the source of truth. Object stores such a
 - `src/Yabt.Cli` exposes the future command surface.
 - `docs` contains architecture and format notes.
 - `spec` contains draft JSON schemas.
-- `examples` contains sample folder policy files.
+- `examples` contains a sample root descriptor and folder policy files.
 
 ## CLI Skeleton
 

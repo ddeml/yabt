@@ -6,8 +6,8 @@
   "name": "Personal archive",
   "createdAtUtc": "2026-05-28T18:30:00Z",
   "layout": {
-    "livePrefix": "live",
-    "histPrefix": "hist"
+    "livePrefix": "",
+    "histPrefix": ".yabt-hist"
   },
   "stores": [
     {

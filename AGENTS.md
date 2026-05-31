@@ -33,20 +33,24 @@ Do not over-explain basic programming concepts. Prefer concise engineering trade
 
 ## Live And Hist
 
-The archive layout conceptually uses:
+The archive layout conceptually uses logical live and history branches. Physical prefixes are configured in `.yabt-root.json`:
 
 ```text
-/live/...
-/hist/...
+livePrefix = ""
+histPrefix = ".yabt-hist"
 ```
 
-`/live` represents current filesystem state.
+The default `livePrefix` is empty, so an ordinary source folder can be the logical live branch without moving its data under a `live` child folder.
 
-`/hist` stores obsolete, replaced, or deleted historical state. Deleted or replaced content should generally move to `/hist` instead of being deleted.
+The default `histPrefix` is `.yabt-hist`. Deleted or replaced content should generally move to the configured history prefix instead of being deleted.
 
-Do not deduplicate `/live`.
+Archive-style roots may still configure explicit prefixes such as `livePrefix = "live"` and `histPrefix = "hist"` when that layout is preferable.
 
-Future deduplication may occur only under `/hist`, and only through explicit reference placeholder JSON files. Do not implement deduplication until requested.
+When `livePrefix` is empty, YABT metadata paths and the configured history prefix are internal to the archive root and are not ordinary live data.
+
+Do not deduplicate the logical live branch.
+
+Future deduplication may occur only under the logical history branch, and only through explicit reference placeholder JSON files. Do not implement deduplication until requested.
 
 ## Archive Root Metadata
 
@@ -58,7 +62,7 @@ The archive root should contain a human-readable descriptor named:
 
 This file identifies the archive, records layout information, and describes known object stores by provider-owned string names.
 
-It may include an optional `rootRole` value such as `source` or `target` to indicate the intended default role of the root. The role is advisory; command direction still determines backup, restore, verification, or reconciliation behavior.
+It may include an optional `rootRole` value such as `source` or `target` to indicate the intended default role of the root. The role is advisory and does not imply a physical layout; command direction still determines backup, restore, verification, or reconciliation behavior.
 
 It may contain non-secret connection details such as container names, endpoints, prefixes, and credential references. It must not contain account keys, SAS tokens, passwords, client secrets, or other credentials.
 
@@ -89,7 +93,9 @@ Initial format providers:
 
 Do not differentiate durable `ArchiveFormat` and `PackageMode` concepts. Different folder representations are archive formats. Do not implement an `auto` format initially.
 
-Each archive format provider owns its format name and its backup, restore, and verification behavior. Do not keep a central format registry in `Yabt.Core`.
+Each archive format provider owns its format name and projects a source folder plus policy into an intended archive representation. Historization, target comparison, and delete handling belong to the archive synchronizer, not to the format provider.
+
+The preferred future contract name is `IArchiveFormatProjector`, replacing the current scaffold's `IArchiveFormatProvider` concept when implementation is updated. Do not keep a central format registry in `Yabt.Core`.
 
 Package artifacts should be immutable and named using:
 

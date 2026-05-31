@@ -36,7 +36,7 @@ The manifest hash should be computed over a deterministic canonical representati
 
 - Source path.
 - Creation time in UTC.
-- Format provider name.
+- Archive format name.
 - File list.
 - File count, derived from the file list.
 - Total byte count.

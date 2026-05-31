@@ -1,6 +1,6 @@
-# Backup Root Format
+# YABT Root Format
 
-The archive root descriptor identifies an archive tree and the object stores it can use.
+The YABT root descriptor identifies a source or archive tree and the object stores it can use.
 
 The draft file name is:
 
@@ -17,7 +17,7 @@ The root descriptor records:
 - Archive identity.
 - Archive metadata format version.
 - Optional root role, such as `source` or `target`.
-- Layout prefixes such as `live` and `hist`.
+- Layout prefixes for logical live and history branches.
 - Known object stores.
 - Non-secret store configuration.
 - Credential references.
@@ -43,9 +43,40 @@ Provider-specific store parameters live in the same JSON object as the store dec
 The optional `rootRole` property indicates the default intended role of the root containing this descriptor:
 
 - `source`: an ordinary folder tree that is intended to be backed up.
-- `target`: an archive root that is intended to contain `live` and `hist`.
+- `target`: an archive root that is intended to receive synchronized archive data.
 
-The role is advisory. Commands still decide operation direction, and object stores remain symmetrical.
+The role is advisory. It does not imply a physical layout. Commands still decide operation direction, and object stores remain symmetrical.
+
+## Layout
+
+The `layout` object maps logical archive branches to physical object prefixes:
+
+- `livePrefix`: current logical state.
+- `histPrefix`: obsolete, replaced, or deleted historical state.
+
+The default root layout is:
+
+```json
+{
+  "livePrefix": "",
+  "histPrefix": ".yabt-hist"
+}
+```
+
+An empty `livePrefix` means the logical live branch is rooted at the actual object-store root. This is the normal layout for ordinary source folders and avoids forcing real data below a `live` child folder.
+
+Archive-style roots may instead use explicit branch directories:
+
+```json
+{
+  "livePrefix": "live",
+  "histPrefix": "hist"
+}
+```
+
+If a real data name would clash with `.yabt-root.json`, `.yabt-policy.json`, or the configured history prefix, initialize the root with alternate prefixes before using it.
+
+When `livePrefix` is empty, YABT metadata paths and the configured history prefix are internal to the archive root. They are not ordinary live data even though they physically sit under the same root.
 
 ## Secrets
 
@@ -64,8 +95,8 @@ Store declarations may include a `credentialRef` value. Runtime configuration re
   "name": "Personal archive",
   "createdAtUtc": "2026-05-28T18:30:00Z",
   "layout": {
-    "livePrefix": "live",
-    "histPrefix": "hist"
+    "livePrefix": "",
+    "histPrefix": ".yabt-hist"
   },
   "stores": [
     {

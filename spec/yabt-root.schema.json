@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/yabt/yabt-root.schema.json",
-  "title": "YABT backup root",
+  "title": "YABT root descriptor",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -33,11 +33,12 @@
       "properties": {
         "livePrefix": {
           "type": "string",
-          "minLength": 1
+          "default": ""
         },
         "histPrefix": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "default": ".yabt-hist"
         }
       },
       "required": ["livePrefix", "histPrefix"]
