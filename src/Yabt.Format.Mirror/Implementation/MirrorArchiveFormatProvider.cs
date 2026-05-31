@@ -90,21 +90,12 @@ internal sealed class MirrorArchiveFormatProvider
         CancellationToken cancellationToken
     )
     {
-        var bufferSize = GetEffectiveBufferSize();
         var historicalTimestamp = _timeProvider.GetUtcNow();
         var historyKeyAllocator = new MirrorArchiveHistoryKeyAllocator(targetStore, historicalTimestamp);
         var summary = await WalkLiveObjectPairsAsync(
             sourceStore,
             targetStore,
             operationName,
-            (relativePath, sourceObject, targetObject, currentCancellationToken) =>
-                HasSameContentAsync(
-                        sourceStore,
-                        targetStore,
-                        sourceObject,
-                        targetObject,
-                        bufferSize,
-                        currentCancellationToken),
             (_, _, _, _) => Task.CompletedTask,
             (relativePath, _, currentCancellationToken) =>
                 CopyLiveObjectAsync(
@@ -149,20 +140,10 @@ internal sealed class MirrorArchiveFormatProvider
         CancellationToken cancellationToken
     )
     {
-        var bufferSize = GetEffectiveBufferSize();
-
         var summary = await WalkLiveObjectPairsAsync(
             sourceStore,
             targetStore,
             "verify",
-            (relativePath, sourceObject, targetObject, currentCancellationToken) =>
-                HasSameContentAsync(
-                        sourceStore,
-                        targetStore,
-                        sourceObject,
-                        targetObject,
-                        bufferSize,
-                        currentCancellationToken),
             (_, _, _, _) => Task.CompletedTask,
             (_, _, _) => Task.CompletedTask,
             (_, _, _, _) => Task.CompletedTask,
@@ -186,7 +167,6 @@ internal sealed class MirrorArchiveFormatProvider
         IObjectStore sourceStore,
         IObjectStore targetStore,
         string operationName,
-        Func<string, ArchiveObjectInfo, ArchiveObjectInfo, CancellationToken, Task<bool>> compareExistingTargetAsync,
         Func<string, ArchiveObjectInfo, ArchiveObjectInfo, CancellationToken, Task> handleUnchangedAsync,
         Func<string, ArchiveObjectInfo, CancellationToken, Task> handleNewAsync,
         Func<string, ArchiveObjectInfo, ArchiveObjectInfo, CancellationToken, Task> handleChangedAsync,
@@ -200,6 +180,7 @@ internal sealed class MirrorArchiveFormatProvider
         var sourceObjects = await ListLiveObjectsAsync(sourceStore, cancellationToken);
         var targetObjects = await ListLiveObjectsAsync(targetStore, cancellationToken);
         var summary = new MirrorArchiveObjectPairSummary();
+        var bufferSize = GetEffectiveBufferSize();
 
         foreach (var (relativePath, sourceObject) in sourceObjects)
         {
@@ -208,10 +189,12 @@ internal sealed class MirrorArchiveFormatProvider
             if (targetObjects.TryGetValue(relativePath, out var targetObject))
             {
                 targetObjects.Remove(relativePath);
-                if (await compareExistingTargetAsync(
-                        relativePath,
+                if (await HasSameContentAsync(
+                        sourceStore,
+                        targetStore,
                         sourceObject,
                         targetObject,
+                        bufferSize,
                         cancellationToken))
                 {
                     await handleUnchangedAsync(
@@ -271,11 +254,12 @@ internal sealed class MirrorArchiveFormatProvider
     )
     {
         var objects = new SortedDictionary<string, ArchiveObjectInfo>(StringComparer.Ordinal);
+        var liveObjectsQuery = store.ListAsync(
+            ArchiveArea.Live,
+            prefix: null,
+            cancellationToken);
 
-        await foreach (var archiveObject in store.ListAsync(
-                           ArchiveArea.Live,
-                           prefix: null,
-                           cancellationToken))
+        await foreach (var archiveObject in liveObjectsQuery)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -285,7 +269,7 @@ internal sealed class MirrorArchiveFormatProvider
                 continue;
             }
 
-            objects[relativePath] = archiveObject with
+            objects[relativePath] = archiveObject with //FIX: Duplicates should never happen. Work with TryAdd() and log a warning if a duplicate is found.
             {
                 Key = new(ArchiveArea.Live, relativePath),
             };
@@ -562,10 +546,12 @@ internal sealed class MirrorArchiveFormatProvider
             }
 
             var highestHistoricalSequences = new Dictionary<string, int>(StringComparer.Ordinal);
-            await foreach (var archiveObject in _targetStore.ListAsync(
-                               ArchiveArea.Hist,
-                               prefix: null,
-                               cancellationToken))
+            var historicalObjectsQuery = _targetStore.ListAsync(
+                ArchiveArea.Hist,
+                prefix: null,
+                cancellationToken);
+
+            await foreach (var archiveObject in historicalObjectsQuery)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 

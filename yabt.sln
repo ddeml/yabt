@@ -21,12 +21,12 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		.editorconfig = .editorconfig
 		.gitattributes = .gitattributes
 		.gitignore = .gitignore
-		AGENT.md = AGENT.md
+		AGENTS.md = AGENTS.md
 		Directory.Build.props = Directory.Build.props
 		Directory.Packages.props = Directory.Packages.props
-		HUMAN.md = HUMAN.md
 		LICENSE = LICENSE
 		README.md = README.md
+		USERS.md = USERS.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{BDA4E899-03B4-43A1-AC2B-CA8FCB6543CF}"

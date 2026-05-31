@@ -15,7 +15,7 @@ Treat this as a PR review comment and make the smallest fix.
 
 Give feedback incrementally. Small review comments are ideal because I can make focused changes, verify them, and keep the diff understandable.
 
-Tell me when something is architectural memory. If a comment should shape future work, say so and I can add it to `AGENT.md`.
+Tell me when something is architectural memory. If a comment should shape future work, say so and I can add it to `AGENTS.md`.
 
 ## Helpful Review Patterns
 
