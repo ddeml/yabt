@@ -265,6 +265,14 @@ Preserve Visual Studio-generated solution formatting and existing solution-folde
 
 Prefer the configuration defaults provided by `Host.CreateApplicationBuilder` and other framework builders. Do not explicitly clear or rebuild configuration sources unless the defaults are insufficient.
 
+## Inline Review Markers
+
+Review marker comments in code carry specific meanings:
+
+- `//FIX:` means the agent should automatically perform the described fix when it sees the marker, without requiring a separate explicit user request.
+- `//ASK:` means the agent should automatically explain the stated question when it sees the marker, without requiring a separate explicit user request.
+- `//TODO` comments are intended for the human maintainer. Ignore them unless the user explicitly asks to address TODO comments.
+
 ## Review Workflow
 
 The user is reviewing these changes as if they are a PR and will provide incremental feedback.

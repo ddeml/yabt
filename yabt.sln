@@ -21,12 +21,12 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		.editorconfig = .editorconfig
 		.gitattributes = .gitattributes
 		.gitignore = .gitignore
-		AGENT.md = AGENT.md
+		AGENTS.md = AGENTS.md
 		Directory.Build.props = Directory.Build.props
 		Directory.Packages.props = Directory.Packages.props
-		HUMAN.md = HUMAN.md
 		LICENSE = LICENSE
 		README.md = README.md
+		USERS.md = USERS.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{BDA4E899-03B4-43A1-AC2B-CA8FCB6543CF}"
@@ -59,6 +59,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Mirror", "src\Yabt.Format.Mirror\Yabt.Format.Mirror.csproj", "{3C993C9F-E176-4899-8A13-FE9C06AAD0C5}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Zip", "src\Yabt.Format.Zip\Yabt.Format.Zip.csproj", "{545380FB-2A8B-4054-B997-521F35A86389}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Testing", "src\Yabt.Testing\Yabt.Testing.csproj", "{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -110,6 +112,10 @@ Global
 		{545380FB-2A8B-4054-B997-521F35A86389}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{545380FB-2A8B-4054-B997-521F35A86389}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{545380FB-2A8B-4054-B997-521F35A86389}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

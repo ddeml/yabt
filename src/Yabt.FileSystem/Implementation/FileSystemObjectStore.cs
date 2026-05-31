@@ -12,6 +12,8 @@ internal sealed class FileSystemObjectStore
     ILogger<FileSystemObjectStore> _logger
 ) : IObjectStore
 {
+    private const int DefaultBufferSize = 81_920;
+
     public Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogTrace(nameof(EnsureReadyAsync));
@@ -61,12 +63,13 @@ internal sealed class FileSystemObjectStore
 
         try
         {
+            var bufferSize = GetEffectiveBufferSize();
             await using (var destination = new FileStream(
                              temporaryPath,
                              FileMode.CreateNew,
                              FileAccess.Write,
                              FileShare.None,
-                             bufferSize: 81920,
+                             bufferSize,
                              FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
                 await content.CopyToAsync(destination, cancellationToken);
@@ -82,6 +85,39 @@ internal sealed class FileSystemObjectStore
                 key,
                 destinationPath,
                 ex);
+        }
+    }
+
+    public Task<ArchiveObjectContent> OpenReadAsync
+    (
+        ArchiveObjectKey key,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(OpenReadAsync));
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            var path = GetObjectPath(GetRootPath(), key);
+            var bufferSize = GetEffectiveBufferSize();
+            var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+            return Task.FromResult(new ArchiveObjectContent(stream));
+        }
+        catch (Exception ex)
+        {
+            throw new YabtFileSystemException(
+                $"Open read failed for filesystem object '{key.ToObjectPath()}'.",
+                key,
+                innerException: ex);
         }
     }
 
@@ -173,6 +209,17 @@ internal sealed class FileSystemObjectStore
         }
 
         return Path.GetFullPath(rootPath);
+    }
+
+    private int GetEffectiveBufferSize()
+    {
+        var bufferSize = _options.CurrentValue.BufferSize ?? DefaultBufferSize;
+        if (bufferSize <= 0)
+        {
+            throw new YabtFileSystemException("Filesystem object store buffer size must be greater than zero.");
+        }
+
+        return bufferSize;
     }
 
     private static string GetAreaPath(string rootPath, ArchiveArea area)
