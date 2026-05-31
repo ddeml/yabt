@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 
-namespace Yabt.Testing;
+namespace Yabt.Tests;
 
 public sealed class InMemoryObjectStore : IObjectStore
 {
@@ -73,7 +73,7 @@ public sealed class InMemoryObjectStore : IObjectStore
         {
             if (_objects.ContainsKey(normalizedKey))
             {
-                throw new YabtTestingException(
+                throw new YabtTestsException(
                     $"In-memory object '{normalizedKey.ToObjectPath()}' already exists.",
                     normalizedKey);
             }
@@ -173,7 +173,7 @@ public sealed class InMemoryObjectStore : IObjectStore
         {
             if (!_objects.Remove(normalizedSource, out var storedObject))
             {
-                throw new YabtTestingException(
+                throw new YabtTestsException(
                     $"In-memory source object '{normalizedSource.ToObjectPath()}' does not exist.",
                     normalizedSource);
             }
@@ -181,7 +181,7 @@ public sealed class InMemoryObjectStore : IObjectStore
             if (_objects.ContainsKey(normalizedDestination))
             {
                 _objects.Add(normalizedSource, storedObject);
-                throw new YabtTestingException(
+                throw new YabtTestsException(
                     $"In-memory destination object '{normalizedDestination.ToObjectPath()}' already exists.",
                     normalizedDestination);
             }
@@ -224,7 +224,7 @@ public sealed class InMemoryObjectStore : IObjectStore
         }
 
         var normalizedKey = NormalizeKey(key);
-        throw new YabtTestingException(
+        throw new YabtTestsException(
             $"In-memory object '{normalizedKey.ToObjectPath()}' does not exist.",
             normalizedKey);
     }
@@ -288,7 +288,7 @@ public sealed class InMemoryObjectStore : IObjectStore
         {
             if (segment is "." or "..")
             {
-                throw new YabtTestingException("In-memory object path contains an invalid segment.");
+                throw new YabtTestsException("In-memory object path contains an invalid segment.");
             }
         }
 

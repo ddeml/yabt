@@ -197,6 +197,8 @@ Maintain a separate test project for each tested main project. Name test project
 
 A shared test assembly is acceptable only for shared test helpers or tests that address a corresponding shared production project directly.
 
+Use `Yabt.Tests` for shared test helpers such as in-memory object stores and other test infrastructure.
+
 ## CLI
 
 Future command surface:

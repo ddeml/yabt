@@ -1,25 +1,25 @@
 using Yabt.Common;
 using Yabt.Core.Models;
 
-namespace Yabt.Testing;
+namespace Yabt.Tests;
 
-public class YabtTestingException : YabtException
+public class YabtTestsException : YabtException
 {
-    public YabtTestingException()
+    public YabtTestsException()
     {
     }
 
-    public YabtTestingException(string? message)
+    public YabtTestsException(string? message)
         : base(message)
     {
     }
 
-    public YabtTestingException(string? message, Exception? innerException)
+    public YabtTestsException(string? message, Exception? innerException)
         : base(message, innerException)
     {
     }
 
-    public YabtTestingException
+    public YabtTestsException
     (
         string? message,
         ArchiveObjectKey? key = default,

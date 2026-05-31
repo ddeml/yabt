@@ -1,6 +1,6 @@
 using Yabt.Core.Models;
 
-namespace Yabt.Testing;
+namespace Yabt.Tests;
 
 public sealed record InMemoryArchiveObject
 (

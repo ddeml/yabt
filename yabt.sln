@@ -64,7 +64,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Mirror.Tests", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Zip.Tests", "tests\Yabt.Format.Zip.Tests\Yabt.Format.Zip.Tests.csproj", "{B0F8EB1B-44C1-47C3-9F5B-704B968E011D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Testing", "src\Yabt.Testing\Yabt.Testing.csproj", "{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Tests", "src\Yabt.Tests\Yabt.Tests.csproj", "{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

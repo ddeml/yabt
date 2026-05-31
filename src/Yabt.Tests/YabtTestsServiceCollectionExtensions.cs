@@ -1,13 +1,13 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yabt.Core.Abstractions;
-using Yabt.Testing;
+using Yabt.Tests;
 
 #pragma warning disable IDE0130
 namespace Microsoft.Extensions.DependencyInjection;
 #pragma warning restore IDE0130
 
-public static class YabtTestingServiceCollectionExtensions
+public static class YabtTestsServiceCollectionExtensions
 {
     public static IServiceCollection AddYabtInMemoryObjectStore
     (

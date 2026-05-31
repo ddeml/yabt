@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Format.Zip;
-using Yabt.Testing;
+using Yabt.Tests;
 
 namespace Yabt.Format.Zip.Tests;
 
