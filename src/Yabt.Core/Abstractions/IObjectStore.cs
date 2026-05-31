@@ -15,6 +15,12 @@ public interface IObjectStore
         CancellationToken cancellationToken = default
     );
 
+    Task<ArchiveObjectContent> OpenReadAsync
+    (
+        ArchiveObjectKey key,
+        CancellationToken cancellationToken = default
+    );
+
     Task<bool> ExistsAsync(ArchiveObjectKey key, CancellationToken cancellationToken = default);
 
     IAsyncEnumerable<ArchiveObjectInfo> ListAsync

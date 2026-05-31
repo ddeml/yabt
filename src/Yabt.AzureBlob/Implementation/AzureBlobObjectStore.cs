@@ -73,6 +73,37 @@ internal sealed class AzureBlobObjectStore
         }
     }
 
+    public async Task<ArchiveObjectContent> OpenReadAsync
+    (
+        ArchiveObjectKey key,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(OpenReadAsync));
+
+        try
+        {
+            var blob = GetBlobClient(key);
+            var download = await blob.DownloadStreamingAsync(cancellationToken: cancellationToken);
+            var details = download.Value.Details;
+
+            return new(
+                download.Value.Content,
+                string.IsNullOrWhiteSpace(details.ContentType) ?
+                    "application/octet-stream" :
+                    details.ContentType,
+                details.Metadata.Count == 0 ?
+                    null :
+                    new Dictionary<string, string>(details.Metadata, StringComparer.Ordinal));
+        }
+        catch (Exception ex)
+        {
+            throw new YabtAzureBlobException(
+                $"Open read failed for Azure Blob object '{key.ToObjectPath()}'.",
+                ex);
+        }
+    }
+
     public async Task<bool> ExistsAsync
     (
         ArchiveObjectKey key,

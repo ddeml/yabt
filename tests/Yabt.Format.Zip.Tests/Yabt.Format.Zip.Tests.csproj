@@ -11,6 +11,7 @@
     <PackageReference Include="MSTest" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Yabt.Testing\Yabt.Testing.csproj" />
     <ProjectReference Include="..\..\src\Yabt.Format.Zip\Yabt.Format.Zip.csproj" />
   </ItemGroup>
 </Project>

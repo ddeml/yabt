@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Format.Zip;
+using Yabt.Testing;
 
 namespace Yabt.Format.Zip.Tests;
 
@@ -96,6 +97,8 @@ public sealed class ZipArchiveFormatProviderTests
     {
         return new
         (
+            new InMemoryObjectStore(),
+            new InMemoryObjectStore(),
             CreateRoot("source-archive", "source"),
             CreateRoot("target-archive", "target"),
             new FolderPolicy(ZipArchiveFormatName.Value)
@@ -106,6 +109,8 @@ public sealed class ZipArchiveFormatProviderTests
     {
         return new
         (
+            new InMemoryObjectStore(),
+            new InMemoryObjectStore(),
             CreateRoot("source-archive", "source"),
             CreateRoot("target-archive", "target"),
             new FolderPolicy(ZipArchiveFormatName.Value)
@@ -116,6 +121,8 @@ public sealed class ZipArchiveFormatProviderTests
     {
         return new
         (
+            new InMemoryObjectStore(),
+            new InMemoryObjectStore(),
             CreateRoot("source-archive", "source"),
             CreateRoot("target-archive", "target"),
             new FolderPolicy(ZipArchiveFormatName.Value)
