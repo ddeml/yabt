@@ -65,14 +65,14 @@ The synchronizer owns historization. Before replacing or removing logical live o
 
 Folder representation is selected by a string `format` value in folder metadata. The format value is owned by the provider that implements it.
 
-Initial format providers:
+Initial archive format projectors:
 
 - `mirror`
 - `zip`
 
 `mirror` stores files individually. `zip` stores a logical folder as a package artifact plus adjacent metadata. Future providers such as `7z` or `tar.gz` may be added without changing `Yabt.Core`.
 
-An archive format provider should act as a projector from a source folder and policy to an intended archive representation. It should not match source and target objects by itself, and it should not decide historization. The preferred future contract name is `IArchiveFormatProjector`.
+An archive format projector acts on a source folder and policy to produce an intended archive representation. It should not match source and target objects by itself, and it should not decide historization. The projection contract is `IArchiveFormatProjector`.
 
 The `mirror` projector maps source files one-to-one. The `zip` projector maps a source folder to a package artifact and manifest. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
 
@@ -84,7 +84,7 @@ The `mirror` projector maps source files one-to-one. The `zip` projector maps a 
 
 `Yabt.Metadata` handles JSON formats such as `.yabt-root.json`, `.yabt-policy.json`, and package manifests.
 
-Format provider projects implement source-to-archive projection behavior such as `mirror` and `zip`.
+Format projector projects implement source-to-archive projection behavior such as `mirror` and `zip`.
 
 Object-store provider projects adapt storage systems such as the filesystem, Azure Blob Storage, and WebDAV.
 

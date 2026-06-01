@@ -1,4 +1,3 @@
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Yabt.Core.Abstractions;
 using Yabt.Format.Mirror;
 using Yabt.Format.Mirror.Implementation;
@@ -9,20 +8,15 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public static class YabtMirrorFormatServiceCollectionExtensions
 {
-    public static IServiceCollection AddYabtMirrorFormatProvider
+    public static IServiceCollection AddYabtMirrorFormatProjector
     (
         this IServiceCollection services,
         string? configSectionPath = null
     )
     {
-        var optionsBuilder = services.AddOptions<MirrorArchiveFormatProviderOptions>();
-        if (configSectionPath is not null)
-        {
-            optionsBuilder.BindConfiguration(configSectionPath);
-        }
+        _ = configSectionPath;
 
-        services.TryAddSingleton(TimeProvider.System);
-        services.AddSingleton<IArchiveFormatProvider, MirrorArchiveFormatProvider>();
+        services.AddSingleton<IArchiveFormatProjector, MirrorArchiveFormatProjector>();
         return services;
     }
 }

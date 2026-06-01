@@ -12,15 +12,19 @@ public static class YabtTestsServiceCollectionExtensions
     public static IServiceCollection AddYabtInMemoryObjectStore
     (
         this IServiceCollection services,
-        TimeProvider? timeProvider = null
+        TimeProvider? timeProvider = null,
+        bool provideContentHash = default
     )
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddSingleton(provider => new MemoryObjectStore(
+        services.AddSingleton(provider => new MemoryObjectStore
+        (
             timeProvider ?? TimeProvider.System,
             provider.GetService<ILogger<MemoryObjectStore>>() ??
-                NullLogger<MemoryObjectStore>.Instance));
+                NullLogger<MemoryObjectStore>.Instance,
+            provideContentHash
+        ));
         services.AddSingleton<IObjectStore>(provider => provider.GetRequiredService<MemoryObjectStore>());
 
         return services;

@@ -6,6 +6,7 @@ end_of_line = crlf
 insert_final_newline = true
 indent_style = space
 indent_size = 4
+dotnet_sort_system_directives_first = true
 dotnet_style_qualification_for_field = false:suggestion
 dotnet_style_qualification_for_property = false:suggestion
 dotnet_style_qualification_for_method = false:suggestion
@@ -23,6 +24,9 @@ dotnet_diagnostic.CA1859.severity = warning
 
 # IDE0305: Simplify collection initialization
 dotnet_diagnostic.IDE0305.severity = none
+
+# IDE0301: Simplify collection initialization
+dotnet_diagnostic.IDE0301.severity = none
 
 [*.{json,md,yml,yaml}]
 charset = utf-8

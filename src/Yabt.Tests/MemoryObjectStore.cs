@@ -1,8 +1,10 @@
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
+using System.IO.Hashing;
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Yabt.Common;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 
@@ -11,21 +13,41 @@ namespace Yabt.Tests;
 public sealed class MemoryObjectStore
 (
     TimeProvider timeProvider,
-    ILogger<MemoryObjectStore> logger
+    ILogger<MemoryObjectStore> logger,
+    bool _provideContentHash = default
 ) : IObjectStore
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<ArchiveObjectKey, StoredInMemoryArchiveObject> _objects = [];
-    private readonly TimeProvider _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
-    private readonly ILogger<MemoryObjectStore> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    private readonly Dictionary<string, StoredInMemoryArchiveObject> _objects = new(StringComparer.Ordinal);
+    private readonly TimeProvider _timeProvider = Check.NotNull(timeProvider);
+    private readonly ILogger<MemoryObjectStore> _logger = Check.NotNull(logger);
 
     public MemoryObjectStore()
         : this(TimeProvider.System)
     {
     }
 
+    public MemoryObjectStore(bool provideContentHash)
+        : this(TimeProvider.System, provideContentHash)
+    {
+    }
+
     public MemoryObjectStore(TimeProvider timeProvider)
         : this(timeProvider, NullLogger<MemoryObjectStore>.Instance)
+    {
+    }
+
+    public MemoryObjectStore
+    (
+        TimeProvider timeProvider,
+        bool provideContentHash
+    )
+        : this
+        (
+            timeProvider,
+            NullLogger<MemoryObjectStore>.Instance,
+            provideContentHash
+        )
     {
     }
 
@@ -39,7 +61,7 @@ public sealed class MemoryObjectStore
 
     public async Task UploadAsync
     (
-        ArchiveObjectKey key,
+        string key,
         Stream content,
         string contentType,
         IReadOnlyDictionary<string, string> metadata,
@@ -53,7 +75,7 @@ public sealed class MemoryObjectStore
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var normalizedKey = NormalizeKey(key);
+        var normalizedKey = NormalizeObjectKey(key);
         using var memory = new MemoryStream();
         await content.CopyToAsync(memory, cancellationToken);
 
@@ -68,7 +90,7 @@ public sealed class MemoryObjectStore
             if (_objects.ContainsKey(normalizedKey))
             {
                 throw new YabtTestsException(
-                    $"In-memory object '{normalizedKey.ToObjectPath()}' already exists.",
+                    $"In-memory object '{normalizedKey}' already exists.",
                     normalizedKey);
             }
 
@@ -78,7 +100,7 @@ public sealed class MemoryObjectStore
 
     public Task<ArchiveObjectContent> OpenReadAsync
     (
-        ArchiveObjectKey key,
+        string key,
         CancellationToken cancellationToken = default
     )
     {
@@ -95,7 +117,7 @@ public sealed class MemoryObjectStore
 
     public Task<bool> ExistsAsync
     (
-        ArchiveObjectKey key,
+        string key,
         CancellationToken cancellationToken = default
     )
     {
@@ -103,7 +125,7 @@ public sealed class MemoryObjectStore
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var normalizedKey = NormalizeKey(key);
+        var normalizedKey = NormalizeObjectKey(key);
         lock (_gate)
         {
             return Task.FromResult(_objects.ContainsKey(normalizedKey));
@@ -112,7 +134,6 @@ public sealed class MemoryObjectStore
 
     public async IAsyncEnumerable<ArchiveObjectInfo> ListAsync
     (
-        ArchiveArea area,
         string? prefix,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
@@ -121,17 +142,14 @@ public sealed class MemoryObjectStore
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var normalizedArea = NormalizeArea(area);
-        var normalizedPrefix = NormalizeRelativePath(prefix);
+        var normalizedPrefix = NormalizeObjectPrefix(prefix);
         IReadOnlyList<InMemoryArchiveObject> objects;
 
         lock (_gate)
         {
             objects = _objects
-                .Where(candidate =>
-                    candidate.Key.Area == normalizedArea &&
-                    IsUnderPrefix(candidate.Key.RelativePath, normalizedPrefix))
-                .OrderBy(candidate => candidate.Key.RelativePath, StringComparer.Ordinal)
+                .Where(candidate => IsUnderPrefix(candidate.Key, normalizedPrefix))
+                .OrderBy(candidate => candidate.Key, StringComparer.Ordinal)
                 .Select(candidate => ToPublicObject(candidate.Key, candidate.Value))
                 .ToList();
         }
@@ -141,18 +159,24 @@ public sealed class MemoryObjectStore
         foreach (var archiveObject in objects)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var contentHash = _provideContentHash ?
+                ComputeContentHash(archiveObject.Content) :
+                null;
 
-            yield return new(
+            yield return new
+            (
                 archiveObject.Key,
                 archiveObject.Content.Length,
-                archiveObject.LastModifiedUtc);
+                archiveObject.LastModifiedUtc,
+                contentHash
+            );
         }
     }
 
     public Task MoveAsync
     (
-        ArchiveObjectKey source,
-        ArchiveObjectKey destination,
+        string source,
+        string destination,
         CancellationToken cancellationToken = default
     )
     {
@@ -160,15 +184,15 @@ public sealed class MemoryObjectStore
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var normalizedSource = NormalizeKey(source);
-        var normalizedDestination = NormalizeKey(destination);
+        var normalizedSource = NormalizeObjectKey(source);
+        var normalizedDestination = NormalizeObjectKey(destination);
 
         lock (_gate)
         {
             if (!_objects.Remove(normalizedSource, out var storedObject))
             {
                 throw new YabtTestsException(
-                    $"In-memory source object '{normalizedSource.ToObjectPath()}' does not exist.",
+                    $"In-memory source object '{normalizedSource}' does not exist.",
                     normalizedSource);
             }
 
@@ -176,7 +200,7 @@ public sealed class MemoryObjectStore
             {
                 _objects.Add(normalizedSource, storedObject);
                 throw new YabtTestsException(
-                    $"In-memory destination object '{normalizedDestination.ToObjectPath()}' already exists.",
+                    $"In-memory destination object '{normalizedDestination}' already exists.",
                     normalizedDestination);
             }
 
@@ -188,13 +212,13 @@ public sealed class MemoryObjectStore
 
     public bool TryGetObject
     (
-        ArchiveObjectKey key,
+        string key,
         [NotNullWhen(true)] out InMemoryArchiveObject? archiveObject
     )
     {
         _logger.LogTrace(nameof(TryGetObject));
 
-        var normalizedKey = NormalizeKey(key);
+        var normalizedKey = NormalizeObjectKey(key);
         lock (_gate)
         {
             if (_objects.TryGetValue(normalizedKey, out var storedObject))
@@ -208,7 +232,7 @@ public sealed class MemoryObjectStore
         return false;
     }
 
-    public InMemoryArchiveObject GetObject(ArchiveObjectKey key)
+    public InMemoryArchiveObject GetObject(string key)
     {
         _logger.LogTrace(nameof(GetObject));
 
@@ -217,9 +241,9 @@ public sealed class MemoryObjectStore
             return archiveObject;
         }
 
-        var normalizedKey = NormalizeKey(key);
+        var normalizedKey = NormalizeObjectKey(key);
         throw new YabtTestsException(
-            $"In-memory object '{normalizedKey.ToObjectPath()}' does not exist.",
+            $"In-memory object '{normalizedKey}' does not exist.",
             normalizedKey);
     }
 
@@ -230,8 +254,7 @@ public sealed class MemoryObjectStore
         lock (_gate)
         {
             return _objects
-                .OrderBy(candidate => candidate.Key.Area)
-                .ThenBy(candidate => candidate.Key.RelativePath, StringComparer.Ordinal)
+                .OrderBy(candidate => candidate.Key, StringComparer.Ordinal)
                 .Select(candidate => ToPublicObject(candidate.Key, candidate.Value))
                 .ToArray();
         }
@@ -247,51 +270,33 @@ public sealed class MemoryObjectStore
         }
     }
 
-    private static ArchiveObjectKey NormalizeKey(ArchiveObjectKey key)
+    private static string NormalizeObjectKey(string? value)
     {
-        return new(
-            NormalizeArea(key.Area),
-            NormalizeRelativePath(key.RelativePath));
-    }
-
-    private static ArchiveArea NormalizeArea(ArchiveArea area)
-    {
-        return area switch
+        var normalized = NormalizeObjectPrefix(value);
+        if (string.IsNullOrEmpty(normalized))
         {
-            ArchiveArea.Live => ArchiveArea.Live,
-            ArchiveArea.Hist => ArchiveArea.Hist,
-            _ => throw new ArgumentOutOfRangeException(nameof(area), area, null),
-        };
-    }
-
-    private static string NormalizeRelativePath(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
+            throw new YabtTestsException("In-memory object key must not be empty.");
         }
 
-        var segments = value
-            .Replace('\\', '/')
-            .Trim('/')
-            .Split(
-                '/',
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return normalized;
+    }
 
-        foreach (var segment in segments)
+    private static string NormalizeObjectPrefix(string? value)
+    {
+        try
         {
-            if (segment is "." or "..")
-            {
-                throw new YabtTestsException("In-memory object path contains an invalid segment.");
-            }
+            return ArchiveLayout.NormalizeObjectKey(value);
         }
-
-        return string.Join('/', segments);
+        catch (Exception ex)
+        {
+            throw new YabtTestsException("In-memory object path contains an invalid segment.", ex);
+        }
     }
 
     private static bool IsUnderPrefix(string relativePath, string prefix)
     {
         return string.IsNullOrEmpty(prefix) ||
+            string.Equals(relativePath, prefix, StringComparison.Ordinal) ||
             relativePath.StartsWith($"{prefix}/", StringComparison.Ordinal);
     }
 
@@ -304,18 +309,28 @@ public sealed class MemoryObjectStore
             new Dictionary<string, string>(metadata, StringComparer.Ordinal));
     }
 
+    private static string ComputeContentHash(ReadOnlyMemory<byte> content)
+    {
+        var hash = new XxHash128();
+        hash.Append(content.Span);
+
+        return $"xxh128:{Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()}";
+    }
+
     private static InMemoryArchiveObject ToPublicObject
     (
-        ArchiveObjectKey key,
+        string key,
         StoredInMemoryArchiveObject storedObject
     )
     {
-        return new(
+        return new
+        (
             key,
             storedObject.Content.ToArray(),
             storedObject.ContentType,
             CopyMetadata(storedObject.Metadata),
-            storedObject.LastModifiedUtc);
+            storedObject.LastModifiedUtc
+        );
     }
 
     private sealed record StoredInMemoryArchiveObject

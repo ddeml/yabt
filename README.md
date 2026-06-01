@@ -36,7 +36,7 @@ The filesystem plus metadata files are the source of truth. Object stores such a
 - `src/Yabt.Common` contains shared cross-cutting primitives such as the base exception type.
 - `src/Yabt.Metadata` reads and writes human-readable JSON metadata.
 - `src/Yabt.Packaging` defines package building contracts and naming rules.
-- Format provider projects will own representations such as `mirror` and `zip`.
+- Format projector projects own representations such as `mirror` and `zip`.
 - Object-store provider projects will adapt stores such as the filesystem, Azure Blob Storage, and WebDAV.
 - `src/Yabt.Sync` holds orchestration contracts.
 - `src/Yabt.Cli` exposes the future command surface.

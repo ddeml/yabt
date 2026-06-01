@@ -1,8 +1,9 @@
 namespace Yabt.Core.Models;
 
-public sealed record ArchiveObjectInfo
+public sealed record ArchiveProjectedObject
 (
-    string Key,
+    string RelativePath,
+    Func<CancellationToken, Task<ArchiveObjectContent>> OpenContentAsync,
     long? ContentLength = default,
     DateTimeOffset? LastModifiedUtc = default,
     string? ContentHash = default

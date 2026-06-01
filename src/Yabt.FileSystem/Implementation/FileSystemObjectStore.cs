@@ -1,6 +1,6 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System.Runtime.CompilerServices;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 
@@ -20,17 +20,14 @@ internal sealed class FileSystemObjectStore
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var rootPath = GetRootPath();
-        Directory.CreateDirectory(rootPath);
-        Directory.CreateDirectory(GetAreaPath(rootPath, ArchiveArea.Live));
-        Directory.CreateDirectory(GetAreaPath(rootPath, ArchiveArea.Hist));
+        Directory.CreateDirectory(GetRootPath());
 
         return Task.CompletedTask;
     }
 
     public async Task UploadAsync
     (
-        ArchiveObjectKey key,
+        string key,
         Stream content,
         string contentType,
         IReadOnlyDictionary<string, string> metadata,
@@ -44,12 +41,13 @@ internal sealed class FileSystemObjectStore
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        var normalizedKey = NormalizeObjectKey(key);
         var rootPath = GetRootPath();
-        var destinationPath = GetObjectPath(rootPath, key);
+        var destinationPath = GetObjectPath(rootPath, normalizedKey);
         var destinationDirectory = Path.GetDirectoryName(destinationPath)
             ?? throw new YabtFileSystemException(
                 "Filesystem object path did not include a directory.",
-                key,
+                normalizedKey,
                 destinationPath);
 
         Directory.CreateDirectory(destinationDirectory);
@@ -64,13 +62,15 @@ internal sealed class FileSystemObjectStore
         try
         {
             var bufferSize = GetEffectiveBufferSize();
-            await using (var destination = new FileStream(
-                             temporaryPath,
-                             FileMode.CreateNew,
-                             FileAccess.Write,
-                             FileShare.None,
-                             bufferSize,
-                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            await using (var destination = new FileStream
+            (
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan
+            ))
             {
                 await content.CopyToAsync(destination, cancellationToken);
             }
@@ -81,8 +81,8 @@ internal sealed class FileSystemObjectStore
         {
             TryDeleteFile(temporaryPath);
             throw new YabtFileSystemException(
-                $"Upload failed for filesystem object '{key.ToObjectPath()}'.",
-                key,
+                $"Upload failed for filesystem object '{normalizedKey}'.",
+                normalizedKey,
                 destinationPath,
                 ex);
         }
@@ -90,7 +90,7 @@ internal sealed class FileSystemObjectStore
 
     public Task<ArchiveObjectContent> OpenReadAsync
     (
-        ArchiveObjectKey key,
+        string key,
         CancellationToken cancellationToken = default
     )
     {
@@ -98,9 +98,10 @@ internal sealed class FileSystemObjectStore
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        var normalizedKey = NormalizeObjectKey(key);
         try
         {
-            var path = GetObjectPath(GetRootPath(), key);
+            var path = GetObjectPath(GetRootPath(), normalizedKey);
             var bufferSize = GetEffectiveBufferSize();
             var stream = new FileStream(
                 path,
@@ -115,15 +116,15 @@ internal sealed class FileSystemObjectStore
         catch (Exception ex)
         {
             throw new YabtFileSystemException(
-                $"Open read failed for filesystem object '{key.ToObjectPath()}'.",
-                key,
+                $"Open read failed for filesystem object '{normalizedKey}'.",
+                normalizedKey,
                 innerException: ex);
         }
     }
 
     public Task<bool> ExistsAsync
     (
-        ArchiveObjectKey key,
+        string key,
         CancellationToken cancellationToken = default
     )
     {
@@ -131,13 +132,12 @@ internal sealed class FileSystemObjectStore
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var path = GetObjectPath(GetRootPath(), key);
+        var path = GetObjectPath(GetRootPath(), NormalizeObjectKey(key));
         return Task.FromResult(File.Exists(path));
     }
 
     public async IAsyncEnumerable<ArchiveObjectInfo> ListAsync
     (
-        ArchiveArea area,
         string? prefix,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
@@ -145,10 +145,10 @@ internal sealed class FileSystemObjectStore
         _logger.LogTrace(nameof(ListAsync));
 
         var rootPath = GetRootPath();
-        var areaPath = GetAreaPath(rootPath, area);
-        var listRootPath = string.IsNullOrWhiteSpace(prefix) ?
-            areaPath :
-            GetObjectPath(rootPath, new(area, prefix));
+        var normalizedPrefix = NormalizeObjectPrefix(prefix);
+        var listRootPath = string.IsNullOrEmpty(normalizedPrefix) ?
+            rootPath :
+            GetObjectPath(rootPath, normalizedPrefix);
 
         if (!Directory.Exists(listRootPath))
         {
@@ -165,19 +165,21 @@ internal sealed class FileSystemObjectStore
             cancellationToken.ThrowIfCancellationRequested();
 
             var info = new FileInfo(filePath);
-            var relativePath = ToArchiveRelativePath(Path.GetRelativePath(areaPath, filePath));
+            var key = ToArchiveRelativePath(Path.GetRelativePath(rootPath, filePath));
 
-            yield return new(
-                new(area, relativePath),
+            yield return new
+            (
+                key,
                 info.Length,
-                new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+                new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero)
+            );
         }
     }
 
     public Task MoveAsync
     (
-        ArchiveObjectKey source,
-        ArchiveObjectKey destination,
+        string source,
+        string destination,
         CancellationToken cancellationToken = default
     )
     {
@@ -185,13 +187,15 @@ internal sealed class FileSystemObjectStore
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        var normalizedSource = NormalizeObjectKey(source);
+        var normalizedDestination = NormalizeObjectKey(destination);
         var rootPath = GetRootPath();
-        var sourcePath = GetObjectPath(rootPath, source);
-        var destinationPath = GetObjectPath(rootPath, destination);
+        var sourcePath = GetObjectPath(rootPath, normalizedSource);
+        var destinationPath = GetObjectPath(rootPath, normalizedDestination);
         var destinationDirectory = Path.GetDirectoryName(destinationPath)
             ?? throw new YabtFileSystemException(
                 "Filesystem object path did not include a directory.",
-                destination,
+                normalizedDestination,
                 destinationPath);
 
         Directory.CreateDirectory(destinationDirectory);
@@ -222,23 +226,16 @@ internal sealed class FileSystemObjectStore
         return bufferSize;
     }
 
-    private static string GetAreaPath(string rootPath, ArchiveArea area)
-    {
-        return GetObjectPath(
-            rootPath,
-            new(area, string.Empty));
-    }
-
-    private static string GetObjectPath(string rootPath, ArchiveObjectKey key)
+    private static string GetObjectPath(string rootPath, string key)
     {
         try
         {
-            return ResolveObjectPath(rootPath, key.ToObjectPath());
+            return ResolveObjectPath(rootPath, key);
         }
         catch (Exception ex)
         {
             throw new YabtFileSystemException(
-                $"Filesystem object path for '{key.ToObjectPath()}' could not be resolved.",
+                $"Filesystem object path for '{key}' could not be resolved.",
                 key,
                 innerException: ex);
         }
@@ -265,26 +262,39 @@ internal sealed class FileSystemObjectStore
 
     private static string NormalizeRelativeObjectPath(string value)
     {
-        var normalized = value.Replace('\\', '/').Trim('/');
-        if (string.IsNullOrWhiteSpace(normalized))
-        {
-            throw new YabtFileSystemException("Object path must not be empty.");
-        }
-
+        var normalized = NormalizeObjectKey(value);
         var invalidFileNameChars = Path.GetInvalidFileNameChars();
-        var segments = normalized.Split(
+        var segments = normalized.Split
+        (
             '/',
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+        );
 
         foreach (var segment in segments)
         {
-            if (segment is "." or ".." || segment.IndexOfAny(invalidFileNameChars) >= 0)
+            if (segment.IndexOfAny(invalidFileNameChars) >= 0)
             {
                 throw new YabtFileSystemException("Object path contains an invalid segment.");
             }
         }
 
         return Path.Combine(segments);
+    }
+
+    private static string NormalizeObjectKey(string? value)
+    {
+        var normalized = NormalizeObjectPrefix(value);
+        if (string.IsNullOrEmpty(normalized))
+        {
+            throw new YabtFileSystemException("Object path must not be empty.");
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeObjectPrefix(string? value)
+    {
+        return ArchiveLayout.NormalizeObjectKey(value);
     }
 
     private static string ToArchiveRelativePath(string relativePath)

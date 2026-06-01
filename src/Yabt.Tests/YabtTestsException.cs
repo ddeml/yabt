@@ -1,6 +1,4 @@
 using Yabt.Common;
-using Yabt.Core.Models;
-
 namespace Yabt.Tests;
 
 public class YabtTestsException : YabtException
@@ -22,7 +20,7 @@ public class YabtTestsException : YabtException
     public YabtTestsException
     (
         string? message,
-        ArchiveObjectKey? key = default,
+        string? key = default,
         Exception? innerException = default
     )
         : base(message, innerException)
@@ -30,5 +28,5 @@ public class YabtTestsException : YabtException
         Key = key;
     }
 
-    public ArchiveObjectKey? Key { get; }
+    public string? Key { get; }
 }

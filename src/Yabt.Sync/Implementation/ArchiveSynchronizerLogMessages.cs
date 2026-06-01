@@ -12,4 +12,18 @@ internal static partial class ArchiveSynchronizerLogMessages
         this ILogger logger,
         string sourceRoot,
         bool dryRun);
+
+    [LoggerMessage(
+        EventId = 1001,
+        Level = LogLevel.Information,
+        Message = "Archive {OperationName} completed. New={NewCount}; Changed={ChangedCount}; Extra={ExtraCount}; Unchanged={UnchangedCount}.")]
+    public static partial void LogArchiveSyncCompleted
+    (
+        this ILogger logger,
+        string operationName,
+        int newCount,
+        int changedCount,
+        int extraCount,
+        int unchangedCount
+    );
 }

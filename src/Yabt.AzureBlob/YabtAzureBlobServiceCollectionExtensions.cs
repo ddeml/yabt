@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Yabt.AzureBlob;
 using Yabt.AzureBlob.Implementation;
 using Yabt.Core.Abstractions;
@@ -20,6 +21,7 @@ public static class YabtAzureBlobServiceCollectionExtensions
             optionsBuilder.BindConfiguration(configSectionPath);
         }
 
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IObjectStore, AzureBlobObjectStore>();
         return services;
     }

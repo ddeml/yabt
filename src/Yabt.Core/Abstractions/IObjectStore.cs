@@ -8,7 +8,7 @@ public interface IObjectStore
 
     Task UploadAsync
     (
-        ArchiveObjectKey key,
+        string key,
         Stream content,
         string contentType,
         IReadOnlyDictionary<string, string> metadata,
@@ -17,23 +17,22 @@ public interface IObjectStore
 
     Task<ArchiveObjectContent> OpenReadAsync
     (
-        ArchiveObjectKey key,
+        string key,
         CancellationToken cancellationToken = default
     );
 
-    Task<bool> ExistsAsync(ArchiveObjectKey key, CancellationToken cancellationToken = default);
+    Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default);
 
     IAsyncEnumerable<ArchiveObjectInfo> ListAsync
     (
-        ArchiveArea area,
         string? prefix,
         CancellationToken cancellationToken = default
     );
 
     Task MoveAsync
     (
-        ArchiveObjectKey source,
-        ArchiveObjectKey destination,
+        string source,
+        string destination,
         CancellationToken cancellationToken = default
     );
 }

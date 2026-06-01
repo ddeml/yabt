@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Yabt.Sync;
 using Yabt.Sync.Implementation;
 
@@ -15,6 +16,7 @@ public static class YabtSyncServiceCollectionExtensions
     {
         _ = configSectionPath;
 
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IArchiveSynchronizer, ArchiveSynchronizer>();
         return services;
     }

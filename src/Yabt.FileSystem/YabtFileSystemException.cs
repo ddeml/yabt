@@ -1,6 +1,4 @@
 using Yabt.Common;
-using Yabt.Core.Models;
-
 namespace Yabt.FileSystem;
 
 public class YabtFileSystemException : YabtException
@@ -22,7 +20,7 @@ public class YabtFileSystemException : YabtException
     public YabtFileSystemException
     (
         string? message,
-        ArchiveObjectKey? key = default,
+        string? key = default,
         string? path = default,
         Exception? innerException = default
     )
@@ -32,7 +30,7 @@ public class YabtFileSystemException : YabtException
         Path = path;
     }
 
-    public ArchiveObjectKey? Key { get; }
+    public string? Key { get; }
 
     public string? Path { get; }
 }

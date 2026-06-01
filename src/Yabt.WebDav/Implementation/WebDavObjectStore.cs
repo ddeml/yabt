@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
@@ -7,6 +5,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 
@@ -35,29 +35,19 @@ internal sealed class WebDavObjectStore
 
         try
         {
-            var pathContext = GetPathContext();
-
-            await EnsureConfiguredRootExistsAsync(pathContext, cancellationToken);
-            await EnsureCollectionPathExistsAsync(
-                pathContext,
-                [ArchiveLayout.Default.LivePrefix],
-                cancellationToken);
-            await EnsureCollectionPathExistsAsync(
-                pathContext,
-                [ArchiveLayout.Default.HistPrefix],
-                cancellationToken);
+            await EnsureConfiguredRootExistsAsync(GetPathContext(), cancellationToken);
         }
         catch (Exception ex)
         {
             throw new YabtWebDavException(
-                "WebDAV object store could not ensure the configured collections exist.",
+                "WebDAV object store could not ensure the configured root exists.",
                 ex);
         }
     }
 
     public async Task UploadAsync
     (
-        ArchiveObjectKey key,
+        string key,
         Stream content,
         string contentType,
         IReadOnlyDictionary<string, string> metadata,
@@ -68,10 +58,11 @@ internal sealed class WebDavObjectStore
 
         _ = metadata;
 
+        var normalizedKey = NormalizeObjectKey(key);
         try
         {
             var pathContext = GetPathContext();
-            var objectSegments = NormalizePathSegments(key.ToObjectPath());
+            var objectSegments = NormalizePathSegments(normalizedKey);
             var objectUri = BuildUri(pathContext, objectSegments, trailingSlash: false);
 
             await EnsureParentCollectionExistsAsync(pathContext, objectSegments, cancellationToken);
@@ -105,24 +96,25 @@ internal sealed class WebDavObjectStore
         catch (Exception ex)
         {
             throw new YabtWebDavException(
-                $"Upload failed for WebDAV object '{key.ToObjectPath()}'.",
+                $"Upload failed for WebDAV object '{normalizedKey}'.",
                 ex);
         }
     }
 
     public async Task<ArchiveObjectContent> OpenReadAsync
     (
-        ArchiveObjectKey key,
+        string key,
         CancellationToken cancellationToken = default
     )
     {
         _logger.LogTrace(nameof(OpenReadAsync));
 
+        var normalizedKey = NormalizeObjectKey(key);
         HttpResponseMessage? response = null;
 
         try
         {
-            var objectUri = GetObjectUri(key);
+            var objectUri = GetObjectUri(normalizedKey);
 
             using var request = CreateRequest(HttpMethod.Get, objectUri);
             response = await HttpClient.SendAsync(
@@ -143,30 +135,33 @@ internal sealed class WebDavObjectStore
 
             var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
 
-            return new(
+            return new
+            (
                 new WebDavResponseContentStream(stream, response),
-                response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream");
+                response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream"
+            );
         }
         catch (Exception ex)
         {
             response?.Dispose();
             throw new YabtWebDavException(
-                $"Open read failed for WebDAV object '{key.ToObjectPath()}'.",
+                $"Open read failed for WebDAV object '{normalizedKey}'.",
                 ex);
         }
     }
 
     public async Task<bool> ExistsAsync
     (
-        ArchiveObjectKey key,
+        string key,
         CancellationToken cancellationToken = default
     )
     {
         _logger.LogTrace(nameof(ExistsAsync));
 
+        var normalizedKey = NormalizeObjectKey(key);
         try
         {
-            var objectUri = GetObjectUri(key);
+            var objectUri = GetObjectUri(normalizedKey);
 
             using var request = CreateRequest(HttpMethod.Head, objectUri);
             using var response = await HttpClient.SendAsync(
@@ -199,21 +194,20 @@ internal sealed class WebDavObjectStore
         catch (Exception ex)
         {
             throw new YabtWebDavException(
-                $"WebDAV object existence check failed for '{key.ToObjectPath()}'.",
+                $"WebDAV object existence check failed for '{normalizedKey}'.",
                 ex);
         }
     }
 
     public async IAsyncEnumerable<ArchiveObjectInfo> ListAsync
     (
-        ArchiveArea area,
         string? prefix,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
         _logger.LogTrace(nameof(ListAsync));
 
-        var objects = await ListObjectsAsync(area, prefix, cancellationToken);
+        var objects = await ListObjectsAsync(prefix, cancellationToken);
         foreach (var archiveObject in objects)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -223,18 +217,20 @@ internal sealed class WebDavObjectStore
 
     public async Task MoveAsync
     (
-        ArchiveObjectKey source,
-        ArchiveObjectKey destination,
+        string source,
+        string destination,
         CancellationToken cancellationToken = default
     )
     {
         _logger.LogTrace(nameof(MoveAsync));
 
+        var normalizedSource = NormalizeObjectKey(source);
+        var normalizedDestination = NormalizeObjectKey(destination);
         try
         {
             var pathContext = GetPathContext();
-            var sourceSegments = NormalizePathSegments(source.ToObjectPath());
-            var destinationSegments = NormalizePathSegments(destination.ToObjectPath());
+            var sourceSegments = NormalizePathSegments(normalizedSource);
+            var destinationSegments = NormalizePathSegments(normalizedDestination);
             var sourceUri = BuildUri(pathContext, sourceSegments, trailingSlash: false);
             var destinationUri = BuildUri(pathContext, destinationSegments, trailingSlash: false);
 
@@ -257,25 +253,22 @@ internal sealed class WebDavObjectStore
         catch (Exception ex)
         {
             throw new YabtWebDavException(
-                $"Move failed for WebDAV object '{source.ToObjectPath()}' to '{destination.ToObjectPath()}'.",
+                $"Move failed for WebDAV object '{normalizedSource}' to '{normalizedDestination}'.",
                 ex);
         }
     }
 
     private async Task<IReadOnlyList<ArchiveObjectInfo>> ListObjectsAsync
     (
-        ArchiveArea area,
         string? prefix,
         CancellationToken cancellationToken
     )
     {
+        var normalizedPrefix = NormalizeObjectPrefix(prefix);
         try
         {
             var pathContext = GetPathContext();
-            var areaRoot = GetAreaRoot(area);
-            var objectSegments = string.IsNullOrWhiteSpace(prefix) ?
-                [areaRoot] :
-                NormalizePathSegments(new ArchiveObjectKey(area, prefix).ToObjectPath());
+            var objectSegments = NormalizePathSegments(normalizedPrefix);
             var collectionUri = BuildUri(pathContext, objectSegments, trailingSlash: true);
 
             using var request = CreateRequest(PropFindMethod, collectionUri);
@@ -299,12 +292,12 @@ internal sealed class WebDavObjectStore
             await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
             var document = await LoadXmlDocumentAsync(content, cancellationToken);
 
-            return ToArchiveObjects(area, pathContext, collectionUri, document);
+            return ToArchiveObjects(pathContext, document);
         }
         catch (Exception ex)
         {
             throw new YabtWebDavException(
-                $"WebDAV object listing failed for archive area '{area}' with prefix '{prefix}'.",
+                $"WebDAV object listing failed for prefix '{normalizedPrefix}'.",
                 ex);
         }
     }
@@ -436,12 +429,12 @@ internal sealed class WebDavObjectStore
         return request;
     }
 
-    private Uri GetObjectUri(ArchiveObjectKey key)
+    private Uri GetObjectUri(string key)
     {
         var pathContext = GetPathContext();
         return BuildUri(
             pathContext,
-            NormalizePathSegments(key.ToObjectPath()),
+            NormalizePathSegments(key),
             trailingSlash: false);
     }
 
@@ -456,10 +449,12 @@ internal sealed class WebDavObjectStore
             throw new YabtWebDavException("WebDAV object store endpoint must be an absolute URI.");
         }
 
-        return new(
+        return new
+        (
             endpoint,
             NormalizeUriPathSegments(endpoint.AbsolutePath),
-            NormalizePathSegments(options.RootPath));
+            NormalizePathSegments(options.RootPath)
+        );
     }
 
     private static Uri BuildUri
@@ -507,18 +502,32 @@ internal sealed class WebDavObjectStore
             .ToList();
     }
 
-    private static string[] NormalizePathSegments(string? value)
+    private static string NormalizeObjectKey(string? value)
     {
-        var segments = SplitPathSegments(value);
-        foreach (var segment in segments)
+        var normalized = NormalizeObjectPrefix(value);
+        if (string.IsNullOrEmpty(normalized))
         {
-            if (segment is "." or "..")
-            {
-                throw new YabtWebDavException("WebDAV object path contains an invalid segment.");
-            }
+            throw new YabtWebDavException("WebDAV object path must not be empty.");
         }
 
-        return segments;
+        return normalized;
+    }
+
+    private static string NormalizeObjectPrefix(string? value)
+    {
+        try
+        {
+            return ArchiveLayout.NormalizeObjectKey(value);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new YabtWebDavException("WebDAV object path contains an invalid segment.", ex);
+        }
+    }
+
+    private static string[] NormalizePathSegments(string? value)
+    {
+        return SplitPathSegments(NormalizeObjectPrefix(value));
     }
 
     private static string[] SplitPathSegments(string? value)
@@ -538,16 +547,13 @@ internal sealed class WebDavObjectStore
 
     private static List<ArchiveObjectInfo> ToArchiveObjects
     (
-        ArchiveArea area,
         WebDavPathContext pathContext,
-        Uri collectionUri,
         XDocument document
     )
     {
         var result = new List<ArchiveObjectInfo>();
-        var areaSegments = pathContext.EndpointSegments
+        var rootSegments = pathContext.EndpointSegments
             .Concat(pathContext.RootSegments)
-            .Append(GetAreaRoot(area))
             .ToArray();
 
         foreach (var response in document.Descendants(DavNamespace + "response"))
@@ -563,30 +569,23 @@ internal sealed class WebDavObjectStore
                 continue;
             }
 
-            var hrefSegments = GetHrefPathSegments(collectionUri, href);
-            if (!StartsWithSegments(hrefSegments, areaSegments) ||
-                hrefSegments.Count == areaSegments.Length)
+            var hrefSegments = NormalizeUriPathSegments(new Uri(pathContext.Endpoint, href).AbsolutePath);
+            if (!StartsWithSegments(hrefSegments, rootSegments) ||
+                hrefSegments.Count == rootSegments.Length)
             {
                 continue;
             }
 
-            var relativePath = string.Join('/', hrefSegments.Skip(areaSegments.Length));
-            result.Add(new(
-                new(area, relativePath),
+            var key = string.Join('/', hrefSegments.Skip(rootSegments.Length));
+            result.Add(new
+            (
+                key,
                 GetContentLength(response),
-                GetLastModifiedUtc(response)));
+                GetLastModifiedUtc(response)
+            ));
         }
 
         return result;
-    }
-
-    private static List<string> GetHrefPathSegments(Uri baseUri, string href)
-    {
-        var hrefUri = Uri.TryCreate(href, UriKind.Absolute, out var absoluteUri) ?
-            absoluteUri :
-            new Uri(baseUri, href);
-
-        return NormalizeUriPathSegments(hrefUri.AbsolutePath);
     }
 
     private static bool StartsWithSegments
@@ -682,16 +681,6 @@ internal sealed class WebDavObjectStore
             statusCode is >= 200 and <= 299;
     }
 
-    private static string GetAreaRoot(ArchiveArea area)
-    {
-        return area switch
-        {
-            ArchiveArea.Live => ArchiveLayout.Default.LivePrefix,
-            ArchiveArea.Hist => ArchiveLayout.Default.HistPrefix,
-            _ => throw new ArgumentOutOfRangeException(nameof(area), area, null),
-        };
-    }
-
     private static async Task EnsureMultiStatusAsync
     (
         HttpResponseMessage response,
@@ -770,172 +759,5 @@ internal sealed class WebDavObjectStore
             trimmed[..2048];
 
         return $" Response body: {preview}";
-    }
-}
-
-internal sealed record WebDavPathContext
-(
-    Uri Endpoint,
-    IReadOnlyList<string> EndpointSegments,
-    IReadOnlyList<string> RootSegments
-);
-
-internal sealed class WebDavNonDisposingStream(Stream _inner) : Stream
-{
-    public override bool CanRead => _inner.CanRead;
-
-    public override bool CanSeek => _inner.CanSeek;
-
-    public override bool CanWrite => _inner.CanWrite;
-
-    public override long Length => _inner.Length;
-
-    public override long Position
-    {
-        get => _inner.Position;
-        set => _inner.Position = value;
-    }
-
-    public override void Flush()
-    {
-        _inner.Flush();
-    }
-
-    public override Task FlushAsync(CancellationToken cancellationToken)
-    {
-        return _inner.FlushAsync(cancellationToken);
-    }
-
-    public override int Read(byte[] buffer, int offset, int count)
-    {
-        return _inner.Read(buffer, offset, count);
-    }
-
-    public override ValueTask<int> ReadAsync
-    (
-        Memory<byte> buffer,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return _inner.ReadAsync(buffer, cancellationToken);
-    }
-
-    public override long Seek(long offset, SeekOrigin origin)
-    {
-        return _inner.Seek(offset, origin);
-    }
-
-    public override void SetLength(long value)
-    {
-        _inner.SetLength(value);
-    }
-
-    public override void Write(byte[] buffer, int offset, int count)
-    {
-        _inner.Write(buffer, offset, count);
-    }
-
-    public override ValueTask WriteAsync
-    (
-        ReadOnlyMemory<byte> buffer,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return _inner.WriteAsync(buffer, cancellationToken);
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-    }
-
-    public override ValueTask DisposeAsync()
-    {
-        return ValueTask.CompletedTask;
-    }
-}
-
-internal sealed class WebDavResponseContentStream(Stream _inner, IDisposable _response) : Stream
-{
-    public override bool CanRead => _inner.CanRead;
-
-    public override bool CanSeek => _inner.CanSeek;
-
-    public override bool CanWrite => _inner.CanWrite;
-
-    public override long Length => _inner.Length;
-
-    public override long Position
-    {
-        get => _inner.Position;
-        set => _inner.Position = value;
-    }
-
-    public override void Flush()
-    {
-        _inner.Flush();
-    }
-
-    public override Task FlushAsync(CancellationToken cancellationToken)
-    {
-        return _inner.FlushAsync(cancellationToken);
-    }
-
-    public override int Read(byte[] buffer, int offset, int count)
-    {
-        return _inner.Read(buffer, offset, count);
-    }
-
-    public override ValueTask<int> ReadAsync
-    (
-        Memory<byte> buffer,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return _inner.ReadAsync(buffer, cancellationToken);
-    }
-
-    public override long Seek(long offset, SeekOrigin origin)
-    {
-        return _inner.Seek(offset, origin);
-    }
-
-    public override void SetLength(long value)
-    {
-        _inner.SetLength(value);
-    }
-
-    public override void Write(byte[] buffer, int offset, int count)
-    {
-        _inner.Write(buffer, offset, count);
-    }
-
-    public override ValueTask WriteAsync
-    (
-        ReadOnlyMemory<byte> buffer,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return _inner.WriteAsync(buffer, cancellationToken);
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            _inner.Dispose();
-            _response.Dispose();
-        }
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        try
-        {
-            await _inner.DisposeAsync();
-        }
-        finally
-        {
-            _response.Dispose();
-        }
     }
 }

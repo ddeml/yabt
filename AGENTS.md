@@ -86,16 +86,16 @@ The primary policy file name is:
 
 The policy file should use one provider-owned string value named `format`. Do not model durable format names as C# enums.
 
-Initial format providers:
+Initial archive format projectors:
 
 - `mirror`
 - `zip`
 
 Do not differentiate durable `ArchiveFormat` and `PackageMode` concepts. Different folder representations are archive formats. Do not implement an `auto` format initially.
 
-Each archive format provider owns its format name and projects a source folder plus policy into an intended archive representation. Historization, target comparison, and delete handling belong to the archive synchronizer, not to the format provider.
+Each archive format projector owns its format name and projects a source folder plus policy into an intended archive representation. Historization, target comparison, and delete handling belong to the archive synchronizer, not to the format projector.
 
-The preferred future contract name is `IArchiveFormatProjector`, replacing the current scaffold's `IArchiveFormatProvider` concept when implementation is updated. Do not keep a central format registry in `Yabt.Core`.
+The format projection contract is `IArchiveFormatProjector`. Do not keep a central format registry in `Yabt.Core`.
 
 Package artifacts should be immutable and named using:
 
@@ -124,7 +124,7 @@ Manifest data should include:
 
 - Source path.
 - Creation time.
-- Format provider name.
+- Archive format name.
 - File list.
 - File count.
 - Total bytes.
@@ -229,7 +229,7 @@ Only scaffold command structure until sync semantics are designed.
 - Use `System.Text.Json` for repository metadata formats.
 - Use provider-owned string constants for durable JSON identifiers such as format names and object store kinds. Avoid C# enums for these values.
 - Keep the base `YabtException` in `Yabt.Common`; each YABT assembly should expose its own `YabtXxxException` derived from it.
-- When catching lower-level exceptions, catch the base `Exception` type directly and wrap it with the assembly-specific YABT exception, including useful operation context such as object keys or metadata paths. Do not catch SDK- or provider-specific exception types such as Azure `RequestFailedException` solely to wrap them, and do not use exception filters as a fallback. This intentionally accepts deeper inner-exception chains when multiple layers add useful context.
+- When catching lower-level exceptions, catch the base `Exception` type directly and wrap it with the assembly-specific YABT exception only when the wrapper adds useful operation context such as object keys, metadata paths, provider operation names, or recovery state. Do not catch SDK- or provider-specific exception types such as Azure `RequestFailedException` solely to wrap them, and do not use exception filters as a fallback. This intentionally accepts deeper inner-exception chains when multiple layers add useful context.
 - Do not replace scaffold `NotImplementedException` throws with YABT exceptions.
 - When intentionally ignoring expected cleanup exceptions, log them at debug level instead of leaving an empty catch block.
 - Favor deterministic, inspectable behavior over clever hidden state.
@@ -244,15 +244,21 @@ Only scaffold command structure until sync semantics are designed.
 - Prefer nullable collection parameters when the collection is optional.
 - Place `using` directives before the file-scoped namespace in all C# files.
 - Prefer primary constructors where applicable. If a primary constructor parameter is used as the backing field, name it with the same underscore convention as a private field, for example `_logger`.
-- For method declarations with parameters split across multiple lines, put the opening and closing parentheses on their own lines.
-- For records with primary constructor parameters split across multiple lines, put the opening and closing parentheses on their own lines.
-- For multiline constructor calls, put the opening and closing parentheses on their own lines.
+- Put the opening and closing parentheses on their own lines if the parentheses scope spans across multiple lines, including declarations, definitions, method calls, constructor calls, and record construction.
 - Prefer `IEnumerable<T>` for collection parameters in record types unless a stronger read-only collection interface is specifically needed.
+- Prefer `IEnumerable<T>` collection parameters over `params` arrays for helper methods unless the call-site ergonomics clearly justify `params`.
 - Prefer collection expressions such as `[]` over `Array.Empty<T>()`, `Enumerable.Empty<T>()`, and similar empty collection helpers.
 - Do not use fully qualified attribute names; add an appropriate `using` directive instead.
-- In multiline expressions, keep operators at the end of the line rather than at the beginning of the continuation line.
+- In multiline expressions, keep operators at the end of the line rather than at the beginning of the continuation line, including null-coalescing, conditional, arithmetic, Boolean, and fluent-chain operators.
 - Use target-typed `new` when the constructed concrete type is clear from context.
 - Use frozen collections, such as `FrozenSet<T>` and `FrozenDictionary<TKey, TValue>`, for conceptually static or rarely rebuilt collections.
+- Do not buffer an `IEnumerable<T>` or `IAsyncEnumerable<T>` with `ToArray()`, `ToList()`, or similar unless the result is enumerated multiple times, indexed, counted, or needs a stable snapshot.
+- Use an intermediate local variable for complex `foreach` and `await foreach` source expressions.
+- Keep each top-level type in a file named for that type.
+- Prefer expression-bodied members for simple methods that only return one expression.
+- Prefer `Yabt.Common.Check.NotNull()` for constructor null guards.
+- For lambda parameters, choose names that make it hard to accidentally use an outer-scope value; when wrapping cancellation-aware callbacks, prefer the conventional `cancellationToken` name in a scope where it can be used unambiguously.
+- Short single-statement `if` and `else` blocks may stay on one line when that is more readable.
 - Always set a default for `CancellationToken` parameters in public methods.
 - Omit cancellation token arguments when the called API provides a default and there is no meaningful token to pass.
 - Pass `default` instead of `CancellationToken.None` when an explicit cancellation token argument is required and no real token is available.

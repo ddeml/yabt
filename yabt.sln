@@ -66,6 +66,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Format.Zip.Tests", "te
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Tests", "src\Yabt.Tests\Yabt.Tests.csproj", "{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Sync.Tests", "tests\Yabt.Sync.Tests\Yabt.Sync.Tests.csproj", "{5DC49419-2C9B-4D40-84DA-1B64AA67545C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -128,6 +130,10 @@ Global
 		{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{EDB421FE-8F2E-47EF-85DD-60DC73CB0839}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5DC49419-2C9B-4D40-84DA-1B64AA67545C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5DC49419-2C9B-4D40-84DA-1B64AA67545C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5DC49419-2C9B-4D40-84DA-1B64AA67545C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5DC49419-2C9B-4D40-84DA-1B64AA67545C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
