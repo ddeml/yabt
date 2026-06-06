@@ -269,6 +269,7 @@ Only scaffold command structure until sync semantics are designed.
 - Chunked async enumeration may observe cancellation only at chunk boundaries. Buffered items may still be yielded after cancellation is requested.
 - For classes that have an `ILogger`, add a simple `_logger.LogTrace(nameof(MethodName));` at the start of each method.
 - Use source-generated `[LoggerMessage]` logging methods instead of direct `_logger.Log...()` calls whenever the direct call would trigger CA1873. Prefix generated logging methods with `Log`, implement them as `ILogger` extension methods, and call them like `_logger.LogSomething(...)`. Prefer focused internal partial logging helper classes near the consuming implementation.
+- Define every `[LoggerMessage]` event ID as a named `const int` in `Yabt.Common.YabtEventIds` and reference that constant from the attribute. Keep all YABT event IDs centralized there; do not inline numeric event IDs in logging helpers.
 - Keep an empty line after method declarations or definitions.
 - Keep line endings consistent. Follow `.editorconfig` and `.gitattributes`; text files in this repository should use CRLF unless a file-specific rule says otherwise.
 - Options classes should use nullable properties, including value types where applicable.

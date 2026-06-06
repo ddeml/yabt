@@ -1,3 +1,5 @@
+using Yabt.Common;
+
 #pragma warning disable IDE0130 // Namespace does not match folder structure - Intentionally kept in the root namespace of the extended class for easier discoverability
 namespace Microsoft.Extensions.Logging;
 #pragma warning restore IDE0130 // Namespace does not match folder structure
@@ -5,7 +7,7 @@ namespace Microsoft.Extensions.Logging;
 internal static partial class ArchiveSynchronizerLogMessages
 {
     [LoggerMessage(
-        EventId = 1000,
+        EventId = YabtEventIds.SyncRequested,
         Level = LogLevel.Information,
         Message = "Sync requested for {SourceRoot}. DryRun={DryRun}")]
     public static partial void LogSyncRequested(
@@ -14,7 +16,7 @@ internal static partial class ArchiveSynchronizerLogMessages
         bool dryRun);
 
     [LoggerMessage(
-        EventId = 1001,
+        EventId = YabtEventIds.ArchiveSyncCompleted,
         Level = LogLevel.Information,
         Message = "Archive {OperationName} completed. New={NewCount}; Changed={ChangedCount}; Extra={ExtraCount}; Unchanged={UnchangedCount}.")]
     public static partial void LogArchiveSyncCompleted

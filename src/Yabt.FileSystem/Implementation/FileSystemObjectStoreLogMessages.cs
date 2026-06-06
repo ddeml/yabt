@@ -1,9 +1,11 @@
+using Yabt.Common;
+
 namespace Microsoft.Extensions.Logging;
 
 internal static partial class FileSystemObjectStoreLogMessages
 {
     [LoggerMessage(
-        EventId = 2000,
+        EventId = YabtEventIds.IgnoringTemporaryObjectDeleteException,
         Level = LogLevel.Debug,
         Message = "Ignoring exception while deleting temporary filesystem object {Path}.")]
     public static partial void LogIgnoringTemporaryObjectDeleteException
@@ -14,7 +16,7 @@ internal static partial class FileSystemObjectStoreLogMessages
     );
 
     [LoggerMessage(
-        EventId = 2001,
+        EventId = YabtEventIds.AbandonedFileSystemOperationFailed,
         Level = LogLevel.Warning,
         Message = "Abandoned filesystem operation {Operation} for {Path} failed after cancellation.")]
     public static partial void LogAbandonedFileSystemOperationFailed
@@ -26,7 +28,7 @@ internal static partial class FileSystemObjectStoreLogMessages
     );
 
     [LoggerMessage(
-        EventId = 2002,
+        EventId = YabtEventIds.IgnoringListEnumeratorDisposeException,
         Level = LogLevel.Debug,
         Message = "Ignoring exception while disposing filesystem list enumerator for {Path}.")]
     public static partial void LogIgnoringListEnumeratorDisposeException
@@ -37,7 +39,7 @@ internal static partial class FileSystemObjectStoreLogMessages
     );
 
     [LoggerMessage(
-        EventId = 2003,
+        EventId = YabtEventIds.IgnoringAbandonedListChunkException,
         Level = LogLevel.Debug,
         Message = "Ignoring abandoned filesystem list chunk exception for {Path}.")]
     public static partial void LogIgnoringAbandonedListChunkException
