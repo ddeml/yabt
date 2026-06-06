@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Yabt.Common.Async;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 
@@ -13,16 +14,26 @@ internal sealed class FileSystemObjectStore
 ) : IObjectStore
 {
     private const int DefaultBufferSize = 81_920;
+    private const int DefaultListChunkSize = 1_000;
 
     public Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogTrace(nameof(EnsureReadyAsync));
 
-        cancellationToken.ThrowIfCancellationRequested();
-
-        Directory.CreateDirectory(GetRootPath());
-
-        return Task.CompletedTask;
+        var rootPath = GetRootPath();
+        return YabtTask.Run
+        (
+            () =>
+            {
+                Directory.CreateDirectory(rootPath);
+            },
+            ex => _logger.LogAbandonedFileSystemOperationFailed
+            (
+                ex,
+                nameof(Directory.CreateDirectory),
+                rootPath
+            ),
+            cancellationToken);
     }
 
     public async Task UploadAsync
@@ -36,59 +47,94 @@ internal sealed class FileSystemObjectStore
     {
         _logger.LogTrace(nameof(UploadAsync));
 
-        _ = contentType;
-        _ = metadata;
-
-        cancellationToken.ThrowIfCancellationRequested();
-
         var normalizedKey = NormalizeObjectKey(key);
         var rootPath = GetRootPath();
         var destinationPath = GetObjectPath(rootPath, normalizedKey);
-        var destinationDirectory = Path.GetDirectoryName(destinationPath)
-            ?? throw new YabtFileSystemException(
+        var destinationDirectory = Path.GetDirectoryName(destinationPath) ??
+            throw new YabtFileSystemException
+            (
                 "Filesystem object path did not include a directory.",
                 normalizedKey,
-                destinationPath);
-
-        Directory.CreateDirectory(destinationDirectory);
-
+                destinationPath
+            );
         var temporaryDirectory = GetTemporaryDirectory(rootPath);
-        Directory.CreateDirectory(temporaryDirectory);
-
-        var temporaryPath = Path.Combine(
+        var temporaryPath = Path.Combine
+        (
             temporaryDirectory,
-            $"{Guid.NewGuid():N}.tmp");
-
+            $"{Guid.NewGuid():N}.tmp"
+        );
+        var bufferSize = GetEffectiveBufferSize();
         try
         {
-            var bufferSize = GetEffectiveBufferSize();
-            await using (var destination = new FileStream
+            await using (var destination = await YabtTask.Run
             (
-                temporaryPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan
+                () =>
+                {
+                    Directory.CreateDirectory(destinationDirectory);
+                    Directory.CreateDirectory(temporaryDirectory);
+                    return new FileStream
+                    (
+                        temporaryPath,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        bufferSize,
+                        FileOptions.Asynchronous | FileOptions.SequentialScan
+                    );
+                },
+                abandonedStream =>
+                {
+                    abandonedStream.Dispose();
+                    TryDeleteFile(temporaryPath);
+                },
+                ex =>
+                {
+                    TryDeleteFile(temporaryPath);
+                    _logger.LogAbandonedFileSystemOperationFailed
+                    (
+                        ex,
+                        "Open temporary upload stream",
+                        temporaryPath
+                    );
+                },
+                cancellationToken
             ))
             {
                 await content.CopyToAsync(destination, cancellationToken);
             }
-
-            File.Move(temporaryPath, destinationPath);
+            await YabtTask.Run
+            (
+                () => File.Move(temporaryPath, destinationPath),
+                ex =>
+                {
+                    TryDeleteFile(temporaryPath);
+                    _logger.LogAbandonedFileSystemOperationFailed
+                    (
+                        ex,
+                        nameof(File.Move),
+                        temporaryPath
+                    );
+                },
+                cancellationToken
+            );
         }
         catch (Exception ex)
         {
-            TryDeleteFile(temporaryPath);
-            throw new YabtFileSystemException(
+            throw new YabtFileSystemException
+            (
                 $"Upload failed for filesystem object '{normalizedKey}'.",
                 normalizedKey,
                 destinationPath,
-                ex);
+                ex
+            );
+        }
+        finally
+        {
+            await YabtTask.Run(() => TryDeleteFile(temporaryPath), cancellationToken: default);
         }
     }
 
-    public Task<ArchiveObjectContent> OpenReadAsync
+    public async Task<ArchiveObjectContent> OpenReadAsync
     (
         string key,
         CancellationToken cancellationToken = default
@@ -96,22 +142,32 @@ internal sealed class FileSystemObjectStore
     {
         _logger.LogTrace(nameof(OpenReadAsync));
 
-        cancellationToken.ThrowIfCancellationRequested();
-
         var normalizedKey = NormalizeObjectKey(key);
         try
         {
             var path = GetObjectPath(GetRootPath(), normalizedKey);
             var bufferSize = GetEffectiveBufferSize();
-            var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-            return Task.FromResult(new ArchiveObjectContent(stream));
+            var stream = await YabtTask.Run
+            (
+                () => new FileStream
+                (
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    bufferSize,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan
+                ),
+                abandonedStream => abandonedStream.Dispose(),
+                ex => _logger.LogAbandonedFileSystemOperationFailed
+                (
+                    ex,
+                    nameof(FileStream),
+                    path
+                ),
+                cancellationToken
+            );
+            return new(stream);
         }
         catch (Exception ex)
         {
@@ -129,11 +185,8 @@ internal sealed class FileSystemObjectStore
     )
     {
         _logger.LogTrace(nameof(ExistsAsync));
-
-        cancellationToken.ThrowIfCancellationRequested();
-
         var path = GetObjectPath(GetRootPath(), NormalizeObjectKey(key));
-        return Task.FromResult(File.Exists(path));
+        return YabtTask.Run(() => File.Exists(path), cancellationToken: cancellationToken);
     }
 
     public async IAsyncEnumerable<ArchiveObjectInfo> ListAsync
@@ -144,35 +197,85 @@ internal sealed class FileSystemObjectStore
     {
         _logger.LogTrace(nameof(ListAsync));
 
+        var chunkSize = GetEffectiveListChunkSize();
         var rootPath = GetRootPath();
         var normalizedPrefix = NormalizeObjectPrefix(prefix);
         var listRootPath = string.IsNullOrEmpty(normalizedPrefix) ?
             rootPath :
             GetObjectPath(rootPath, normalizedPrefix);
-
-        if (!Directory.Exists(listRootPath))
+        var items = new List<ArchiveObjectInfo>(chunkSize);
+        var enumerator = default(IEnumerator<string>);
+        void ReadChunk()
         {
-            yield break;
+            items.Clear();
+            while(items.Count < chunkSize && enumerator!.MoveNext())
+            {
+                var filePath = enumerator.Current;
+                var info = new FileInfo(filePath);
+                var key = ToArchiveRelativePath(Path.GetRelativePath(rootPath, filePath));
+                items.Add(new
+                (
+                    key,
+                    info.Length,
+                    new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero)
+                ));
+            }
         }
-
-        await Task.Yield();
-
-        foreach (var filePath in Directory.EnumerateFiles(
-                     listRootPath,
-                     "*",
-                     SearchOption.AllDirectories))
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var info = new FileInfo(filePath);
-            var key = ToArchiveRelativePath(Path.GetRelativePath(rootPath, filePath));
-
-            yield return new
+            await YabtTask.Run
             (
-                key,
-                info.Length,
-                new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero)
+                () =>
+                {
+                    if (!Directory.Exists(listRootPath)) { return; }
+                    var filePaths = Directory.EnumerateFiles
+                    (
+                        listRootPath,
+                        "*",
+                        SearchOption.AllDirectories
+                    );
+                    enumerator = filePaths.GetEnumerator();
+                    ReadChunk();
+                },
+                ex => _logger.LogAbandonedFileSystemOperationFailed
+                (
+                    ex,
+                    "Initialize directory list enumerator",
+                    listRootPath
+                ),
+                cancellationToken
             );
+            while(items.Count>0)
+            {
+                foreach (var item in items) { yield return item; }
+                await YabtTask.Run
+                (
+                    ReadChunk,
+                    ex => _logger.LogIgnoringAbandonedListChunkException(ex, listRootPath),
+                    cancellationToken
+                );
+            }
+        }
+        finally
+        {
+            if (enumerator is not null)
+            {
+                _ = YabtTask.Run
+                (
+                    () =>
+                    {
+                        try
+                        {
+                            enumerator.Dispose();
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogIgnoringListEnumeratorDisposeException(ex, listRootPath);
+                        }
+                    },
+                    cancellationToken: default
+                );
+            }
         }
     }
 
@@ -185,8 +288,6 @@ internal sealed class FileSystemObjectStore
     {
         _logger.LogTrace(nameof(MoveAsync));
 
-        cancellationToken.ThrowIfCancellationRequested();
-
         var normalizedSource = NormalizeObjectKey(source);
         var normalizedDestination = NormalizeObjectKey(destination);
         var rootPath = GetRootPath();
@@ -198,10 +299,21 @@ internal sealed class FileSystemObjectStore
                 normalizedDestination,
                 destinationPath);
 
-        Directory.CreateDirectory(destinationDirectory);
-        File.Move(sourcePath, destinationPath);
-
-        return Task.CompletedTask;
+        return YabtTask.Run
+        (
+            () =>
+            {
+                Directory.CreateDirectory(destinationDirectory);
+                File.Move(sourcePath, destinationPath);
+            },
+            ex => _logger.LogAbandonedFileSystemOperationFailed
+            (
+                ex,
+                nameof(File.Move),
+                sourcePath
+            ),
+            cancellationToken
+        );
     }
 
     private string GetRootPath()
@@ -211,7 +323,6 @@ internal sealed class FileSystemObjectStore
         {
             throw new YabtFileSystemException("Filesystem object store requires a root path.");
         }
-
         return Path.GetFullPath(rootPath);
     }
 
@@ -222,8 +333,17 @@ internal sealed class FileSystemObjectStore
         {
             throw new YabtFileSystemException("Filesystem object store buffer size must be greater than zero.");
         }
-
         return bufferSize;
+    }
+
+    private int GetEffectiveListChunkSize()
+    {
+        var chunkSize = _options.CurrentValue.ListChunkSize ?? DefaultListChunkSize;
+        if (chunkSize <= 0)
+        {
+            throw new YabtFileSystemException("Filesystem object store list chunk size must be greater than zero.");
+        }
+        return chunkSize;
     }
 
     private static string GetObjectPath(string rootPath, string key)
@@ -241,10 +361,7 @@ internal sealed class FileSystemObjectStore
         }
     }
 
-    private static string GetTemporaryDirectory(string rootPath)
-    {
-        return ResolveObjectPath(rootPath, ".yabt-tmp");
-    }
+    private static string GetTemporaryDirectory(string rootPath) => ResolveObjectPath(rootPath, ".yabt-tmp");
 
     private static string ResolveObjectPath(string rootPath, string objectPath)
     {
@@ -288,49 +405,32 @@ internal sealed class FileSystemObjectStore
         {
             throw new YabtFileSystemException("Object path must not be empty.");
         }
-
         return normalized;
     }
 
-    private static string NormalizeObjectPrefix(string? value)
-    {
-        return ArchiveLayout.NormalizeObjectKey(value);
-    }
+    private static string NormalizeObjectPrefix(string? value) => ArchiveLayout.NormalizeObjectKey(value);
 
-    private static string ToArchiveRelativePath(string relativePath)
-    {
-        return relativePath
-            .Replace(Path.DirectorySeparatorChar, '/')
-            .Replace(Path.AltDirectorySeparatorChar, '/');
-    }
+    private static string ToArchiveRelativePath(string relativePath) => relativePath.
+        Replace(Path.DirectorySeparatorChar, '/').
+        Replace(Path.AltDirectorySeparatorChar, '/');
 
-    private static string EnsureTrailingDirectorySeparator(string path)
-    {
-        return Path.EndsInDirectorySeparator(path) ?
-            path :
-            path + Path.DirectorySeparatorChar;
-    }
+    private static string EnsureTrailingDirectorySeparator(string path) => Path.EndsInDirectorySeparator(path) ?
+        path : $"{path}{Path.DirectorySeparatorChar}";
 
-    private static StringComparison GetPathComparison()
-    {
-        return OperatingSystem.IsWindows() ?
-            StringComparison.OrdinalIgnoreCase :
-            StringComparison.Ordinal;
-    }
+    private static StringComparison GetPathComparison() => OperatingSystem.IsWindows() ?
+        StringComparison.OrdinalIgnoreCase :
+        StringComparison.Ordinal;
 
     private void TryDeleteFile(string path)
     {
         try
         {
-            File.Delete(path);
+            if (File.Exists(path)) { File.Delete(path); }
         }
-        catch (IOException ex)
+        catch (Exception ex)
         {
-            _logger.LogIgnoringTemporaryObjectIoDeleteException(ex, path);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            _logger.LogIgnoringTemporaryObjectAccessDeleteException(ex, path);
+            _logger.LogIgnoringTemporaryObjectDeleteException(ex, path);
         }
     }
+
 }

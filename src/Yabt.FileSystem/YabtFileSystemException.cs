@@ -1,4 +1,5 @@
 using Yabt.Common;
+
 namespace Yabt.FileSystem;
 
 public class YabtFileSystemException : YabtException

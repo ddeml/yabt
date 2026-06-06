@@ -262,6 +262,11 @@ Only scaffold command structure until sync semantics are designed.
 - Always set a default for `CancellationToken` parameters in public methods.
 - Omit cancellation token arguments when the called API provides a default and there is no meaningful token to pass.
 - Pass `default` instead of `CancellationToken.None` when an explicit cancellation token argument is required and no real token is available.
+- Cancellation of synchronous operations wrapped by `YabtTask.Run` cancels waiting, not the underlying operation. The abandoned operation may finish or fail later.
+- Always observe exceptions from abandoned operations. Log them at debug level when they are otherwise ignored.
+- Treat cancellation as an ordinary failure unless a caller explicitly needs to distinguish it. Use `IsCancellationException()` for that case.
+- Do not log an exception at a layer that throws a new contextual exception containing it. Log failures only when they would otherwise be discarded.
+- Chunked async enumeration may observe cancellation only at chunk boundaries. Buffered items may still be yielded after cancellation is requested.
 - For classes that have an `ILogger`, add a simple `_logger.LogTrace(nameof(MethodName));` at the start of each method.
 - Use source-generated `[LoggerMessage]` logging methods instead of direct `_logger.Log...()` calls whenever the direct call would trigger CA1873. Prefix generated logging methods with `Log`, implement them as `ILogger` extension methods, and call them like `_logger.LogSomething(...)`. Prefer focused internal partial logging helper classes near the consuming implementation.
 - Keep an empty line after method declarations or definitions.

@@ -1,4 +1,5 @@
 using Yabt.Common;
+
 namespace Yabt.Tests;
 
 public class YabtTestsException : YabtException
