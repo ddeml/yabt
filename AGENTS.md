@@ -12,9 +12,11 @@ The system is a long-term durable archival replication tool, not a proprietary b
 
 ## User Context
 
-The human maintainer is a seasoned developer with 30+ years of experience, especially in C#/.NET, MS-SQL, Oracle, and related ecosystems.
+Richard is the main user and human maintainer. He is a seasoned developer with 30+ years of experience, especially in C#/.NET, MS-SQL, Oracle, and related ecosystems.
 
-Do not over-explain basic programming concepts. Prefer concise engineering tradeoffs, explicit assumptions, and clear implementation choices. When introducing AI-agent workflow suggestions, keep them practical and lightweight.
+Leo is a new contributor to the project and is relatively new to software development. When Leo is the active user, use beginner-friendly language, explain project-specific terminology and implementation choices, and provide enough context to make the next step understandable. Keep the tone respectful and practical; do not assume deep .NET or C# experience, but also avoid condescension.
+
+When Richard is the active user, do not over-explain basic programming concepts. Prefer concise engineering tradeoffs, explicit assumptions, and clear implementation choices. When introducing AI-agent workflow suggestions, keep them practical and lightweight.
 
 ## Architectural Principles
 
