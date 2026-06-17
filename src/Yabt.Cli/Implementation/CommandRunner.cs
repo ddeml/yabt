@@ -69,22 +69,28 @@ internal sealed class CommandRunner
         {
             Description = "Plan the operation without writing changes.",
         };
+        var targetStoreIdOption = new Option<string?>("--target-store-id")
+        {
+            Description = "Target store id from the root descriptor.",
+        };
 
         var command = new Command(commandName, GetCommandDescription(commandName))
         {
             Arguments = { sourceRootArgument },
-            Options = { dryRunOption },
+            Options = { dryRunOption, targetStoreIdOption },
         };
 
         command.SetAction(async (parseResult, cancellationToken) =>
         {
             var sourceRoot = parseResult.GetValue(sourceRootArgument) ?? Directory.GetCurrentDirectory();
             var dryRun = parseResult.GetValue(dryRunOption);
+            var targetStoreId = parseResult.GetValue(targetStoreIdOption);
             return await RunArchiveCommandAsync
             (
                 commandName,
                 sourceRoot,
                 dryRun,
+                targetStoreId,
                 cancellationToken
             );
         });
@@ -97,10 +103,11 @@ internal sealed class CommandRunner
         string commandName,
         string sourceRoot,
         bool dryRun,
+        string? targetStoreId,
         CancellationToken cancellationToken
     )
     {
-        var request = new SyncRunRequest(sourceRoot, dryRun);
+        var request = new SyncRunRequest(sourceRoot, dryRun, targetStoreId);
         var result = commandName switch
         {
             YabtCliCommandNames.Sync => await _archiveSynchronizer.SyncAsync(request, cancellationToken),

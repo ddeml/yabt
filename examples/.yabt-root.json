@@ -4,6 +4,7 @@
   "rootRole": "source",
   "archiveId": "018fc4c7-8ec8-7cf4-b5cb-5e31d5d8d15a",
   "name": "Personal archive",
+  "defaultStoreId": "local-archive",
   "createdAtUtc": "2026-05-28T18:30:00Z",
   "layout": {
     "livePrefix": "",

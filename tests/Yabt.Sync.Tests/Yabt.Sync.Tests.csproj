@@ -11,7 +11,9 @@
     <PackageReference Include="MSTest" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Yabt.FileSystem\Yabt.FileSystem.csproj" />
     <ProjectReference Include="..\..\src\Yabt.Format.Mirror\Yabt.Format.Mirror.csproj" />
+    <ProjectReference Include="..\..\src\Yabt.Metadata\Yabt.Metadata.csproj" />
     <ProjectReference Include="..\..\src\Yabt.Sync\Yabt.Sync.csproj" />
     <ProjectReference Include="..\..\src\Yabt.Tests\Yabt.Tests.csproj" />
   </ItemGroup>

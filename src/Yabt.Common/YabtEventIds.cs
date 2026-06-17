@@ -4,6 +4,7 @@ public static class YabtEventIds
 {
     public const int SyncRequested = 1000;
     public const int ArchiveSyncCompleted = 1001;
+    public const int MultipleTargetStoresWithoutSelection = 1002;
 
     public const int IgnoringTemporaryObjectDeleteException = 2000;
     public const int AbandonedFileSystemOperationFailed = 2001;

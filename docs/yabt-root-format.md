@@ -19,6 +19,7 @@ The root descriptor records:
 - Optional root role, such as `source` or `target`.
 - Layout prefixes for logical live and history branches.
 - Known object stores.
+- Optional default object store id.
 - Non-secret store configuration.
 - Credential references.
 
@@ -37,6 +38,8 @@ Initial store kinds:
 The same store can be a source, target, backup location, restore location, or reconciliation peer depending on the command being executed.
 
 Provider-specific store parameters live in the same JSON object as the store declaration. For example, a filesystem store may have `rootPath`, Azure Blob may have `accountUri`, `container`, and `prefix`, and WebDAV may have `endpoint` and `rootPath`.
+
+When a command does not specify a target store id, the optional root-level `defaultStoreId` selects the default store. If neither the command nor the descriptor selects a store, commands use the first store declaration and warn when more than one store is configured.
 
 ## Root Role
 
@@ -93,6 +96,7 @@ Store declarations may include a `credentialRef` value. Runtime configuration re
   "rootRole": "source",
   "archiveId": "018fc4c7-8ec8-7cf4-b5cb-5e31d5d8d15a",
   "name": "Personal archive",
+  "defaultStoreId": "local-archive",
   "createdAtUtc": "2026-05-28T18:30:00Z",
   "layout": {
     "livePrefix": "",

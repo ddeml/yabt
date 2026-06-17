@@ -6,6 +6,7 @@ namespace Yabt.Sync.Implementation;
 internal sealed record ArchiveSyncContext
 (
     string SourceRoot,
+    string? SourcePrefix,
     IObjectStore SourceStore,
     IObjectStore TargetStore,
     BackupRootDescriptor SourceDescriptor,

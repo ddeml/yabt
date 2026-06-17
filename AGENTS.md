@@ -64,6 +64,8 @@ This file identifies the archive, records layout information, and describes know
 
 It may include an optional `rootRole` value such as `source` or `target` to indicate the intended default role of the root. The role is advisory and does not imply a physical layout; command direction still determines backup, restore, verification, or reconciliation behavior.
 
+It may include an optional `defaultStoreId` value to select the default object store when a command does not explicitly specify one. If neither command input nor root metadata selects a store, use the first configured store and warn when multiple stores are available.
+
 It may contain non-secret connection details such as container names, endpoints, prefixes, and credential references. It must not contain account keys, SAS tokens, passwords, client secrets, or other credentials.
 
 Object store roles are operation-specific. A store may be a source, target, backup location, restore location, or reconciliation peer depending on the command.

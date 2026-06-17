@@ -28,4 +28,15 @@ internal static partial class ArchiveSynchronizerLogMessages
         int extraCount,
         int unchangedCount
     );
+
+    [LoggerMessage(
+        EventId = YabtEventIds.MultipleTargetStoresWithoutSelection,
+        Level = LogLevel.Warning,
+        Message = "Backup root {ArchiveId} defines multiple target stores and no target store id was specified; using first store {StoreId}.")]
+    public static partial void LogMultipleTargetStoresWithoutSelection
+    (
+        this ILogger logger,
+        string archiveId,
+        string storeId
+    );
 }

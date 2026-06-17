@@ -10,7 +10,11 @@ namespace Yabt.Sync.Implementation;
 internal sealed class ArchiveSynchronizer
 (
     ILogger<ArchiveSynchronizer> _logger,
+    IBackupRootLocator _backupRootLocator,
+    IFolderPolicyReader _folderPolicyReader,
     IEnumerable<IArchiveFormatProjector> projectors,
+    IEnumerable<IBackupRootStoreResolver> storeResolvers,
+    IEnumerable<ISourceRootObjectStoreResolver> sourceRootObjectStoreResolvers,
     TimeProvider _timeProvider
 ) : IArchiveSynchronizer
 {
@@ -21,6 +25,16 @@ internal sealed class ArchiveSynchronizer
         projector => projector.FormatName,
         StringComparer.Ordinal
     );
+
+    private readonly FrozenDictionary<string, IBackupRootStoreResolver> _storeResolvers = storeResolvers.ToFrozenDictionary
+    (
+        resolver => resolver.StoreKind,
+        StringComparer.Ordinal
+    );
+
+    private readonly ISourceRootObjectStoreResolver _sourceRootObjectStoreResolver =
+        sourceRootObjectStoreResolvers.SingleOrDefault() ??
+        throw new YabtSyncException("Exactly one source root object store resolver must be registered.");
 
     private static readonly IReadOnlyDictionary<string, string> EmptyMetadata =
         new Dictionary<string, string>(StringComparer.Ordinal).ToFrozenDictionary(StringComparer.Ordinal);
@@ -37,16 +51,7 @@ internal sealed class ArchiveSynchronizer
             request.SourceRoot,
             request.DryRun);
 
-        var context = TryCreateContext(request);
-        if (context is null)
-        {
-            //TODO: Load root descriptors, resolve configured stores, and discover folder policies from SourceRoot.
-            return new
-            (
-                Completed: false,
-                Message: "Sync requires explicit source/target stores until root configuration loading is implemented."
-            );
-        }
+        var context = await CreateContextAsync(request, cancellationToken);
 
         return await ApplyProjectionAsync(
             context,
@@ -102,16 +107,7 @@ internal sealed class ArchiveSynchronizer
     {
         _logger.LogTrace(nameof(VerifyAsync));
 
-        var context = TryCreateContext(request);
-        if (context is null)
-        {
-            //TODO: Load root descriptors, resolve configured stores, and discover folder policies from SourceRoot.
-            return new
-            (
-                Completed: false,
-                Message: "Verify requires explicit source/target stores until root configuration loading is implemented."
-            );
-        }
+        var context = await CreateContextAsync(request, cancellationToken);
 
         return await ApplyProjectionAsync(
             context,
@@ -159,34 +155,143 @@ internal sealed class ArchiveSynchronizer
         ));
     }
 
-    private ArchiveSyncContext? TryCreateContext(SyncRunRequest request)
+    private async Task<ArchiveSyncContext> CreateContextAsync
+    (
+        SyncRunRequest request,
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        if (request.SourceStore is null ||
-            request.TargetStore is null ||
-            request.SourceDescriptor is null ||
-            request.TargetDescriptor is null)
+        var sourceRootPath = Path.GetFullPath(request.SourceRoot);
+        var sourceLocation = await _backupRootLocator.LocateRootAsync(
+            sourceRootPath,
+            cancellationToken);
+        var sourceDescriptor = sourceLocation.Descriptor;
+        var targetStoreConfiguration = GetTargetStoreConfiguration(
+            sourceDescriptor,
+            request.TargetStoreId);
+
+        if (!_storeResolvers.TryGetValue(targetStoreConfiguration.Kind, out var targetStoreResolver))
         {
-            return null;
+            throw new YabtSyncException(
+                $"No object store resolver is registered for store kind '{targetStoreConfiguration.Kind}'.");
         }
 
-        var policy = request.Policy ?? FolderPolicy.Default;
+        var policy = await _folderPolicyReader.ReadPolicyAsync(
+            sourceRootPath,
+            cancellationToken);
         if (!_projectors.TryGetValue(policy.Format, out var projector))
         {
             throw new YabtSyncException($"No archive format projector is registered for format '{policy.Format}'.");
         }
 
+        var sourceStore = _sourceRootObjectStoreResolver.ResolveSourceRoot(sourceLocation.RootPath);
+        var targetStore = targetStoreResolver.ResolveStore(
+            targetStoreConfiguration,
+            sourceLocation.RootPath);
+
         return new
         (
-            request.SourceRoot,
-            request.SourceStore,
-            request.TargetStore,
-            request.SourceDescriptor,
-            request.TargetDescriptor,
+            sourceRootPath,
+            CreateSourcePrefix(sourceRootPath, sourceLocation),
+            sourceStore,
+            targetStore,
+            sourceDescriptor,
+            sourceDescriptor,
             policy,
             projector
         );
+    }
+
+    private BackupRootStore GetTargetStoreConfiguration
+    (
+        BackupRootDescriptor descriptor,
+        string? requestedStoreId
+    )
+    {
+        if (descriptor.Stores is null)
+        {
+            throw new YabtSyncException("Backup root descriptor does not define any target stores.");
+        }
+
+        var effectiveStoreId = string.IsNullOrWhiteSpace(requestedStoreId) ?
+            descriptor.DefaultStoreId :
+            requestedStoreId;
+        if (!string.IsNullOrWhiteSpace(effectiveStoreId))
+        {
+            foreach (var store in descriptor.Stores)
+            {
+                if (string.Equals(store.Id, effectiveStoreId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return store;
+                }
+            }
+
+            throw new YabtSyncException(
+                $"Backup root descriptor does not define target store '{effectiveStoreId}'.");
+        }
+
+        BackupRootStore? firstStore = null;
+        var hasMultipleStores = false;
+        foreach (var store in descriptor.Stores)
+        {
+            if (firstStore is null)
+            {
+                firstStore = store;
+                continue;
+            }
+
+            hasMultipleStores = true;
+        }
+
+        if (firstStore is null)
+        {
+            throw new YabtSyncException("Backup root descriptor does not define any target stores.");
+        }
+
+        if (hasMultipleStores)
+        {
+            _logger.LogMultipleTargetStoresWithoutSelection(
+                descriptor.ArchiveId,
+                firstStore.Id);
+        }
+
+        return firstStore;
+    }
+
+    private static string? CreateSourcePrefix
+    (
+        string sourceRootPath,
+        BackupRootLocation sourceLocation
+    )
+    {
+        var relativePath = ToArchiveRelativePath(
+            Path.GetRelativePath(sourceLocation.RootPath, sourceRootPath));
+        var livePrefix = ArchiveLayout.NormalizeObjectKey(sourceLocation.Descriptor.Layout.LivePrefix);
+
+        if (string.IsNullOrEmpty(relativePath))
+        {
+            return livePrefix;
+        }
+
+        if (string.IsNullOrEmpty(livePrefix) ||
+            ArchiveLayout.IsUnderPrefix(relativePath, livePrefix))
+        {
+            return relativePath;
+        }
+
+        return ArchiveLayout.CombinePrefixAndRelativePath(livePrefix, relativePath);
+    }
+
+    private static string ToArchiveRelativePath(string relativePath)
+    {
+        if (string.Equals(relativePath, ".", StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+
+        return ArchiveLayout.NormalizeObjectKey(relativePath);
     }
 
     private async Task<SyncRunResult> ApplyProjectionAsync
@@ -309,18 +414,17 @@ internal sealed class ArchiveSynchronizer
 
     private static ArchiveProjectionRequest CreateProjectionRequest(ArchiveSyncContext context)
     {
-        var sourceLayout = context.SourceDescriptor.Layout;
         var sourceStore = new ArchiveFilteredObjectStore
         (
             context.SourceStore,
-            CreateInternalObjectKeys(sourceLayout),
-            CreateInternalObjectPrefixes(sourceLayout)
+            CreateInternalObjectKeys(context.SourceDescriptor.Layout),
+            CreateInternalObjectPrefixes(context.SourceDescriptor.Layout)
         );
 
         return new
         (
             sourceStore,
-            sourceLayout.LivePrefix,
+            context.SourcePrefix,
             context.Policy,
             context.SourceRoot
         );

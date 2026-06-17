@@ -9,7 +9,8 @@ public sealed record BackupRootDescriptor
     ArchiveLayout Layout,
     IEnumerable<BackupRootStore> Stores,
     string? RootRole = default,
-    string? Name = default
+    string? Name = default,
+    string? DefaultStoreId = default
 )
 {
     public const string ExpectedDocumentType = "yabt.backupRoot";
