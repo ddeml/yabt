@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "sync": {
+      "commandName": "Project",
+      "commandLineArgs": "sync",
+      "workingDirectory": "..\\..\\test-fs\\source"
+    }
+  }
+}
