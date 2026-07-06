@@ -134,37 +134,95 @@ internal sealed class AzureBlobObjectStore
         }
     }
 
-    public async IAsyncEnumerable<ArchiveObjectInfo> ListAsync
+    public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
     (
-        string? prefix,
+        string? folderPrefix,
+        bool recursive = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        _logger.LogTrace(nameof(ListAsync));
+        _logger.LogTrace(nameof(GetFolderItemsAsync));
 
         var container = GetContainerClient();
         var objectStorePrefix = NormalizeObjectPrefix(_options.CurrentValue.Prefix);
-        var requestedPrefix = NormalizeObjectPrefix(prefix);
-        var blobPrefix = CombineBlobNameParts(objectStorePrefix, requestedPrefix);
-        var blobs = container.GetBlobsAsync
+        var requestedPrefix = NormalizeObjectPrefix(folderPrefix);
+        var blobPrefix = ToBlobFolderPrefix(CombineBlobNameParts(
+            objectStorePrefix,
+            requestedPrefix));
+        if (recursive)
+        {
+            var recursiveBlobs = container.GetBlobsAsync
+            (
+                BlobTraits.None,
+                BlobStates.None,
+                prefix: string.IsNullOrEmpty(blobPrefix) ? null : blobPrefix,
+                cancellationToken: cancellationToken
+            );
+
+            await foreach (var blob in recursiveBlobs)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var key = ToObjectStoreKey(objectStorePrefix, blob.Name);
+                if (IsEmptyFolderMarker(key))
+                {
+                    continue;
+                }
+
+                yield return ArchiveFolderItem.CreateObject(
+                    GetObjectName(key),
+                    new
+                    (
+                        key,
+                        blob.Properties.ContentLength,
+                        blob.Properties.LastModified,
+                        ToContentHash(blob.Properties.ContentHash)
+                    ));
+            }
+
+            yield break;
+        }
+
+        var blobs = container.GetBlobsByHierarchyAsync
         (
             BlobTraits.None,
             BlobStates.None,
+            delimiter: "/",
             prefix: string.IsNullOrEmpty(blobPrefix) ? null : blobPrefix,
             cancellationToken: cancellationToken
         );
 
-        await foreach (var blob in blobs)
+        await foreach (var blobItem in blobs)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            yield return new
-            (
-                ToObjectStoreKey(objectStorePrefix, blob.Name),
-                blob.Properties.ContentLength,
-                blob.Properties.LastModified,
-                ToContentHash(blob.Properties.ContentHash)
-            );
+            if (blobItem.IsPrefix)
+            {
+                var folderKey = ToObjectStoreKey(
+                    objectStorePrefix,
+                    blobItem.Prefix.TrimEnd('/'));
+                yield return ArchiveFolderItem.CreateFolder(
+                    GetObjectName(folderKey),
+                    folderKey);
+                continue;
+            }
+
+            var blob = blobItem.Blob;
+            var key = ToObjectStoreKey(objectStorePrefix, blob.Name);
+            if (IsEmptyFolderMarker(key))
+            {
+                continue;
+            }
+
+            yield return ArchiveFolderItem.CreateObject(
+                GetObjectName(key),
+                new
+                (
+                    key,
+                    blob.Properties.ContentLength,
+                    blob.Properties.LastModified,
+                    ToContentHash(blob.Properties.ContentHash)
+                ));
         }
     }
 
@@ -357,7 +415,14 @@ internal sealed class AzureBlobObjectStore
             .Select(NormalizeObjectPrefix)
             .Where(part => !string.IsNullOrWhiteSpace(part));
 
-        return string.Join('/', normalizedParts);
+        return string.Join("/", normalizedParts);
+    }
+
+    private static string ToBlobFolderPrefix(string value)
+    {
+        return string.IsNullOrEmpty(value) || value.EndsWith("/", StringComparison.Ordinal) ?
+            value :
+            $"{value}/";
     }
 
     private static string NormalizeObjectKey(string? value)
@@ -389,6 +454,22 @@ internal sealed class AzureBlobObjectStore
         }
 
         return ArchiveLayout.RemovePrefix(normalizedBlobName, objectStorePrefix);
+    }
+
+    private static string GetObjectName(string key)
+    {
+        var normalizedKey = NormalizeObjectKey(key);
+        var separator = normalizedKey.LastIndexOf('/');
+
+        return separator < 0 ? normalizedKey : normalizedKey[(separator + 1)..];
+    }
+
+    private static bool IsEmptyFolderMarker(string key)
+    {
+        return string.Equals(
+            GetObjectName(key),
+            ArchiveFolderMarkerFileNames.EmptyFolder,
+            StringComparison.Ordinal);
     }
 
     private static string? ToContentHash(byte[]? contentHash)

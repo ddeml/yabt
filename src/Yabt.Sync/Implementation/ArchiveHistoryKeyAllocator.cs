@@ -12,7 +12,7 @@ internal sealed class ArchiveHistoryKeyAllocator
 )
 {
     private readonly string _historicalTimestampSegment = ToHistoricalTimestampSegment(_historicalTimestamp);
-    private Dictionary<string, int>? _highestHistoricalSequencesByRelativePath;
+    private readonly Dictionary<string, int> _highestHistoricalSequencesByRelativePath = new(StringComparer.Ordinal);
 
     public async Task<string> CreateHistoricalKeyAsync
     (
@@ -20,81 +20,87 @@ internal sealed class ArchiveHistoryKeyAllocator
         CancellationToken cancellationToken
     )
     {
-        var highestHistoricalSequences = await GetHighestHistoricalSequencesAsync(cancellationToken);
-        var sequence = highestHistoricalSequences.TryGetValue(relativePath, out var highestSequence) ?
+        var normalizedRelativePath = ArchiveLayout.NormalizeObjectKey(relativePath);
+        var highestSequence = await GetHighestHistoricalSequenceAsync(
+            normalizedRelativePath,
+            cancellationToken);
+        var sequence = highestSequence >= 0 ?
             highestSequence + 1 :
             0;
         var historicalPath = BuildHistoricalRelativePath(
-            relativePath,
+            normalizedRelativePath,
             _historicalTimestampSegment,
             sequence);
 
-        highestHistoricalSequences[relativePath] = sequence;
+        _highestHistoricalSequencesByRelativePath[normalizedRelativePath] = sequence;
 
         return _targetLayout.ToHistoryObjectKey(historicalPath);
     }
 
-    private async Task<Dictionary<string, int>> GetHighestHistoricalSequencesAsync
+    private async Task<int> GetHighestHistoricalSequenceAsync
     (
+        string relativePath,
         CancellationToken cancellationToken
     )
     {
-        if (_highestHistoricalSequencesByRelativePath is not null)
+        if (_highestHistoricalSequencesByRelativePath.TryGetValue(relativePath, out var cachedHighestSequence))
         {
-            return _highestHistoricalSequencesByRelativePath;
+            return cachedHighestSequence;
         }
 
-        var highestHistoricalSequences = new Dictionary<string, int>(StringComparer.Ordinal);
+        var objectName = GetObjectName(relativePath);
+        var objectParentPrefix = GetParentPrefix(relativePath);
         var histPrefix = ArchiveLayout.NormalizeObjectPrefix(_targetLayout.HistPrefix);
-        var historicalObjects = _targetStore.ListAsync(
+        var historyRoots = _targetStore.GetFolderItemsAsync(
             histPrefix,
+            recursive: false,
             cancellationToken);
+        var highestSequence = -1;
 
-        await foreach (var archiveObject in historicalObjects)
+        await foreach (var historyRoot in historyRoots)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var objectKey = ArchiveLayout.NormalizeObjectKey(archiveObject.Key);
-            var relativePath = ArchiveLayout.RemovePrefix(objectKey, histPrefix);
-            if (string.IsNullOrWhiteSpace(relativePath) ||
-                !TryParseHistoricalPath(relativePath, out var historicalRelativePath, out var sequence))
+            if (!historyRoot.IsFolder ||
+                !TryParseHistoricalTimestampSegment(historyRoot.Name, out var sequence))
             {
                 continue;
             }
 
-            if (!highestHistoricalSequences.TryGetValue(
-                    historicalRelativePath,
-                    out var highestSequence) ||
-                sequence > highestSequence)
+            var historyParentPrefix = _targetLayout.ToHistoryObjectKey(
+                ArchiveLayout.CombinePrefixAndRelativePath(
+                    historyRoot.Name,
+                    objectParentPrefix));
+            var historyFolderItems = _targetStore.GetFolderItemsAsync(
+                historyParentPrefix,
+                recursive: false,
+                cancellationToken);
+
+            await foreach (var historyFolderItem in historyFolderItems)
             {
-                highestHistoricalSequences[historicalRelativePath] = sequence;
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (historyFolderItem.Object is not null &&
+                    string.Equals(historyFolderItem.Name, objectName, StringComparison.Ordinal) &&
+                    sequence > highestSequence)
+                {
+                    highestSequence = sequence;
+                }
             }
         }
 
-        _highestHistoricalSequencesByRelativePath = highestHistoricalSequences;
-
-        return highestHistoricalSequences;
+        _highestHistoricalSequencesByRelativePath[relativePath] = highestSequence;
+        return highestSequence;
     }
 
-    private bool TryParseHistoricalPath
+    private bool TryParseHistoricalTimestampSegment
     (
-        string historicalPath,
-        out string relativePath,
+        string timestampSegment,
         out int sequence
     )
     {
-        var pathStart = historicalPath.IndexOf('/');
-        if (pathStart <= 0 || pathStart == historicalPath.Length - 1)
-        {
-            relativePath = string.Empty;
-            sequence = default;
-            return false;
-        }
-
-        var timestampSegment = historicalPath[..pathStart];
         if (string.Equals(timestampSegment, _historicalTimestampSegment, StringComparison.Ordinal))
         {
-            relativePath = historicalPath[(pathStart + 1)..];
             sequence = 0;
             return true;
         }
@@ -102,7 +108,6 @@ internal sealed class ArchiveHistoryKeyAllocator
         var numberedPrefix = $"{_historicalTimestampSegment}-";
         if (!timestampSegment.StartsWith(numberedPrefix, StringComparison.Ordinal))
         {
-            relativePath = string.Empty;
             sequence = default;
             return false;
         }
@@ -115,13 +120,27 @@ internal sealed class ArchiveHistoryKeyAllocator
                 out sequence) ||
             sequence <= 0)
         {
-            relativePath = string.Empty;
             sequence = default;
             return false;
         }
 
-        relativePath = historicalPath[(pathStart + 1)..];
         return true;
+    }
+
+    private static string GetParentPrefix(string relativePath)
+    {
+        var normalizedRelativePath = ArchiveLayout.NormalizeObjectKey(relativePath);
+        var separator = normalizedRelativePath.LastIndexOf('/');
+
+        return separator < 0 ? string.Empty : normalizedRelativePath[..separator];
+    }
+
+    private static string GetObjectName(string relativePath)
+    {
+        var normalizedRelativePath = ArchiveLayout.NormalizeObjectKey(relativePath);
+        var separator = normalizedRelativePath.LastIndexOf('/');
+
+        return separator < 0 ? normalizedRelativePath : normalizedRelativePath[(separator + 1)..];
     }
 
     private static string BuildHistoricalRelativePath

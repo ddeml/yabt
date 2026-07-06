@@ -32,13 +32,13 @@ public sealed class MirrorArchiveFormatProjectorTests
 
         await UploadTextAsync(sourceStore, "folder/file.txt", "source content");
 
-        var projection = await projector.ProjectAsync(new
+        var projectedObjects = await CollectProjectedObjectsAsync(projector.ProjectAsync(new
         (
             sourceStore,
             Policy: new FolderPolicy(MirrorArchiveFormatName.Value)
-        ));
+        )));
 
-        var projectedObject = projection.Objects.Single();
+        var projectedObject = projectedObjects.Single();
         Assert.AreEqual("folder/file.txt", projectedObject.RelativePath);
         await AssertProjectedTextAsync(projectedObject, "source content");
     }
@@ -52,14 +52,14 @@ public sealed class MirrorArchiveFormatProjectorTests
 
         await UploadTextAsync(sourceStore, "live/folder/file.txt", "source content");
 
-        var projection = await projector.ProjectAsync(new
+        var projectedObjects = await CollectProjectedObjectsAsync(projector.ProjectAsync(new
         (
             sourceStore,
             SourcePrefix: "live",
             Policy: new FolderPolicy(MirrorArchiveFormatName.Value)
-        ));
+        )));
 
-        var projectedObject = projection.Objects.Single();
+        var projectedObject = projectedObjects.Single();
         Assert.AreEqual("folder/file.txt", projectedObject.RelativePath);
     }
 
@@ -96,5 +96,19 @@ public sealed class MirrorArchiveFormatProjectorTests
         await using var content = await projectedObject.OpenContentAsync(default);
         using var reader = new StreamReader(content.Content, Encoding.UTF8);
         Assert.AreEqual(expectedContent, await reader.ReadToEndAsync());
+    }
+
+    private static async Task<IReadOnlyList<ArchiveProjectedObject>> CollectProjectedObjectsAsync
+    (
+        IAsyncEnumerable<ArchiveProjectedObject> projectedObjects
+    )
+    {
+        var result = new List<ArchiveProjectedObject>();
+        await foreach (var projectedObject in projectedObjects)
+        {
+            result.Add(projectedObject);
+        }
+
+        return result;
     }
 }

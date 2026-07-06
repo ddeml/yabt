@@ -199,19 +199,67 @@ internal sealed class WebDavObjectStore
         }
     }
 
-    public async IAsyncEnumerable<ArchiveObjectInfo> ListAsync
+    public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
     (
-        string? prefix,
+        string? folderPrefix,
+        bool recursive = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        _logger.LogTrace(nameof(ListAsync));
+        _logger.LogTrace(nameof(GetFolderItemsAsync));
 
-        var objects = await ListObjectsAsync(prefix, cancellationToken);
-        foreach (var archiveObject in objects)
+        if (recursive)
+        {
+            var recursiveItems = GetRecursiveFolderItemsAsync(
+                folderPrefix,
+                cancellationToken);
+
+            await foreach (var recursiveItem in recursiveItems)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                yield return recursiveItem;
+            }
+
+            yield break;
+        }
+
+        var folderItems = await ListFolderItemsAsync(folderPrefix, cancellationToken);
+        foreach (var folderItem in folderItems)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            yield return archiveObject;
+            yield return folderItem;
+        }
+    }
+
+    private async IAsyncEnumerable<ArchiveFolderItem> GetRecursiveFolderItemsAsync
+    (
+        string? folderPrefix,
+        [EnumeratorCancellation] CancellationToken cancellationToken
+    )
+    {
+        var folderItems = await ListFolderItemsAsync(folderPrefix, cancellationToken);
+        foreach (var folderItem in folderItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (folderItem.IsFolder)
+            {
+                var childItems = GetRecursiveFolderItemsAsync(
+                    folderItem.Key,
+                    cancellationToken);
+
+                await foreach (var childItem in childItems)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    yield return childItem;
+                }
+
+                continue;
+            }
+
+            yield return folderItem;
         }
     }
 
@@ -258,13 +306,13 @@ internal sealed class WebDavObjectStore
         }
     }
 
-    private async Task<IReadOnlyList<ArchiveObjectInfo>> ListObjectsAsync
+    private async Task<IReadOnlyList<ArchiveFolderItem>> ListFolderItemsAsync
     (
-        string? prefix,
+        string? folderPrefix,
         CancellationToken cancellationToken
     )
     {
-        var normalizedPrefix = NormalizeObjectPrefix(prefix);
+        var normalizedPrefix = NormalizeObjectPrefix(folderPrefix);
         try
         {
             var pathContext = GetPathContext();
@@ -272,7 +320,7 @@ internal sealed class WebDavObjectStore
             var collectionUri = BuildUri(pathContext, objectSegments, trailingSlash: true);
 
             using var request = CreateRequest(PropFindMethod, collectionUri);
-            request.Headers.TryAddWithoutValidation(DepthHeaderName, "infinity");
+            request.Headers.TryAddWithoutValidation(DepthHeaderName, "1");
 
             using var response = await HttpClient.SendAsync(
                 request,
@@ -292,7 +340,10 @@ internal sealed class WebDavObjectStore
             await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
             var document = await LoadXmlDocumentAsync(content, cancellationToken);
 
-            return ToArchiveObjects(pathContext, document);
+            return ToArchiveFolderItems(
+                pathContext,
+                document,
+                normalizedPrefix);
         }
         catch (Exception ex)
         {
@@ -545,24 +596,20 @@ internal sealed class WebDavObjectStore
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
-    private static List<ArchiveObjectInfo> ToArchiveObjects
+    private static List<ArchiveFolderItem> ToArchiveFolderItems
     (
         WebDavPathContext pathContext,
-        XDocument document
+        XDocument document,
+        string folderPrefix
     )
     {
-        var result = new List<ArchiveObjectInfo>();
+        var result = new List<ArchiveFolderItem>();
         var rootSegments = pathContext.EndpointSegments
             .Concat(pathContext.RootSegments)
             .ToArray();
 
         foreach (var response in document.Descendants(DavNamespace + "response"))
         {
-            if (IsCollection(response))
-            {
-                continue;
-            }
-
             var href = response.Element(DavNamespace + "href")?.Value;
             if (string.IsNullOrWhiteSpace(href))
             {
@@ -577,15 +624,50 @@ internal sealed class WebDavObjectStore
             }
 
             var key = string.Join('/', hrefSegments.Skip(rootSegments.Length));
-            result.Add(new
-            (
-                key,
-                GetContentLength(response),
-                GetLastModifiedUtc(response)
-            ));
+            if (string.Equals(
+                    key,
+                    folderPrefix,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var name = GetObjectName(key);
+            if (IsCollection(response))
+            {
+                result.Add(ArchiveFolderItem.CreateFolder(
+                    name,
+                    key));
+                continue;
+            }
+
+            if (string.Equals(
+                    name,
+                    ArchiveFolderMarkerFileNames.EmptyFolder,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            result.Add(ArchiveFolderItem.CreateObject(
+                name,
+                new
+                (
+                    key,
+                    GetContentLength(response),
+                    GetLastModifiedUtc(response)
+                )));
         }
 
         return result;
+    }
+
+    private static string GetObjectName(string key)
+    {
+        var normalizedKey = NormalizeObjectKey(key);
+        var separator = normalizedKey.LastIndexOf('/');
+
+        return separator < 0 ? normalizedKey : normalizedKey[(separator + 1)..];
     }
 
     private static bool StartsWithSegments

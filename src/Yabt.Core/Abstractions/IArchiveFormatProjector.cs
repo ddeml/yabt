@@ -6,7 +6,7 @@ public interface IArchiveFormatProjector
 {
     string FormatName { get; }
 
-    Task<ArchiveProjection> ProjectAsync
+    IAsyncEnumerable<ArchiveProjectedObject> ProjectAsync
     (
         ArchiveProjectionRequest request,
         CancellationToken cancellationToken = default

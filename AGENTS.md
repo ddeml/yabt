@@ -78,6 +78,20 @@ Initial object store providers:
 - `azureBlob`
 - `webDav`
 
+## Object Store Traversal
+
+`IObjectStore` should expose folder-local traversal rather than recursive flat listing. The object store contract should answer "what files and immediate child folders are inside this folder prefix?" so sync can compare source and target incrementally and future traversal can parallelize child folders.
+
+Providers that do not have real directories, such as Azure Blob Storage, should emulate immediate child folders from object key prefixes. Do not rely on global ordering of recursive object listings for sync correctness.
+
+Empty folders may be represented with the reserved marker file:
+
+```text
+.yabt-empty
+```
+
+Providers or projection layers may create this marker when the underlying store cannot otherwise preserve an empty folder. Treat the marker as YABT folder plumbing, not ordinary user data.
+
 ## Formats And Packaging
 
 Folders may optionally be packaged before upload. Packaging is controlled by metadata files inside folders.

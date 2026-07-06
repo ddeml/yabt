@@ -24,7 +24,11 @@ Do not introduce a metadata cache initially. If a cache is added later, it must 
 
 YABT treats backup, restore, and reconciliation locations as object stores. A plain filesystem, Azure Blob Storage, and WebDAV are all peers behind the same object-store abstraction.
 
-The object-store abstraction provides raw access to the underlying store. It should expose ordinary object operations such as listing, reading, writing, copying, moving, and deleting objects where the provider supports them. It must not know what `live` or `hist` mean, and it must not decide archive historization behavior.
+The object-store abstraction provides raw access to the underlying store. It should expose ordinary object operations such as reading, writing, copying, moving, and folder-local traversal where the provider supports them. It must not know what `live` or `hist` mean, and it must not decide archive historization behavior.
+
+Traversal is hierarchical: callers ask for the files and immediate child folders under a folder prefix. Filesystem and WebDAV providers can expose native folders directly. Providers without real folders, such as Azure Blob Storage, emulate folders from object-name prefixes.
+
+Empty folders may be represented by the reserved `.yabt-empty` marker object when a provider or archive representation cannot otherwise preserve them. The marker is YABT folder plumbing rather than ordinary source data.
 
 Initial object store providers:
 
@@ -73,6 +77,8 @@ Initial archive format projectors:
 `mirror` stores files individually. `zip` stores a logical folder as a package artifact plus adjacent metadata. Future providers such as `7z` or `tar.gz` may be added without changing `Yabt.Core`.
 
 An archive format projector acts on a source folder and policy to produce an intended archive representation. It should not match source and target objects by itself, and it should not decide historization. The projection contract is `IArchiveFormatProjector`.
+
+Projectors stream projected objects from `ProjectAsync`. Formats that can emit objects incrementally, such as `mirror`, should do so. Formats that need complete folder knowledge, such as `zip`, may collect their source folder first and then yield the finished package object.
 
 The `mirror` projector maps source files one-to-one. The `zip` projector maps a source folder to a package artifact and manifest. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
 

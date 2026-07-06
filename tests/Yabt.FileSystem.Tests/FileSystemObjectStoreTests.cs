@@ -10,7 +10,7 @@ namespace Yabt.FileSystem.Tests;
 public sealed class FileSystemObjectStoreTests
 {
     [TestMethod]
-    public async Task ListAsyncReturnsAllObjectsAcrossChunks()
+    public async Task GetFolderItemsAsyncReturnsAllObjectsAcrossChunks()
     {
         var rootPath = CreateTemporaryRoot();
         try
@@ -23,10 +23,14 @@ public sealed class FileSystemObjectStoreTests
             using var serviceProvider = CreateServices(rootPath, listChunkSize: 2).BuildServiceProvider();
             var store = serviceProvider.GetRequiredService<IObjectStore>();
             var keys = new List<string>();
+            var folderItems = store.GetFolderItemsAsync(
+                null,
+                recursive: true);
 
-            await foreach (var item in store.ListAsync(null))
+            await foreach (var folderItem in folderItems)
             {
-                keys.Add(item.Key);
+                Assert.IsNotNull(folderItem.Object);
+                keys.Add(folderItem.Object.Key);
             }
 
             CollectionAssert.AreEquivalent
@@ -49,7 +53,7 @@ public sealed class FileSystemObjectStoreTests
     }
 
     [TestMethod]
-    public async Task ListAsyncObservesCancellationAtNextChunkBoundary()
+    public async Task GetFolderItemsAsyncObservesCancellationAtNextChunkBoundary()
     {
         var rootPath = CreateTemporaryRoot();
         try
@@ -60,10 +64,10 @@ public sealed class FileSystemObjectStoreTests
             using var serviceProvider = CreateServices(rootPath, listChunkSize: 3).BuildServiceProvider();
             var store = serviceProvider.GetRequiredService<IObjectStore>();
             using var cancellationSource = new CancellationTokenSource();
-            await using var enumerator = store.ListAsync
+            await using var enumerator = store.GetFolderItemsAsync
             (
                 null,
-                cancellationSource.Token
+                cancellationToken: cancellationSource.Token
             ).GetAsyncEnumerator();
 
             Assert.IsTrue(await enumerator.MoveNextAsync());

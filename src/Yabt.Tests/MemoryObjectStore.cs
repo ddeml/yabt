@@ -132,44 +132,47 @@ public sealed class MemoryObjectStore
         }
     }
 
-    public async IAsyncEnumerable<ArchiveObjectInfo> ListAsync
+    public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
     (
-        string? prefix,
+        string? folderPrefix,
+        bool recursive = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        _logger.LogTrace(nameof(ListAsync));
+        _logger.LogTrace(nameof(GetFolderItemsAsync));
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var normalizedPrefix = NormalizeObjectPrefix(prefix);
-        IReadOnlyList<InMemoryArchiveObject> objects;
+        var normalizedPrefix = NormalizeObjectPrefix(folderPrefix);
+        IReadOnlyList<ArchiveFolderItem> items;
 
         lock (_gate)
         {
-            objects = _objects
-                .Where(candidate => IsUnderPrefix(candidate.Key, normalizedPrefix))
-                .OrderBy(candidate => candidate.Key, StringComparer.Ordinal)
-                .Select(candidate => ToPublicObject(candidate.Key, candidate.Value))
-                .ToList();
+            var folderItems = new Dictionary<string, ArchiveFolderItem>(StringComparer.Ordinal);
+            foreach (var candidate in _objects.OrderBy(candidate => candidate.Key, StringComparer.Ordinal))
+            {
+                if (!TryCreateFolderItem(
+                        candidate.Key,
+                        candidate.Value,
+                        normalizedPrefix,
+                        recursive,
+                        out var item))
+                {
+                    continue;
+                }
+
+                folderItems.TryAdd(item.Name, item);
+            }
+
+            items = folderItems.Values.ToArray();
         }
 
         await Task.Yield();
 
-        foreach (var archiveObject in objects)
+        foreach (var item in items)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var contentHash = _provideContentHash ?
-                ComputeContentHash(archiveObject.Content) :
-                null;
-
-            yield return new
-            (
-                archiveObject.Key,
-                archiveObject.Content.Length,
-                archiveObject.LastModifiedUtc,
-                contentHash
-            );
+            yield return item;
         }
     }
 
@@ -298,6 +301,99 @@ public sealed class MemoryObjectStore
         return string.IsNullOrEmpty(prefix) ||
             string.Equals(relativePath, prefix, StringComparison.Ordinal) ||
             relativePath.StartsWith($"{prefix}/", StringComparison.Ordinal);
+    }
+
+    private bool TryCreateFolderItem
+    (
+        string objectKey,
+        StoredInMemoryArchiveObject storedObject,
+        string folderPrefix,
+        bool recursive,
+        [NotNullWhen(true)] out ArchiveFolderItem? item
+    )
+    {
+        if (!IsUnderPrefix(objectKey, folderPrefix))
+        {
+            item = null;
+            return false;
+        }
+
+        var relativePath = ArchiveLayout.RemovePrefix(objectKey, folderPrefix);
+        if (string.IsNullOrEmpty(relativePath))
+        {
+            item = null;
+            return false;
+        }
+
+        var separator = relativePath.IndexOf('/');
+        if (separator >= 0)
+        {
+            if (recursive)
+            {
+                var objectName = GetObjectName(objectKey);
+                if (string.Equals(
+                        objectName,
+                        ArchiveFolderMarkerFileNames.EmptyFolder,
+                        StringComparison.Ordinal))
+                {
+                    item = null;
+                    return false;
+                }
+
+                item = ArchiveFolderItem.CreateObject(
+                    objectName,
+                    ToArchiveObjectInfo(objectKey, storedObject));
+                return true;
+            }
+
+            var folderName = relativePath[..separator];
+            item = ArchiveFolderItem.CreateFolder(
+                folderName,
+                ArchiveLayout.CombinePrefixAndRelativePath(folderPrefix, folderName));
+            return true;
+        }
+
+        if (string.Equals(
+                relativePath,
+                ArchiveFolderMarkerFileNames.EmptyFolder,
+                StringComparison.Ordinal))
+        {
+            item = null;
+            return false;
+        }
+
+        var archiveObject = ToArchiveObjectInfo(objectKey, storedObject);
+        item = ArchiveFolderItem.CreateObject(
+            relativePath,
+            archiveObject);
+        return true;
+    }
+
+    private static string GetObjectName(string key)
+    {
+        var normalizedKey = NormalizeObjectKey(key);
+        var separator = normalizedKey.LastIndexOf('/');
+
+        return separator < 0 ? normalizedKey : normalizedKey[(separator + 1)..];
+    }
+
+    private ArchiveObjectInfo ToArchiveObjectInfo
+    (
+        string key,
+        StoredInMemoryArchiveObject storedObject
+    )
+    {
+        var contentHash = _provideContentHash ?
+            ComputeContentHash(storedObject.Content) :
+            null;
+
+        return new
+        (
+            key,
+            storedObject.Content.Length,
+            storedObject.LastModifiedUtc,
+            contentHash
+        );
     }
 
     private static ReadOnlyDictionary<string, string> CopyMetadata

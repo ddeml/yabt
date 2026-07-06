@@ -2,6 +2,7 @@ using System.Collections.Frozen;
 using System.Globalization;
 using System.IO.Compression;
 using System.IO.Hashing;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -24,10 +25,10 @@ internal sealed class ZipArchiveFormatProjector
 
     public string FormatName => ZipArchiveFormatName.Value;
 
-    public async Task<ArchiveProjection> ProjectAsync
+    public async IAsyncEnumerable<ArchiveProjectedObject> ProjectAsync
     (
         ArchiveProjectionRequest request,
-        CancellationToken cancellationToken = default
+        [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
         _logger.LogTrace(nameof(ProjectAsync));
@@ -57,7 +58,7 @@ internal sealed class ZipArchiveFormatProjector
             manifestHash
         );
 
-        return new([packageObject]);
+        yield return packageObject;
     }
 
     private async Task<IReadOnlyList<ZipSourceObject>> ListSourceObjectsAsync
@@ -69,17 +70,58 @@ internal sealed class ZipArchiveFormatProjector
     {
         var sourcePrefix = ArchiveLayout.NormalizeObjectPrefix(request.SourcePrefix);
         var sourceObjects = new List<ZipSourceObject>();
-        var listedSourceObjects = request.SourceStore.ListAsync
+        await AddFolderSourceObjectsAsync
         (
+            request.SourceStore,
             sourcePrefix,
+            sourcePrefix,
+            sourceObjects,
+            createdAtUtc,
             cancellationToken
         );
 
-        await foreach (var sourceObject in listedSourceObjects)
+        return sourceObjects
+            .OrderBy(candidate => candidate.RelativePath, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private async Task AddFolderSourceObjectsAsync
+    (
+        IReadOnlyObjectStore sourceStore,
+        string? sourcePrefix,
+        string? folderPrefix,
+        List<ZipSourceObject> sourceObjects,
+        DateTimeOffset createdAtUtc,
+        CancellationToken cancellationToken
+    )
+    {
+        var sourceItems = sourceStore.GetFolderItemsAsync(
+            folderPrefix,
+            recursive: false,
+            cancellationToken);
+
+        await foreach (var sourceItem in sourceItems)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var sourceKey = ArchiveLayout.NormalizeObjectKey(sourceObject.Key);
+            if (sourceItem.IsFolder)
+            {
+                await AddFolderSourceObjectsAsync(
+                    sourceStore,
+                    sourcePrefix,
+                    sourceItem.Key,
+                    sourceObjects,
+                    createdAtUtc,
+                    cancellationToken);
+                continue;
+            }
+
+            if (sourceItem.Object is null)
+            {
+                continue;
+            }
+
+            var sourceKey = ArchiveLayout.NormalizeObjectKey(sourceItem.Object.Key);
             var relativePath = ArchiveLayout.RemovePrefix(sourceKey, sourcePrefix);
             if (string.IsNullOrEmpty(relativePath))
             {
@@ -87,15 +129,15 @@ internal sealed class ZipArchiveFormatProjector
             }
 
             //TODO: Replace eager per-file hashing with the shared manifest hashing pipeline.
-            var hashResult = string.IsNullOrWhiteSpace(sourceObject.ContentHash) ?
+            var hashResult = string.IsNullOrWhiteSpace(sourceItem.Object.ContentHash) ?
                 await ComputeSourceObjectHashAsync(
-                    request.SourceStore,
+                    sourceStore,
                     sourceKey,
                     cancellationToken) :
                 new ZipSourceObjectHashResult
                 (
-                    sourceObject.ContentLength,
-                    sourceObject.ContentHash
+                    sourceItem.Object.ContentLength,
+                    sourceItem.Object.ContentHash
                 );
 
             sourceObjects.Add(new
@@ -103,19 +145,15 @@ internal sealed class ZipArchiveFormatProjector
                 sourceKey,
                 relativePath,
                 hashResult.Length,
-                sourceObject.LastModifiedUtc ?? createdAtUtc,
+                sourceItem.Object.LastModifiedUtc ?? createdAtUtc,
                 hashResult.ContentHash
             ));
         }
-
-        return sourceObjects
-            .OrderBy(candidate => candidate.RelativePath, StringComparer.Ordinal)
-            .ToArray();
     }
 
     private async Task<ArchiveObjectContent> BuildPackageAsync
     (
-        IObjectStore sourceStore,
+        IReadOnlyObjectStore sourceStore,
         IReadOnlyList<ZipSourceObject> sourceObjects,
         CancellationToken cancellationToken
     )
@@ -154,7 +192,7 @@ internal sealed class ZipArchiveFormatProjector
     private ArchiveProjectedObject CreatePackageObject
     (
         string packageName,
-        IObjectStore sourceStore,
+        IReadOnlyObjectStore sourceStore,
         IReadOnlyList<ZipSourceObject> sourceObjects,
         string manifestHash
     ) => new
@@ -171,7 +209,7 @@ internal sealed class ZipArchiveFormatProjector
 
     private async Task<ZipSourceObjectHashResult> ComputeSourceObjectHashAsync
     (
-        IObjectStore sourceStore,
+        IReadOnlyObjectStore sourceStore,
         string sourceKey,
         CancellationToken cancellationToken
     )

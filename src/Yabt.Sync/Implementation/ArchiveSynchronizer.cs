@@ -306,14 +306,16 @@ internal sealed class ArchiveSynchronizer
         await context.SourceStore.EnsureReadyAsync(cancellationToken);
         await context.TargetStore.EnsureReadyAsync(cancellationToken);
 
-        var projection = await context.Projector.ProjectAsync(
-            CreateProjectionRequest(context),
-            cancellationToken);
-        var projectedObjects = projection.Objects
-            .OrderBy(candidate => candidate.RelativePath, StringComparer.Ordinal);
-        var targetObjects = await ListTargetLiveObjectsAsync(
+        var targetFolders = new Dictionary<string, TargetFolderState>(StringComparer.Ordinal);
+        await LoadTargetFolderStateAsync(
             context.TargetStore,
             context.TargetDescriptor.Layout,
+            targetFolders,
+            string.Empty,
+            cancellationToken);
+
+        var projectedObjects = context.Projector.ProjectAsync(
+            CreateProjectionRequest(context),
             cancellationToken);
         var summary = new ArchiveSyncSummary();
         var historyKeyAllocator = new ArchiveHistoryKeyAllocator(
@@ -321,14 +323,29 @@ internal sealed class ArchiveSynchronizer
             context.TargetDescriptor.Layout,
             _timeProvider.GetUtcNow());
 
-        foreach (var projectedObject in projectedObjects)
+        await foreach (var projectedObject in projectedObjects)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var relativePath = ArchiveLayout.NormalizeObjectKey(projectedObject.RelativePath);
-            if (targetObjects.TryGetValue(relativePath, out var targetObject))
+            var targetFolder = await LoadTargetFolderStateAsync(
+                context.TargetStore,
+                context.TargetDescriptor.Layout,
+                targetFolders,
+                GetParentPrefix(relativePath),
+                cancellationToken);
+
+            if (!targetFolder.Objects.Remove(relativePath, out var targetObject) &&
+                IsEmptyFolderMarker(relativePath) &&
+                await context.TargetStore.ExistsAsync(
+                    context.TargetDescriptor.Layout.ToLiveObjectKey(relativePath),
+                    cancellationToken))
             {
-                targetObjects.Remove(relativePath);
+                targetObject = new(context.TargetDescriptor.Layout.ToLiveObjectKey(relativePath));
+            }
+
+            if (targetObject is not null)
+            {
                 if (await HasSameContentAsync(
                         projectedObject,
                         context.TargetStore,
@@ -372,21 +389,14 @@ internal sealed class ArchiveSynchronizer
             }
         }
 
-        foreach (var relativePath in targetObjects.Keys)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            summary.AddExtra();
-            if (writeChanges)
-            {
-                await MoveTargetObjectToHistoryAsync(
-                    context.TargetStore,
-                    historyKeyAllocator,
-                    context.TargetDescriptor.Layout,
-                    relativePath,
-                    cancellationToken);
-            }
-        }
+        await MoveRemainingTargetObjectsToHistoryAsync(
+            context.TargetStore,
+            historyKeyAllocator,
+            context.TargetDescriptor.Layout,
+            targetFolders,
+            summary,
+            writeChanges,
+            cancellationToken);
 
         _logger.LogArchiveSyncCompleted(
             operationName,
@@ -412,41 +422,178 @@ internal sealed class ArchiveSynchronizer
         );
     }
 
-    private static ArchiveProjectionRequest CreateProjectionRequest(ArchiveSyncContext context)
+    private ArchiveProjectionRequest CreateProjectionRequest(ArchiveSyncContext context)
     {
-        var sourceStore = new ArchiveFilteredObjectStore
+        var filteredSourceStore = new ArchiveFilteredObjectStore
         (
             context.SourceStore,
             CreateInternalObjectKeys(context.SourceDescriptor.Layout),
             CreateInternalObjectPrefixes(context.SourceDescriptor.Layout)
         );
+        var projectionSourceStore = new ArchiveProjectionObjectStore
+        (
+            filteredSourceStore,
+            context.SourceRoot,
+            context.SourcePrefix,
+            _folderPolicyReader,
+            _projectors
+        );
 
         return new
         (
-            sourceStore,
+            projectionSourceStore,
             context.SourcePrefix,
             context.Policy,
             context.SourceRoot
         );
     }
 
-    private static async Task<SortedDictionary<string, ArchiveObjectInfo>> ListTargetLiveObjectsAsync
+    private static async Task<TargetFolderState> LoadTargetFolderStateAsync
     (
         IObjectStore targetStore,
         ArchiveLayout targetLayout,
+        Dictionary<string, TargetFolderState> targetFolders,
+        string relativeFolderPrefix,
         CancellationToken cancellationToken
     )
     {
-        var targetObjects = new SortedDictionary<string, ArchiveObjectInfo>(StringComparer.Ordinal);
+        var normalizedRelativeFolderPrefix = ArchiveLayout.NormalizeObjectKey(relativeFolderPrefix);
+        if (targetFolders.TryGetValue(normalizedRelativeFolderPrefix, out var cachedState))
+        {
+            return cachedState;
+        }
+
+        MarkTargetFolderVisited(
+            targetFolders,
+            normalizedRelativeFolderPrefix);
+
+        var targetFolder = new TargetFolderState();
         var livePrefix = ArchiveLayout.NormalizeObjectPrefix(targetLayout.LivePrefix);
-        var listedTargetObjects = targetStore.ListAsync(
-            livePrefix,
+        var targetFolderPrefix = targetLayout.ToLiveObjectKey(normalizedRelativeFolderPrefix);
+        var folderItems = targetStore.GetFolderItemsAsync(
+            targetFolderPrefix,
+            recursive: false,
             cancellationToken);
 
-        await foreach (var targetObject in listedTargetObjects)
+        await foreach (var folderItem in folderItems)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            var targetKey = ArchiveLayout.NormalizeObjectKey(folderItem.Key);
+            if (IsInternalObject(targetKey, targetLayout))
+            {
+                continue;
+            }
+
+            var relativePath = ArchiveLayout.RemovePrefix(targetKey, livePrefix);
+            if (string.IsNullOrEmpty(relativePath))
+            {
+                continue;
+            }
+
+            if (folderItem.IsFolder)
+            {
+                targetFolder.Folders.TryAdd(relativePath, relativePath);
+                continue;
+            }
+
+            if (folderItem.Object is not null)
+            {
+                targetFolder.Objects.TryAdd(relativePath, folderItem.Object with
+                {
+                    Key = targetKey,
+                });
+            }
+        }
+
+        targetFolders[normalizedRelativeFolderPrefix] = targetFolder;
+        return targetFolder;
+    }
+
+    private static void MarkTargetFolderVisited
+    (
+        Dictionary<string, TargetFolderState> targetFolders,
+        string relativeFolderPrefix
+    )
+    {
+        var parentPrefix = GetParentPrefix(relativeFolderPrefix);
+        if (targetFolders.TryGetValue(parentPrefix, out var parentFolder))
+        {
+            parentFolder.Folders.Remove(relativeFolderPrefix);
+        }
+    }
+
+    private static async Task MoveRemainingTargetObjectsToHistoryAsync
+    (
+        IObjectStore targetStore,
+        ArchiveHistoryKeyAllocator historyKeyAllocator,
+        ArchiveLayout targetLayout,
+        Dictionary<string, TargetFolderState> targetFolders,
+        ArchiveSyncSummary summary,
+        bool writeChanges,
+        CancellationToken cancellationToken
+    )
+    {
+        foreach (var targetFolder in targetFolders.Values)
+        {
+            foreach (var relativePath in targetFolder.Objects.Keys)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                summary.AddExtra();
+                if (writeChanges)
+                {
+                    await MoveTargetObjectToHistoryAsync(
+                        targetStore,
+                        historyKeyAllocator,
+                        targetLayout,
+                        relativePath,
+                        cancellationToken);
+                }
+            }
+
+            foreach (var relativeFolderPath in targetFolder.Folders.Keys)
+            {
+                await MoveTargetFolderToHistoryAsync(
+                    targetStore,
+                    historyKeyAllocator,
+                    targetLayout,
+                    relativeFolderPath,
+                    summary,
+                    writeChanges,
+                    cancellationToken);
+            }
+        }
+    }
+
+    private static async Task MoveTargetFolderToHistoryAsync
+    (
+        IObjectStore targetStore,
+        ArchiveHistoryKeyAllocator historyKeyAllocator,
+        ArchiveLayout targetLayout,
+        string relativeFolderPath,
+        ArchiveSyncSummary summary,
+        bool writeChanges,
+        CancellationToken cancellationToken
+    )
+    {
+        var targetFolderPrefix = targetLayout.ToLiveObjectKey(relativeFolderPath);
+        var targetItems = targetStore.GetFolderItemsAsync(
+            targetFolderPrefix,
+            recursive: true,
+            cancellationToken);
+        var livePrefix = ArchiveLayout.NormalizeObjectPrefix(targetLayout.LivePrefix);
+
+        await foreach (var targetItem in targetItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (targetItem.Object is null)
+            {
+                continue;
+            }
+
+            var targetObject = targetItem.Object;
             var targetKey = ArchiveLayout.NormalizeObjectKey(targetObject.Key);
             if (IsInternalObject(targetKey, targetLayout))
             {
@@ -459,13 +606,17 @@ internal sealed class ArchiveSynchronizer
                 continue;
             }
 
-            targetObjects.TryAdd(relativePath, targetObject with
+            summary.AddExtra();
+            if (writeChanges)
             {
-                Key = targetKey,
-            });
+                await MoveTargetObjectToHistoryAsync(
+                    targetStore,
+                    historyKeyAllocator,
+                    targetLayout,
+                    relativePath,
+                    cancellationToken);
+            }
         }
-
-        return targetObjects;
     }
 
     private static async Task UploadProjectedObjectAsync
@@ -689,6 +840,28 @@ internal sealed class ArchiveSynchronizer
         return false;
     }
 
+    private static string GetParentPrefix(string relativePath)
+    {
+        var normalizedRelativePath = ArchiveLayout.NormalizeObjectKey(relativePath);
+        var separator = normalizedRelativePath.LastIndexOf('/');
+
+        return separator < 0 ? string.Empty : normalizedRelativePath[..separator];
+    }
+
+    private static bool IsEmptyFolderMarker(string relativePath)
+    {
+        var normalizedRelativePath = ArchiveLayout.NormalizeObjectKey(relativePath);
+        var separator = normalizedRelativePath.LastIndexOf('/');
+        var name = separator < 0 ?
+            normalizedRelativePath :
+            normalizedRelativePath[(separator + 1)..];
+
+        return string.Equals(
+            name,
+            ArchiveFolderMarkerFileNames.EmptyFolder,
+            StringComparison.Ordinal);
+    }
+
     private static string BuildSummaryMessage
     (
         string operationName,
@@ -707,6 +880,13 @@ internal sealed class ArchiveSynchronizer
         return $"Archive {operationName} completed; {summary.NewCount} new object(s), " +
             $"{summary.ChangedCount} changed object(s), {summary.ExtraCount} extra object(s), " +
             $"and {summary.UnchangedCount} unchanged object(s).";
+    }
+
+    private sealed class TargetFolderState
+    {
+        public Dictionary<string, ArchiveObjectInfo> Objects { get; } = new(StringComparer.Ordinal);
+
+        public Dictionary<string, string> Folders { get; } = new(StringComparer.Ordinal);
     }
 
 }

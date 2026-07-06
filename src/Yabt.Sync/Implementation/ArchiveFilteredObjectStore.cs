@@ -7,10 +7,10 @@ namespace Yabt.Sync.Implementation;
 
 internal sealed class ArchiveFilteredObjectStore
 (
-    IObjectStore _inner,
+    IReadOnlyObjectStore _inner,
     IEnumerable<string>? excludedObjectKeys = null,
     IEnumerable<string>? excludedObjectPrefixes = null
-) : IObjectStore
+) : IReadOnlyObjectStore
 {
     private readonly FrozenSet<string> _excludedObjectKeys = NormalizeObjectKeys(excludedObjectKeys);
     private readonly FrozenSet<string> _excludedObjectPrefixes = NormalizeObjectPrefixes(excludedObjectPrefixes);
@@ -18,23 +18,6 @@ internal sealed class ArchiveFilteredObjectStore
     public Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         return _inner.EnsureReadyAsync(cancellationToken);
-    }
-
-    public Task UploadAsync
-    (
-        string key,
-        Stream content,
-        string contentType,
-        IReadOnlyDictionary<string, string> metadata,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return _inner.UploadAsync(
-            NormalizeAllowedObjectKey(key),
-            content,
-            contentType,
-            metadata,
-            cancellationToken);
     }
 
     public Task<ArchiveObjectContent> OpenReadAsync
@@ -59,41 +42,36 @@ internal sealed class ArchiveFilteredObjectStore
             cancellationToken);
     }
 
-    public async IAsyncEnumerable<ArchiveObjectInfo> ListAsync
+    public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
     (
-        string? prefix,
+        string? folderPrefix,
+        bool recursive = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        var objects = _inner.ListAsync(prefix, cancellationToken);
-        await foreach (var archiveObject in objects)
+        var folderItems = _inner.GetFolderItemsAsync(
+            folderPrefix,
+            recursive,
+            cancellationToken);
+        await foreach (var folderItem in folderItems)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var normalizedKey = ArchiveLayout.NormalizeObjectKey(archiveObject.Key);
+            var normalizedKey = ArchiveLayout.NormalizeObjectKey(folderItem.Key);
             if (IsExcluded(normalizedKey))
             {
                 continue;
             }
 
-            yield return archiveObject with
+            yield return folderItem with
             {
                 Key = normalizedKey,
+                Object = folderItem.Object is null ? null : folderItem.Object with
+                {
+                    Key = normalizedKey,
+                },
             };
         }
-    }
-
-    public Task MoveAsync
-    (
-        string source,
-        string destination,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return _inner.MoveAsync(
-            NormalizeAllowedObjectKey(source),
-            NormalizeAllowedObjectKey(destination),
-            cancellationToken);
     }
 
     private string NormalizeAllowedObjectKey(string key)

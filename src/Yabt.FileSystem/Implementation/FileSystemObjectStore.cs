@@ -189,36 +189,29 @@ internal sealed class FileSystemObjectStore
         return YabtTask.Run(() => File.Exists(path), cancellationToken: cancellationToken);
     }
 
-    public async IAsyncEnumerable<ArchiveObjectInfo> ListAsync
+    public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
     (
-        string? prefix,
+        string? folderPrefix,
+        bool recursive = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        _logger.LogTrace(nameof(ListAsync));
+        _logger.LogTrace(nameof(GetFolderItemsAsync));
 
         var chunkSize = GetEffectiveListChunkSize();
         var rootPath = GetRootPath();
-        var normalizedPrefix = NormalizeObjectPrefix(prefix);
+        var normalizedPrefix = NormalizeObjectPrefix(folderPrefix);
         var listRootPath = string.IsNullOrEmpty(normalizedPrefix) ?
             rootPath :
             GetObjectPath(rootPath, normalizedPrefix);
-        var items = new List<ArchiveObjectInfo>(chunkSize);
-        var enumerator = default(IEnumerator<string>);
+        var items = new List<ArchiveFolderItem>(chunkSize);
+        var enumerator = default(IEnumerator<ArchiveFolderItem>);
         void ReadChunk()
         {
             items.Clear();
             while(items.Count < chunkSize && enumerator!.MoveNext())
             {
-                var filePath = enumerator.Current;
-                var info = new FileInfo(filePath);
-                var key = ToArchiveRelativePath(Path.GetRelativePath(rootPath, filePath));
-                items.Add(new
-                (
-                    key,
-                    info.Length,
-                    new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero)
-                ));
+                items.Add(enumerator.Current);
             }
         }
         try
@@ -228,19 +221,17 @@ internal sealed class FileSystemObjectStore
                 () =>
                 {
                     if (!Directory.Exists(listRootPath)) { return; }
-                    var filePaths = Directory.EnumerateFiles
-                    (
+                    var folderItems = EnumerateFolderItems(
+                        rootPath,
                         listRootPath,
-                        "*",
-                        SearchOption.AllDirectories
-                    );
-                    enumerator = filePaths.GetEnumerator();
+                        recursive);
+                    enumerator = folderItems.GetEnumerator();
                     ReadChunk();
                 },
                 ex => _logger.LogAbandonedFileSystemOperationFailed
                 (
                     ex,
-                    "Initialize directory list enumerator",
+                    "Initialize folder item list enumerator",
                     listRootPath
                 ),
                 cancellationToken
@@ -362,6 +353,127 @@ internal sealed class FileSystemObjectStore
     }
 
     private static string GetTemporaryDirectory(string rootPath) => ResolveObjectPath(rootPath, ".yabt-tmp");
+
+    private static IEnumerable<ArchiveFolderItem> EnumerateFolderItems
+    (
+        string rootPath,
+        string directoryPath,
+        bool recursive
+    )
+    {
+        if (recursive)
+        {
+            return EnumerateRecursiveObjectItems(
+                rootPath,
+                directoryPath);
+        }
+
+        return EnumerateImmediateFolderItems(
+            rootPath,
+            directoryPath);
+    }
+
+    private static IEnumerable<ArchiveFolderItem> EnumerateImmediateFolderItems
+    (
+        string rootPath,
+        string directoryPath
+    )
+    {
+        var childDirectoryPaths = Directory.EnumerateDirectories(directoryPath).
+            OrderBy(childDirectoryPath => childDirectoryPath, StringComparer.Ordinal);
+        foreach (var childDirectoryPath in childDirectoryPaths)
+        {
+            var name = Path.GetFileName(childDirectoryPath);
+            var key = ToArchiveRelativePath(Path.GetRelativePath(rootPath, childDirectoryPath));
+            yield return ArchiveFolderItem.CreateFolder(name, key);
+        }
+
+        var filePaths = Directory.EnumerateFiles(directoryPath).
+            OrderBy(filePath => filePath, StringComparer.Ordinal);
+        foreach (var filePath in filePaths)
+        {
+            var name = Path.GetFileName(filePath);
+            if (string.Equals(
+                    name,
+                    ArchiveFolderMarkerFileNames.EmptyFolder,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var info = new FileInfo(filePath);
+            var key = ToArchiveRelativePath(Path.GetRelativePath(rootPath, filePath));
+            yield return ArchiveFolderItem.CreateObject(
+                name,
+                new
+                (
+                    key,
+                    info.Length,
+                    new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero)
+                ));
+        }
+    }
+
+    private static IEnumerable<ArchiveFolderItem> EnumerateRecursiveObjectItems
+    (
+        string rootPath,
+        string directoryPath
+    )
+    {
+        var childDirectoryPaths = Directory.EnumerateDirectories(directoryPath).
+            OrderBy(childDirectoryPath => childDirectoryPath, StringComparer.Ordinal);
+        foreach (var childDirectoryPath in childDirectoryPaths)
+        {
+            var childItems = EnumerateRecursiveObjectItems(
+                rootPath,
+                childDirectoryPath);
+
+            foreach (var childItem in childItems)
+            {
+                yield return childItem;
+            }
+        }
+
+        var fileItems = EnumerateFileItems(
+            rootPath,
+            directoryPath);
+        foreach (var fileItem in fileItems)
+        {
+            yield return fileItem;
+        }
+    }
+
+    private static IEnumerable<ArchiveFolderItem> EnumerateFileItems
+    (
+        string rootPath,
+        string directoryPath
+    )
+    {
+        var filePaths = Directory.EnumerateFiles(directoryPath).
+            OrderBy(filePath => filePath, StringComparer.Ordinal);
+        foreach (var filePath in filePaths)
+        {
+            var name = Path.GetFileName(filePath);
+            if (string.Equals(
+                    name,
+                    ArchiveFolderMarkerFileNames.EmptyFolder,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var info = new FileInfo(filePath);
+            var key = ToArchiveRelativePath(Path.GetRelativePath(rootPath, filePath));
+            yield return ArchiveFolderItem.CreateObject(
+                name,
+                new
+                (
+                    key,
+                    info.Length,
+                    new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero)
+                ));
+        }
+    }
 
     private static string ResolveObjectPath(string rootPath, string objectPath)
     {

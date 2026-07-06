@@ -50,6 +50,14 @@ Documents/report.docx
 Photos/Vacation/img001.jpg
 ```
 
+An empty folder may be preserved with the reserved marker file:
+
+```text
+EmptyFolder/.yabt-empty
+```
+
+The marker exists only to make an otherwise empty folder visible in object stores that cannot represent empty directories directly.
+
 With an archive-style `livePrefix` of `live`, the same objects would appear as:
 
 ```text

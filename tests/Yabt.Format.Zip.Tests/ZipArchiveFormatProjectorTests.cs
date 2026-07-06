@@ -33,14 +33,14 @@ public sealed class ZipArchiveFormatProjectorTests
 
         await UploadTextAsync(sourceStore, "folder/file.txt", "source content");
 
-        var projection = await projector.ProjectAsync(new
+        var projectedObjects = await CollectProjectedObjectsAsync(projector.ProjectAsync(new
         (
             sourceStore,
             Policy: new FolderPolicy(ZipArchiveFormatName.Value),
             SourceDisplayName: "Photos"
-        ));
+        )));
 
-        var projectedObject = projection.Objects.Single();
+        var projectedObject = projectedObjects.Single();
         StringAssert.StartsWith(projectedObject.RelativePath, "Photos.");
         StringAssert.EndsWith(projectedObject.RelativePath, ".zip");
 
@@ -54,17 +54,20 @@ public sealed class ZipArchiveFormatProjectorTests
     }
 
     [TestMethod]
-    public async Task MemoryObjectStoreListAsyncProvidesContentHashWhenEnabled()
+    public async Task MemoryObjectStoreGetFolderItemsAsyncProvidesContentHashWhenEnabled()
     {
         var sourceStore = new MemoryObjectStore(provideContentHash: true);
 
         await UploadTextAsync(sourceStore, "folder/file.txt", "source content");
 
         var sourceObjects = new List<ArchiveObjectInfo>();
-        var listedSourceObjects = sourceStore.ListAsync(null);
-        await foreach (var sourceObject in listedSourceObjects)
+        var sourceFolderItems = sourceStore.GetFolderItemsAsync("folder");
+        await foreach (var sourceFolderItem in sourceFolderItems)
         {
-            sourceObjects.Add(sourceObject);
+            if (sourceFolderItem.Object is not null)
+            {
+                sourceObjects.Add(sourceFolderItem.Object);
+            }
         }
 
         var contentHash = sourceObjects.Single().ContentHash ?? string.Empty;
@@ -94,5 +97,19 @@ public sealed class ZipArchiveFormatProjectorTests
             stream,
             "text/plain",
             new Dictionary<string, string>(StringComparer.Ordinal));
+    }
+
+    private static async Task<IReadOnlyList<ArchiveProjectedObject>> CollectProjectedObjectsAsync
+    (
+        IAsyncEnumerable<ArchiveProjectedObject> projectedObjects
+    )
+    {
+        var result = new List<ArchiveProjectedObject>();
+        await foreach (var projectedObject in projectedObjects)
+        {
+            result.Add(projectedObject);
+        }
+
+        return result;
     }
 }

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
@@ -11,10 +12,10 @@ internal sealed class MirrorArchiveFormatProjector
 {
     public string FormatName => MirrorArchiveFormatName.Value;
 
-    public async Task<ArchiveProjection> ProjectAsync
+    public async IAsyncEnumerable<ArchiveProjectedObject> ProjectAsync
     (
         ArchiveProjectionRequest request,
-        CancellationToken cancellationToken = default
+        [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
         _logger.LogTrace(nameof(ProjectAsync));
@@ -24,39 +25,91 @@ internal sealed class MirrorArchiveFormatProjector
         await request.SourceStore.EnsureReadyAsync(cancellationToken);
 
         var sourcePrefix = ArchiveLayout.NormalizeObjectPrefix(request.SourcePrefix);
-        var projectedObjects = new List<ArchiveProjectedObject>();
-        var sourceObjects = request.SourceStore.ListAsync(
+        var projectedObjectCount = 0;
+        var projectedObjects = ProjectFolderAsync(
+            request.SourceStore,
+            sourcePrefix,
             sourcePrefix,
             cancellationToken);
 
-        await foreach (var sourceObject in sourceObjects)
+        await foreach (var projectedObject in projectedObjects)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var sourceKey = ArchiveLayout.NormalizeObjectKey(sourceObject.Key);
+            yield return projectedObject;
+            projectedObjectCount++;
+        }
+
+        _logger.LogMirrorProjectionCompleted(projectedObjectCount);
+    }
+
+    private async IAsyncEnumerable<ArchiveProjectedObject> ProjectFolderAsync
+    (
+        IReadOnlyObjectStore sourceStore,
+        string? sourcePrefix,
+        string? folderPrefix,
+        [EnumeratorCancellation] CancellationToken cancellationToken
+    )
+    {
+        var hasItems = false;
+        var sourceItems = sourceStore.GetFolderItemsAsync(
+            folderPrefix,
+            recursive: false,
+            cancellationToken);
+
+        await foreach (var sourceItem in sourceItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            hasItems = true;
+            if (sourceItem.IsFolder)
+            {
+                var childProjectedObjects = ProjectFolderAsync(
+                    sourceStore,
+                    sourcePrefix,
+                    sourceItem.Key,
+                    cancellationToken);
+
+                await foreach (var childProjectedObject in childProjectedObjects)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    yield return childProjectedObject;
+                }
+
+                continue;
+            }
+
+            if (sourceItem.Object is null)
+            {
+                continue;
+            }
+
+            var sourceKey = ArchiveLayout.NormalizeObjectKey(sourceItem.Object.Key);
             var relativePath = ArchiveLayout.RemovePrefix(sourceKey, sourcePrefix);
             if (string.IsNullOrEmpty(relativePath))
             {
                 continue;
             }
 
-            projectedObjects.Add(CreateProjectedObject(
-                request.SourceStore,
-                sourceObject,
+            yield return CreateProjectedObject(
+                sourceStore,
+                sourceItem.Object,
                 sourceKey,
-                relativePath));
+                relativePath);
 
             _logger.LogMirrorProjectedObject(sourceKey, relativePath);
         }
 
-        _logger.LogMirrorProjectionCompleted(projectedObjects.Count);
-
-        return new(projectedObjects);
+        if (!hasItems)
+        {
+            yield return CreateEmptyFolderMarker(sourcePrefix, folderPrefix);
+        }
     }
 
     private static ArchiveProjectedObject CreateProjectedObject
     (
-        IObjectStore sourceStore,
+        IReadOnlyObjectStore sourceStore,
         ArchiveObjectInfo sourceObject,
         string sourceKey,
         string relativePath
@@ -71,6 +124,33 @@ internal sealed class MirrorArchiveFormatProjector
             sourceObject.ContentLength,
             sourceObject.LastModifiedUtc,
             sourceObject.ContentHash
+        );
+    }
+
+    private static ArchiveProjectedObject CreateEmptyFolderMarker
+    (
+        string? sourcePrefix,
+        string? folderPrefix
+    )
+    {
+        var folderRelativePath = ArchiveLayout.RemovePrefix(
+            ArchiveLayout.NormalizeObjectKey(folderPrefix),
+            sourcePrefix);
+        var markerRelativePath = ArchiveLayout.CombinePrefixAndRelativePath(
+            folderRelativePath,
+            ArchiveFolderMarkerFileNames.EmptyFolder);
+
+        return new
+        (
+            markerRelativePath,
+            cancellationToken =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                return Task.FromResult(new ArchiveObjectContent(
+                    new MemoryStream([], writable: false)));
+            },
+            0
         );
     }
 }
