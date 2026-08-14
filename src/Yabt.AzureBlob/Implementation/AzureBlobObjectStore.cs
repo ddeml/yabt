@@ -272,6 +272,92 @@ internal sealed class AzureBlobObjectStore
         }
     }
 
+    public async Task MoveFolderAsync
+    (
+        string sourcePrefix,
+        string destinationPrefix,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(MoveFolderAsync));
+
+        var normalizedSourcePrefix = NormalizeObjectKey(sourcePrefix);
+        var normalizedDestinationPrefix = NormalizeObjectKey(destinationPrefix);
+        if (ArchiveLayout.IsUnderPrefix(normalizedDestinationPrefix, normalizedSourcePrefix))
+        {
+            throw new YabtAzureBlobException(
+                "Azure Blob folder destination must not be the source folder or one of its descendants.");
+        }
+
+        try
+        {
+            var container = GetContainerClient();
+            var objectStorePrefix = NormalizeObjectPrefix(_options.CurrentValue.Prefix);
+            var blobPrefix = ToBlobFolderPrefix(GetBlobName(normalizedSourcePrefix));
+            var moves = new List<(string Source, string Destination)>();
+            var blobs = container.GetBlobsAsync
+            (
+                BlobTraits.None,
+                BlobStates.None,
+                prefix: blobPrefix,
+                cancellationToken: cancellationToken
+            );
+
+            await foreach (var blob in blobs)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var sourceKey = ToObjectStoreKey(objectStorePrefix, blob.Name);
+                var relativePath = ArchiveLayout.RemovePrefix(
+                    sourceKey,
+                    normalizedSourcePrefix);
+                var destinationKey = ArchiveLayout.CombinePrefixAndRelativePath(
+                    normalizedDestinationPrefix,
+                    relativePath);
+                moves.Add((sourceKey, destinationKey));
+            }
+
+            if (moves.Count == 0)
+            {
+                throw new YabtAzureBlobException(
+                    $"Azure Blob source folder '{normalizedSourcePrefix}' does not exist.");
+            }
+
+            if (await ExistsAsync(normalizedDestinationPrefix, cancellationToken))
+            {
+                throw new YabtAzureBlobException(
+                    $"Azure Blob destination path '{normalizedDestinationPrefix}' already exists as an object.");
+            }
+
+            var destinationBlobPrefix = ToBlobFolderPrefix(GetBlobName(normalizedDestinationPrefix));
+            var destinationBlobs = container.GetBlobsAsync
+            (
+                BlobTraits.None,
+                BlobStates.None,
+                prefix: destinationBlobPrefix,
+                cancellationToken: cancellationToken
+            );
+            await using (var destinationEnumerator = destinationBlobs.GetAsyncEnumerator(cancellationToken))
+            {
+                if (await destinationEnumerator.MoveNextAsync())
+                {
+                    throw new YabtAzureBlobException(
+                        $"Azure Blob destination folder '{normalizedDestinationPrefix}' already exists.");
+                }
+            }
+
+            foreach (var move in moves)
+            {
+                await MoveAsync(move.Source, move.Destination, cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new YabtAzureBlobException(
+                $"Move failed for Azure Blob folder '{normalizedSourcePrefix}' to '{normalizedDestinationPrefix}'.",
+                ex);
+        }
+    }
+
     private async Task<bool> TryCopyAndDeleteAsync
     (
         BlobClient sourceBlob,

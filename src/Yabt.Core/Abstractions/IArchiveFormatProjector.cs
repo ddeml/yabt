@@ -6,6 +6,8 @@ public interface IArchiveFormatProjector
 {
     string FormatName { get; }
 
+    bool ProjectsBesideSourceFolder => false;
+
     IAsyncEnumerable<ArchiveProjectedObject> ProjectAsync
     (
         ArchiveProjectionRequest request,

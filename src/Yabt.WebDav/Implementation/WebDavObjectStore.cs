@@ -272,6 +272,46 @@ internal sealed class WebDavObjectStore
     {
         _logger.LogTrace(nameof(MoveAsync));
 
+        await MovePathAsync(
+            source,
+            destination,
+            isFolder: false,
+            cancellationToken);
+    }
+
+    public async Task MoveFolderAsync
+    (
+        string sourcePrefix,
+        string destinationPrefix,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(MoveFolderAsync));
+
+        var normalizedSourcePrefix = NormalizeObjectKey(sourcePrefix);
+        var normalizedDestinationPrefix = NormalizeObjectKey(destinationPrefix);
+        if (ArchiveLayout.IsUnderPrefix(normalizedDestinationPrefix, normalizedSourcePrefix))
+        {
+            throw new YabtWebDavException(
+                "WebDAV folder destination must not be the source folder or one of its descendants.");
+        }
+
+        await MovePathAsync(
+            normalizedSourcePrefix,
+            normalizedDestinationPrefix,
+            isFolder: true,
+            cancellationToken);
+    }
+
+    private async Task MovePathAsync
+    (
+        string source,
+        string destination,
+        bool isFolder,
+        CancellationToken cancellationToken
+    )
+    {
+
         var normalizedSource = NormalizeObjectKey(source);
         var normalizedDestination = NormalizeObjectKey(destination);
         try
@@ -279,8 +319,8 @@ internal sealed class WebDavObjectStore
             var pathContext = GetPathContext();
             var sourceSegments = NormalizePathSegments(normalizedSource);
             var destinationSegments = NormalizePathSegments(normalizedDestination);
-            var sourceUri = BuildUri(pathContext, sourceSegments, trailingSlash: false);
-            var destinationUri = BuildUri(pathContext, destinationSegments, trailingSlash: false);
+            var sourceUri = BuildUri(pathContext, sourceSegments, trailingSlash: isFolder);
+            var destinationUri = BuildUri(pathContext, destinationSegments, trailingSlash: isFolder);
 
             await EnsureParentCollectionExistsAsync(pathContext, destinationSegments, cancellationToken);
 
@@ -300,8 +340,9 @@ internal sealed class WebDavObjectStore
         }
         catch (Exception ex)
         {
+            var pathKind = isFolder ? "folder" : "object";
             throw new YabtWebDavException(
-                $"Move failed for WebDAV object '{normalizedSource}' to '{normalizedDestination}'.",
+                $"Move failed for WebDAV {pathKind} '{normalizedSource}' to '{normalizedDestination}'.",
                 ex);
         }
     }

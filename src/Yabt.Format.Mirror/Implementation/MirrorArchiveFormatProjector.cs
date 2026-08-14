@@ -12,6 +12,8 @@ internal sealed class MirrorArchiveFormatProjector
 {
     public string FormatName => MirrorArchiveFormatName.Value;
 
+    public bool ProjectsBesideSourceFolder => false;
+
     public async IAsyncEnumerable<ArchiveProjectedObject> ProjectAsync
     (
         ArchiveProjectionRequest request,

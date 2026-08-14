@@ -65,21 +65,22 @@ live/Documents/report.docx
 live/Photos/Vacation/img001.jpg
 ```
 
-For folders using the `zip` format, the package artifact and adjacent manifest are visible objects:
+The intended layout for folders using the `zip` format keeps the package artifact and adjacent manifest as visible objects:
 
 ```text
-Photos/Vacation/.yabt-policy.json
-Photos/Vacation/Vacation.20260524T120000Z.a91f3c2e.zip
-Photos/Vacation/Vacation.20260524T120000Z.a91f3c2e.manifest.json
+Photos/Vacation.20260524T120000Z.a91f3c2e.zip
+Photos/Vacation.20260524T120000Z.a91f3c2e.manifest.json
 ```
 
-The folder policy or equivalent descriptor remains outside the package so a browser or restore tool can identify the folder representation without opening the package first.
+Here the source folder is `Photos/Vacation`, but its package objects are placed directly in the target `Photos` folder. No target `Photos/Vacation` folder is created. The folder policy or equivalent artifact-scoped descriptor remains outside the package, in the same parent folder, so a browser or restore tool can identify the folder representation without opening the package first.
+
+The current initial ZIP projector emits the `.zip` artifact only. The adjacent manifest and external descriptor shown above remain planned work.
 
 ## Hist
 
 The logical history branch preserves obsolete, replaced, or deleted state. It is physically rooted at `histPrefix`.
 
-The initial design favors copying old logical live objects into the logical history branch before replacing or removing live objects. The exact historical sublayout may evolve, but it should remain browsable and should avoid content loss.
+The initial design moves old logical live state into the logical history branch before replacing or removing it. If a complete live folder becomes obsolete, for example during a `mirror` to `zip` transition, its complete folder or prefix representation moves to history together. This includes `.yabt-empty` markers and native empty descendants, so no empty live folder is left behind after a completed synchronization. The exact historical sublayout may evolve, but it should remain browsable and should avoid content loss.
 
 Future deduplication, if implemented, may exist only under the logical history branch and must use explicit reference placeholder JSON files. The logical live branch must not become a deduplicated block store.
 

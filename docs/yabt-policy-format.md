@@ -10,7 +10,7 @@ Policy files are named:
 
 In a source tree, the policy file lives inside the folder it describes, so it moves naturally when a folder is reorganized.
 
-When a folder is packaged in an archive target, a copy of the folder policy or equivalent folder descriptor should remain visible outside the package artifact, near the package and adjacent manifest.
+When a subfolder is packaged in an archive target, a copy of the folder policy or equivalent artifact-scoped folder descriptor should remain visible outside the package artifact, in the parent target folder beside the package and adjacent manifest. The packaged source folder does not become a target folder of its own.
 
 ## Format
 

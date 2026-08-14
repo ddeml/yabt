@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Yabt.Core.Abstractions;
+using Yabt.Core.Models;
 
 namespace Yabt.FileSystem.Tests;
 
@@ -79,6 +80,102 @@ public sealed class FileSystemObjectStoreTests
             (
                 () => enumerator.MoveNextAsync().AsTask()
             );
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task MoveFolderAsyncMovesCompleteDirectoryTree()
+    {
+        var rootPath = CreateTemporaryRoot();
+        try
+        {
+            await WriteFileAsync(rootPath, "source/file.txt");
+            await WriteFileAsync(
+                rootPath,
+                $"source/empty/{ArchiveFolderMarkerFileNames.EmptyFolder}");
+            Directory.CreateDirectory(Path.Combine(rootPath, "source", "native-empty"));
+            await WriteFileAsync(rootPath, "source-other/keep.txt");
+            using var serviceProvider = CreateServices(rootPath, listChunkSize: 10).BuildServiceProvider();
+            var store = serviceProvider.GetRequiredService<IObjectStore>();
+
+            await store.MoveFolderAsync(
+                "source",
+                "history/stamp/source");
+
+            Assert.IsFalse(Directory.Exists(Path.Combine(rootPath, "source")));
+            Assert.IsTrue(File.Exists(Path.Combine(rootPath, "history", "stamp", "source", "file.txt")));
+            Assert.IsTrue(File.Exists(Path.Combine(
+                rootPath,
+                "history",
+                "stamp",
+                "source",
+                "empty",
+                ArchiveFolderMarkerFileNames.EmptyFolder)));
+            Assert.IsTrue(Directory.Exists(Path.Combine(
+                rootPath,
+                "history",
+                "stamp",
+                "source",
+                "native-empty")));
+            Assert.IsTrue(File.Exists(Path.Combine(rootPath, "source-other", "keep.txt")));
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task MoveFolderAsyncDoesNotOverwriteDestination()
+    {
+        var rootPath = CreateTemporaryRoot();
+        try
+        {
+            await WriteFileAsync(rootPath, "source/file.txt");
+            await WriteFileAsync(rootPath, "history/stamp/source/existing.txt");
+            using var serviceProvider = CreateServices(rootPath, listChunkSize: 10).BuildServiceProvider();
+            var store = serviceProvider.GetRequiredService<IObjectStore>();
+
+            await Assert.ThrowsExactlyAsync<YabtFileSystemException>(
+                () => store.MoveFolderAsync(
+                    "source",
+                    "history/stamp/source"));
+
+            Assert.IsTrue(File.Exists(Path.Combine(rootPath, "source", "file.txt")));
+            Assert.IsTrue(File.Exists(Path.Combine(
+                rootPath,
+                "history",
+                "stamp",
+                "source",
+                "existing.txt")));
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task MoveFolderAsyncRejectsDestinationInsideSource()
+    {
+        var rootPath = CreateTemporaryRoot();
+        try
+        {
+            await WriteFileAsync(rootPath, "source/file.txt");
+            using var serviceProvider = CreateServices(rootPath, listChunkSize: 10).BuildServiceProvider();
+            var store = serviceProvider.GetRequiredService<IObjectStore>();
+
+            await Assert.ThrowsExactlyAsync<YabtFileSystemException>(
+                () => store.MoveFolderAsync(
+                    "source",
+                    "source/history"));
+
+            Assert.IsTrue(File.Exists(Path.Combine(rootPath, "source", "file.txt")));
+            Assert.IsFalse(Directory.Exists(Path.Combine(rootPath, "source", "history")));
         }
         finally
         {

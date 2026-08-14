@@ -16,7 +16,9 @@ internal sealed class ArchiveProjectionObjectStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, ArchiveProjectedObject> _projectedObjects = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<ArchiveProjectedObject>> _projectedScopes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ProjectedScopeDefinition> _projectedScopeDefinitions =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ProjectedScope> _projectedScopes = new(StringComparer.Ordinal);
     private readonly HashSet<string> _openingProjectedObjectKeys = new(StringComparer.Ordinal);
     private readonly List<string> _projectedSourcePrefixes = [];
     private readonly string? _sourceRootPrefix = ArchiveLayout.NormalizeObjectPrefix(sourceRootPrefix);
@@ -142,11 +144,35 @@ internal sealed class ArchiveProjectionObjectStore
                 !IsSourceRootPrefix(sourceItem.Key) &&
                 await HasPolicyAsync(sourceItem.Key, cancellationToken))
             {
-                TryAddProjectedSourcePrefix(sourceItem.Key);
+                var projectedSourcePrefix = ArchiveLayout.NormalizeObjectKey(sourceItem.Key);
+                TryAddProjectedSourcePrefix(projectedSourcePrefix);
+                var projectedScopeDefinition = await GetProjectedScopeDefinitionAsync(
+                    projectedSourcePrefix,
+                    cancellationToken);
+
+                if (projectedScopeDefinition.Projector.ProjectsBesideSourceFolder)
+                {
+                    var projectedScope = await GetProjectedScopeAsync(
+                        projectedSourcePrefix,
+                        projectedScopeDefinition,
+                        cancellationToken);
+                    var projectedItems = CreateProjectedFolderItems(
+                        projectedScope,
+                        normalizedPrefix,
+                        cancellationToken);
+                    foreach (var projectedItem in projectedItems)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        yield return projectedItem;
+                    }
+
+                    continue;
+                }
 
                 yield return sourceItem with
                 {
-                    Key = ArchiveLayout.NormalizeObjectKey(sourceItem.Key),
+                    Key = projectedSourcePrefix,
                 };
                 continue;
             }
@@ -214,18 +240,36 @@ internal sealed class ArchiveProjectionObjectStore
         CancellationToken cancellationToken
     )
     {
-        var projectedObjects = await GetProjectedObjectsAsync(
+        var projectedScope = await GetProjectedScopeAsync(
             projectedScopePrefix,
             cancellationToken);
+        return CreateProjectedFolderItems(
+            projectedScope,
+            folderPrefix,
+            cancellationToken);
+    }
+
+    private static ArchiveFolderItem[] CreateProjectedFolderItems
+    (
+        ProjectedScope projectedScope,
+        string? folderPrefix,
+        CancellationToken cancellationToken
+    )
+    {
         var folderItems = new Dictionary<string, ArchiveFolderItem>(StringComparer.Ordinal);
 
-        foreach (var projectedObject in projectedObjects)
+        foreach (var projectedObject in projectedScope.Objects)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var projectedKey = ArchiveLayout.CombinePrefixAndRelativePath(
-                projectedScopePrefix,
+                projectedScope.OutputPrefix,
                 projectedObject.RelativePath);
+            if (!ArchiveLayout.IsUnderPrefix(projectedKey, folderPrefix))
+            {
+                continue;
+            }
+
             var relativePath = ArchiveLayout.RemovePrefix(
                 projectedKey,
                 folderPrefix);
@@ -265,7 +309,7 @@ internal sealed class ArchiveProjectionObjectStore
         return folderItems.Values.ToArray();
     }
 
-    private async Task<List<ArchiveProjectedObject>> GetProjectedObjectsAsync
+    private async Task<ProjectedScope> GetProjectedScopeAsync
     (
         string projectedScopePrefix,
         CancellationToken cancellationToken
@@ -273,21 +317,44 @@ internal sealed class ArchiveProjectionObjectStore
     {
         lock (_gate)
         {
-            if (_projectedScopes.TryGetValue(projectedScopePrefix, out var cachedProjectedObjects))
+            if (_projectedScopes.TryGetValue(projectedScopePrefix, out var cachedProjectedScope))
             {
-                return cachedProjectedObjects;
+                return cachedProjectedScope;
             }
         }
 
-        var sourceDisplayName = CreateSourceDisplayName(projectedScopePrefix);
-        var policy = await _folderPolicyReader.ReadPolicyAsync(
-            sourceDisplayName,
+        var projectedScopeDefinition = await GetProjectedScopeDefinitionAsync(
+            projectedScopePrefix,
             cancellationToken);
-        var projector = ResolveProjector(policy);
+        return await GetProjectedScopeAsync(
+            projectedScopePrefix,
+            projectedScopeDefinition,
+            cancellationToken);
+    }
+
+    private async Task<ProjectedScope> GetProjectedScopeAsync
+    (
+        string projectedScopePrefix,
+        ProjectedScopeDefinition projectedScopeDefinition,
+        CancellationToken cancellationToken
+    )
+    {
+        lock (_gate)
+        {
+            if (_projectedScopes.TryGetValue(projectedScopePrefix, out var cachedProjectedScope))
+            {
+                return cachedProjectedScope;
+            }
+        }
+
+        var projector = projectedScopeDefinition.Projector;
+        var outputPrefix = projector.ProjectsBesideSourceFolder ?
+            GetParentPrefix(projectedScopePrefix) :
+            ArchiveLayout.NormalizeObjectKey(projectedScopePrefix);
         var projectedSourceStore = new ArchiveProjectionObjectStore
         (
             _inner,
-            _sourceRoot,
+            projectedScopeDefinition.SourceDisplayName,
             projectedScopePrefix,
             _folderPolicyReader,
             _projectors
@@ -296,8 +363,8 @@ internal sealed class ArchiveProjectionObjectStore
         (
             projectedSourceStore,
             projectedScopePrefix,
-            policy,
-            sourceDisplayName
+            projectedScopeDefinition.Policy,
+            projectedScopeDefinition.SourceDisplayName
         );
         var projectedObjects = new List<ArchiveProjectedObject>();
         var streamedProjectedObjects = projector.ProjectAsync(
@@ -308,18 +375,70 @@ internal sealed class ArchiveProjectionObjectStore
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            projectedObjects.Add(projectedObject);
-            RegisterProjectedObject(
+            await RegisterProjectedObjectAsync(
                 projectedScopePrefix,
-                projectedObject);
+                outputPrefix,
+                projector.ProjectsBesideSourceFolder,
+                projectedObject,
+                cancellationToken);
+            projectedObjects.Add(projectedObject);
         }
 
+        var projectedScope = new ProjectedScope
+        (
+            outputPrefix,
+            projectedObjects
+        );
         lock (_gate)
         {
-            _projectedScopes[projectedScopePrefix] = projectedObjects;
+            _projectedScopes[projectedScopePrefix] = projectedScope;
         }
 
-        return projectedObjects;
+        return projectedScope;
+    }
+
+    private async Task<ProjectedScopeDefinition> GetProjectedScopeDefinitionAsync
+    (
+        string projectedScopePrefix,
+        CancellationToken cancellationToken
+    )
+    {
+        lock (_gate)
+        {
+            if (_projectedScopeDefinitions.TryGetValue(
+                    projectedScopePrefix,
+                    out var cachedProjectedScopeDefinition))
+            {
+                return cachedProjectedScopeDefinition;
+            }
+        }
+
+        var sourceDisplayName = CreateSourceDisplayName(projectedScopePrefix);
+        var policy = await _folderPolicyReader.ReadPolicyAsync(
+            sourceDisplayName,
+            cancellationToken);
+        var projector = ResolveProjector(policy);
+        var projectedScopeDefinition = new ProjectedScopeDefinition
+        (
+            sourceDisplayName,
+            policy,
+            projector
+        );
+        lock (_gate)
+        {
+            if (_projectedScopeDefinitions.TryGetValue(
+                    projectedScopePrefix,
+                    out var cachedProjectedScopeDefinition))
+            {
+                return cachedProjectedScopeDefinition;
+            }
+
+            _projectedScopeDefinitions.Add(
+                projectedScopePrefix,
+                projectedScopeDefinition);
+        }
+
+        return projectedScopeDefinition;
     }
 
     private IArchiveFormatProjector ResolveProjector(FolderPolicy policy)
@@ -332,21 +451,72 @@ internal sealed class ArchiveProjectionObjectStore
         throw new YabtSyncException($"No archive format projector is registered for format '{policy.Format}'.");
     }
 
-    private void RegisterProjectedObject
+    private async Task RegisterProjectedObjectAsync
     (
-        string projectedScopePrefix,
-        ArchiveProjectedObject projectedObject
+        string projectedSourcePrefix,
+        string projectedOutputPrefix,
+        bool projectsBesideSourceFolder,
+        ArchiveProjectedObject projectedObject,
+        CancellationToken cancellationToken
     )
     {
         var projectedKey = ArchiveLayout.CombinePrefixAndRelativePath(
-            projectedScopePrefix,
+            projectedOutputPrefix,
             projectedObject.RelativePath);
         var normalizedProjectedKey = ArchiveLayout.NormalizeObjectKey(projectedKey);
+        if (projectsBesideSourceFolder &&
+            await HasConflictingSourceItemAsync(
+                normalizedProjectedKey,
+                cancellationToken))
+        {
+            throw new YabtSyncException(
+                $"Projected object '{normalizedProjectedKey}' for source folder " +
+                $"'{projectedSourcePrefix}' conflicts with a source item in the parent folder.");
+        }
 
         lock (_gate)
         {
-            _projectedObjects[normalizedProjectedKey] = projectedObject;
+            if (!_projectedObjects.TryAdd(
+                    normalizedProjectedKey,
+                    projectedObject))
+            {
+                throw new YabtSyncException(
+                    $"Source folder '{projectedSourcePrefix}' projects to duplicate object " +
+                    $"key '{normalizedProjectedKey}'.");
+            }
         }
+    }
+
+    private async Task<bool> HasConflictingSourceItemAsync
+    (
+        string projectedKey,
+        CancellationToken cancellationToken
+    )
+    {
+        if (await _inner.ExistsAsync(projectedKey, cancellationToken))
+        {
+            return true;
+        }
+
+        var parentPrefix = GetParentPrefix(projectedKey);
+        var sourceItems = _inner.GetFolderItemsAsync(
+            parentPrefix,
+            recursive: false,
+            cancellationToken);
+        await foreach (var sourceItem in sourceItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.Equals(
+                    ArchiveLayout.NormalizeObjectKey(sourceItem.Key),
+                    projectedKey,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool TryAddProjectedSourcePrefix(string sourcePrefix)
@@ -409,6 +579,14 @@ internal sealed class ArchiveProjectionObjectStore
         return false;
     }
 
+    private static string GetParentPrefix(string objectKey)
+    {
+        var normalizedObjectKey = ArchiveLayout.NormalizeObjectKey(objectKey);
+        var separator = normalizedObjectKey.LastIndexOf('/');
+
+        return separator < 0 ? string.Empty : normalizedObjectKey[..separator];
+    }
+
     private bool IsSourceRootPrefix(string objectKey)
     {
         var normalizedKey = ArchiveLayout.NormalizeObjectKey(objectKey);
@@ -430,7 +608,7 @@ internal sealed class ArchiveProjectionObjectStore
             ArchiveLayout.CombinePrefixAndRelativePath(
                 sourcePrefix,
                 FolderPolicyFileNames.Primary),
-            cancellationToken);
+            cancellationToken);//TODO: bei sub muss hier true geliefert werden, wird aber nicht
     }
 
     private string CreateSourceDisplayName(string sourcePrefix)
@@ -450,4 +628,17 @@ internal sealed class ArchiveProjectionObjectStore
             _sourceRoot,
             nativeRelativePath);
     }
+
+    private sealed record ProjectedScope
+    (
+        string OutputPrefix,
+        IReadOnlyList<ArchiveProjectedObject> Objects
+    );
+
+    private sealed record ProjectedScopeDefinition
+    (
+        string SourceDisplayName,
+        FolderPolicy Policy,
+        IArchiveFormatProjector Projector
+    );
 }

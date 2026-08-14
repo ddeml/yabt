@@ -148,7 +148,7 @@ public sealed class MemoryObjectStore
 
         lock (_gate)
         {
-            var folderItems = new Dictionary<string, ArchiveFolderItem>(StringComparer.Ordinal);
+            var folderItems = new Dictionary<(string Key, bool IsFolder), ArchiveFolderItem>();
             foreach (var candidate in _objects.OrderBy(candidate => candidate.Key, StringComparer.Ordinal))
             {
                 if (!TryCreateFolderItem(
@@ -161,7 +161,7 @@ public sealed class MemoryObjectStore
                     continue;
                 }
 
-                folderItems.TryAdd(item.Name, item);
+                folderItems.TryAdd((item.Key, item.IsFolder), item);
             }
 
             items = folderItems.Values.ToArray();
@@ -208,6 +208,74 @@ public sealed class MemoryObjectStore
             }
 
             _objects.Add(normalizedDestination, storedObject);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task MoveFolderAsync
+    (
+        string sourcePrefix,
+        string destinationPrefix,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(MoveFolderAsync));
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var normalizedSourcePrefix = NormalizeObjectKey(sourcePrefix);
+        var normalizedDestinationPrefix = NormalizeObjectKey(destinationPrefix);
+        if (ArchiveLayout.IsUnderPrefix(normalizedDestinationPrefix, normalizedSourcePrefix))
+        {
+            throw new YabtTestsException(
+                "In-memory folder destination must not be the source folder or one of its descendants.",
+                normalizedDestinationPrefix);
+        }
+
+        var sourceObjectPrefix = $"{normalizedSourcePrefix}/";
+
+        lock (_gate)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var moves = _objects
+                .Where(candidate => candidate.Key.StartsWith(sourceObjectPrefix, StringComparison.Ordinal))
+                .Select(candidate => new
+                {
+                    Source = candidate.Key,
+                    Destination = ArchiveLayout.CombinePrefixAndRelativePath
+                    (
+                        normalizedDestinationPrefix,
+                        candidate.Key[sourceObjectPrefix.Length..]
+                    ),
+                    candidate.Value,
+                })
+                .ToList();
+
+            if (moves.Count == 0)
+            {
+                throw new YabtTestsException(
+                    $"In-memory source folder '{normalizedSourcePrefix}' does not exist.",
+                    normalizedSourcePrefix);
+            }
+
+            var destinationObjectPrefix = $"{normalizedDestinationPrefix}/";
+            var destinationCollision = _objects.Keys.FirstOrDefault(
+                key => string.Equals(key, normalizedDestinationPrefix, StringComparison.Ordinal) ||
+                    key.StartsWith(destinationObjectPrefix, StringComparison.Ordinal));
+            if (destinationCollision is not null)
+            {
+                throw new YabtTestsException(
+                    $"In-memory destination path '{destinationCollision}' already exists.",
+                    destinationCollision);
+            }
+
+            foreach (var move in moves)
+            {
+                _objects.Remove(move.Source);
+                _objects.Add(move.Destination, move.Value);
+            }
         }
 
         return Task.CompletedTask;

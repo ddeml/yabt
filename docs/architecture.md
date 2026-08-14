@@ -24,7 +24,7 @@ Do not introduce a metadata cache initially. If a cache is added later, it must 
 
 YABT treats backup, restore, and reconciliation locations as object stores. A plain filesystem, Azure Blob Storage, and WebDAV are all peers behind the same object-store abstraction.
 
-The object-store abstraction provides raw access to the underlying store. It should expose ordinary object operations such as reading, writing, copying, moving, and folder-local traversal where the provider supports them. It must not know what `live` or `hist` mean, and it must not decide archive historization behavior.
+The object-store abstraction provides raw access to the underlying store. It exposes ordinary operations such as reading, writing, copying, moving objects, moving complete folders or prefixes, and folder-local traversal. Filesystem and WebDAV map a complete folder move to their native folder or collection operation; Azure Blob maps it to all objects under the exact prefix. A complete folder move includes hidden marker objects and native empty descendants and must not merge with an existing destination. The abstraction must not know what `live` or `hist` mean, and it must not decide archive historization behavior.
 
 Traversal is hierarchical: callers ask for the files and immediate child folders under a folder prefix. Filesystem and WebDAV providers can expose native folders directly. Providers without real folders, such as Azure Blob Storage, emulate folders from object-name prefixes.
 
@@ -63,7 +63,7 @@ This makes an ordinary source folder usable as the logical live branch without f
 }
 ```
 
-The synchronizer owns historization. Before replacing or removing logical live objects, it should preserve the old representation under the configured history prefix. The exact historical sublayout may evolve, but it should remain inspectable.
+The synchronizer owns historization. Before replacing or removing logical live objects, it should preserve the old representation under the configured history prefix. When a complete live folder becomes obsolete, the synchronizer moves that folder representation to history as a unit instead of moving its visible objects and then deleting the leftover container. This preserves `.yabt-empty`, native empty descendants, and unexpected contents if a run was interrupted. The exact historical sublayout may evolve, but it should remain inspectable.
 
 ## Archive Format Projectors
 
@@ -78,9 +78,11 @@ Initial archive format projectors:
 
 An archive format projector acts on a source folder and policy to produce an intended archive representation. It should not match source and target objects by itself, and it should not decide historization. The projection contract is `IArchiveFormatProjector`.
 
+When a subfolder uses a packaging format such as `zip`, its projected package artifacts replace the source folder entry and are composed into the logical parent folder. A `mirror` projection continues to preserve the source folder hierarchy. Packaging the selected source root places its artifacts at the target live root.
+
 Projectors stream projected objects from `ProjectAsync`. Formats that can emit objects incrementally, such as `mirror`, should do so. Formats that need complete folder knowledge, such as `zip`, may collect their source folder first and then yield the finished package object.
 
-The `mirror` projector maps source files one-to-one. The `zip` projector maps a source folder to a package artifact and manifest. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
+The `mirror` projector maps source files one-to-one. The current initial `zip` projector maps a source folder to a package artifact; the adjacent manifest and external descriptor remain planned parts of the durable format. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
 
 ## Project Boundaries
 

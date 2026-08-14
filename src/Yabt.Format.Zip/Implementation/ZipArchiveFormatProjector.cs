@@ -25,6 +25,8 @@ internal sealed class ZipArchiveFormatProjector
 
     public string FormatName => ZipArchiveFormatName.Value;
 
+    public bool ProjectsBesideSourceFolder => true;
+
     public async IAsyncEnumerable<ArchiveProjectedObject> ProjectAsync
     (
         ArchiveProjectionRequest request,

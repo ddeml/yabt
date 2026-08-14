@@ -307,6 +307,61 @@ internal sealed class FileSystemObjectStore
         );
     }
 
+    public async Task MoveFolderAsync
+    (
+        string sourcePrefix,
+        string destinationPrefix,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(MoveFolderAsync));
+
+        var normalizedSourcePrefix = NormalizeObjectKey(sourcePrefix);
+        var normalizedDestinationPrefix = NormalizeObjectKey(destinationPrefix);
+        if (ArchiveLayout.IsUnderPrefix(normalizedDestinationPrefix, normalizedSourcePrefix))
+        {
+            throw new YabtFileSystemException(
+                "Filesystem folder destination must not be the source folder or one of its descendants.",
+                normalizedDestinationPrefix);
+        }
+
+        var rootPath = GetRootPath();
+        var sourcePath = GetObjectPath(rootPath, normalizedSourcePrefix);
+        var destinationPath = GetObjectPath(rootPath, normalizedDestinationPrefix);
+        var destinationParent = Path.GetDirectoryName(destinationPath)
+            ?? throw new YabtFileSystemException(
+                "Filesystem folder path did not include a parent directory.",
+                normalizedDestinationPrefix,
+                destinationPath);
+
+        try
+        {
+            await YabtTask.Run
+            (
+                () =>
+                {
+                    Directory.CreateDirectory(destinationParent);
+                    Directory.Move(sourcePath, destinationPath);
+                },
+                ex => _logger.LogAbandonedFileSystemOperationFailed
+                (
+                    ex,
+                    nameof(Directory.Move),
+                    sourcePath
+                ),
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            throw new YabtFileSystemException(
+                $"Move failed for filesystem folder '{normalizedSourcePrefix}' to '{normalizedDestinationPrefix}'.",
+                normalizedSourcePrefix,
+                sourcePath,
+                ex);
+        }
+    }
+
     private string GetRootPath()
     {
         var rootPath = _options.CurrentValue.RootPath;

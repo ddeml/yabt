@@ -37,9 +37,12 @@ internal sealed class ArchiveFilteredObjectStore
         CancellationToken cancellationToken = default
     )
     {
-        return _inner.ExistsAsync(
-            NormalizeAllowedObjectKey(key),
-            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var normalizedKey = ArchiveLayout.NormalizeObjectKey(key);
+        return IsExcluded(normalizedKey) ?
+            Task.FromResult(false) :
+            _inner.ExistsAsync(normalizedKey, cancellationToken);
     }
 
     public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync

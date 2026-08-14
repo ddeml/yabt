@@ -46,6 +46,8 @@ The default `livePrefix` is empty, so an ordinary source folder can be the logic
 
 The default `histPrefix` is `.yabt-hist`. Deleted or replaced content should generally move to the configured history prefix instead of being deleted.
 
+When an entire logical live folder becomes obsolete, such as when its format changes from `mirror` to `zip`, move its complete folder or prefix representation to history as one operation at the synchronization layer. Preserve hidden `.yabt-empty` markers and native empty descendants; do not recursively delete the folder after moving only its visible objects. Providers without native folders should apply the equivalent operation to every object under the exact prefix.
+
 Archive-style roots may still configure explicit prefixes such as `livePrefix = "live"` and `histPrefix = "hist"` when that layout is preferable.
 
 When `livePrefix` is empty, YABT metadata paths and the configured history prefix are internal to the archive root and are not ordinary live data.
@@ -129,7 +131,9 @@ Vacation.20260524T120000Z.a91f3c2e.zip
 
 Older package versions should remain preserved.
 
-When a folder is packaged, the archive-side folder metadata should remain visible outside the package, near the package artifact and adjacent manifest. The source-side policy may live inside the source folder so it moves naturally with that folder.
+When a subfolder is packaged, place its package artifact and adjacent metadata directly in the logical parent folder. Do not create a target folder corresponding to the packaged source folder. Packaging the selected root still places its artifacts at the target live root.
+
+The archive-side folder metadata should remain visible outside the package, in the same parent target folder as the package artifact and adjacent manifest. The source-side policy may live inside the source folder so it moves naturally with that folder.
 
 ## Manifests
 

@@ -19,4 +19,11 @@ public interface IObjectStore : IReadOnlyObjectStore
         string destination,
         CancellationToken cancellationToken = default
     );
+
+    Task MoveFolderAsync
+    (
+        string sourcePrefix,
+        string destinationPrefix,
+        CancellationToken cancellationToken = default
+    );
 }

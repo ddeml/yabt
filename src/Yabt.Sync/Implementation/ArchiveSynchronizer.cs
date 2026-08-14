@@ -307,6 +307,7 @@ internal sealed class ArchiveSynchronizer
         await context.TargetStore.EnsureReadyAsync(cancellationToken);
 
         var targetFolders = new Dictionary<string, TargetFolderState>(StringComparer.Ordinal);
+        var desiredFolderPaths = new HashSet<string>(StringComparer.Ordinal);
         await LoadTargetFolderStateAsync(
             context.TargetStore,
             context.TargetDescriptor.Layout,
@@ -328,6 +329,7 @@ internal sealed class ArchiveSynchronizer
             cancellationToken.ThrowIfCancellationRequested();
 
             var relativePath = ArchiveLayout.NormalizeObjectKey(projectedObject.RelativePath);
+            AddDesiredFolderPaths(relativePath, desiredFolderPaths);
             var targetFolder = await LoadTargetFolderStateAsync(
                 context.TargetStore,
                 context.TargetDescriptor.Layout,
@@ -388,6 +390,13 @@ internal sealed class ArchiveSynchronizer
                     cancellationToken);
             }
         }
+
+        await ReconcileDesiredTargetStateAsync(
+            context.TargetStore,
+            context.TargetDescriptor.Layout,
+            targetFolders,
+            desiredFolderPaths,
+            cancellationToken);
 
         await MoveRemainingTargetObjectsToHistoryAsync(
             context.TargetStore,
@@ -506,6 +515,17 @@ internal sealed class ArchiveSynchronizer
             }
         }
 
+        var emptyFolderMarkerPath = ArchiveLayout.CombinePrefixAndRelativePath(
+            normalizedRelativeFolderPrefix,
+            ArchiveFolderMarkerFileNames.EmptyFolder);
+        var emptyFolderMarkerKey = targetLayout.ToLiveObjectKey(emptyFolderMarkerPath);
+        if (await targetStore.ExistsAsync(emptyFolderMarkerKey, cancellationToken))
+        {
+            targetFolder.Objects.TryAdd(
+                emptyFolderMarkerPath,
+                new(emptyFolderMarkerKey));
+        }
+
         targetFolders[normalizedRelativeFolderPrefix] = targetFolder;
         return targetFolder;
     }
@@ -523,6 +543,38 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
+    private static async Task ReconcileDesiredTargetStateAsync
+    (
+        IObjectStore targetStore,
+        ArchiveLayout targetLayout,
+        Dictionary<string, TargetFolderState> targetFolders,
+        IReadOnlySet<string> desiredFolderPaths,
+        CancellationToken cancellationToken
+    )
+    {
+        var orderedDesiredFolderPaths = desiredFolderPaths
+            .OrderBy(GetPathDepth)
+            .ThenBy(path => path, StringComparer.Ordinal);
+        foreach (var desiredFolderPath in orderedDesiredFolderPaths)
+        {
+            await LoadTargetFolderStateAsync(
+                targetStore,
+                targetLayout,
+                targetFolders,
+                desiredFolderPath,
+                cancellationToken);
+        }
+
+        foreach (var desiredFolderPath in desiredFolderPaths)
+        {
+            var parentPrefix = GetParentPrefix(desiredFolderPath);
+            if (targetFolders.TryGetValue(parentPrefix, out var parentFolder))
+            {
+                parentFolder.Folders.Remove(desiredFolderPath);
+            }
+        }
+    }
+
     private static async Task MoveRemainingTargetObjectsToHistoryAsync
     (
         IObjectStore targetStore,
@@ -534,11 +586,23 @@ internal sealed class ArchiveSynchronizer
         CancellationToken cancellationToken
     )
     {
+        var extraFolderPaths = targetFolders.Values
+            .SelectMany(targetFolder => targetFolder.Folders.Keys)
+            .Distinct(StringComparer.Ordinal);
+        var topLevelExtraFolderPaths = SelectTopLevelFolderPaths(extraFolderPaths);
+
         foreach (var targetFolder in targetFolders.Values)
         {
             foreach (var relativePath in targetFolder.Objects.Keys)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                if (topLevelExtraFolderPaths.Any(
+                        folderPath => !string.Equals(relativePath, folderPath, StringComparison.Ordinal) &&
+                            ArchiveLayout.IsUnderPrefix(relativePath, folderPath)))
+                {
+                    continue;
+                }
 
                 summary.AddExtra();
                 if (writeChanges)
@@ -551,18 +615,18 @@ internal sealed class ArchiveSynchronizer
                         cancellationToken);
                 }
             }
+        }
 
-            foreach (var relativeFolderPath in targetFolder.Folders.Keys)
-            {
-                await MoveTargetFolderToHistoryAsync(
-                    targetStore,
-                    historyKeyAllocator,
-                    targetLayout,
-                    relativeFolderPath,
-                    summary,
-                    writeChanges,
-                    cancellationToken);
-            }
+        foreach (var relativeFolderPath in topLevelExtraFolderPaths)
+        {
+            await MoveTargetFolderToHistoryAsync(
+                targetStore,
+                historyKeyAllocator,
+                targetLayout,
+                relativeFolderPath,
+                summary,
+                writeChanges,
+                cancellationToken);
         }
     }
 
@@ -583,6 +647,7 @@ internal sealed class ArchiveSynchronizer
             recursive: true,
             cancellationToken);
         var livePrefix = ArchiveLayout.NormalizeObjectPrefix(targetLayout.LivePrefix);
+        var visibleObjectCount = 0;
 
         await foreach (var targetItem in targetItems)
         {
@@ -606,16 +671,36 @@ internal sealed class ArchiveSynchronizer
                 continue;
             }
 
+            visibleObjectCount++;
             summary.AddExtra();
-            if (writeChanges)
-            {
-                await MoveTargetObjectToHistoryAsync(
-                    targetStore,
-                    historyKeyAllocator,
-                    targetLayout,
-                    relativePath,
-                    cancellationToken);
-            }
+        }
+
+        if (visibleObjectCount == 0)
+        {
+            summary.AddExtra();
+        }
+
+        if (!writeChanges)
+        {
+            return;
+        }
+
+        var destinationFolderPrefix = await historyKeyAllocator.CreateHistoricalKeyAsync(
+            relativeFolderPath,
+            cancellationToken);
+
+        try
+        {
+            await targetStore.MoveFolderAsync(
+                targetFolderPrefix,
+                destinationFolderPrefix,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtSyncException(
+                $"Sync history move failed for target folder '{targetFolderPrefix}' to '{destinationFolderPrefix}'.",
+                ex);
         }
     }
 
@@ -839,6 +924,46 @@ internal sealed class ArchiveSynchronizer
 
         return false;
     }
+
+    private static void AddDesiredFolderPaths
+    (
+        string relativeObjectPath,
+        HashSet<string> desiredFolderPaths
+    )
+    {
+        var folderPath = GetParentPrefix(relativeObjectPath);
+        while (!string.IsNullOrEmpty(folderPath))
+        {
+            desiredFolderPaths.Add(folderPath);
+            folderPath = GetParentPrefix(folderPath);
+        }
+    }
+
+    private static List<string> SelectTopLevelFolderPaths(IEnumerable<string> folderPaths)
+    {
+        var selectedFolderPaths = new List<string>();
+        var orderedFolderPaths = folderPaths
+            .Select(ArchiveLayout.NormalizeObjectKey)
+            .Where(folderPath => !string.IsNullOrEmpty(folderPath))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(GetPathDepth)
+            .ThenBy(folderPath => folderPath, StringComparer.Ordinal);
+
+        foreach (var folderPath in orderedFolderPaths)
+        {
+            if (selectedFolderPaths.Any(
+                    selectedFolderPath => ArchiveLayout.IsUnderPrefix(folderPath, selectedFolderPath)))
+            {
+                continue;
+            }
+
+            selectedFolderPaths.Add(folderPath);
+        }
+
+        return selectedFolderPaths;
+    }
+
+    private static int GetPathDepth(string path) => path.Count(character => character == '/');
 
     private static string GetParentPrefix(string relativePath)
     {

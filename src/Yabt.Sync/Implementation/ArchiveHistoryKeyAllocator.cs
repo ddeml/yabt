@@ -61,9 +61,14 @@ internal sealed class ArchiveHistoryKeyAllocator
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!historyRoot.IsFolder ||
-                !TryParseHistoricalTimestampSegment(historyRoot.Name, out var sequence))
+            if (!TryParseHistoricalTimestampSegment(historyRoot.Name, out var sequence))
             {
+                continue;
+            }
+
+            if (!historyRoot.IsFolder)
+            {
+                highestSequence = Math.Max(highestSequence, sequence);
                 continue;
             }
 
@@ -80,8 +85,7 @@ internal sealed class ArchiveHistoryKeyAllocator
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (historyFolderItem.Object is not null &&
-                    string.Equals(historyFolderItem.Name, objectName, StringComparison.Ordinal) &&
+                if (string.Equals(historyFolderItem.Name, objectName, StringComparison.Ordinal) &&
                     sequence > highestSequence)
                 {
                     highestSequence = sequence;

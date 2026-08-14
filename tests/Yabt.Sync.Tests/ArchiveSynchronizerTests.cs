@@ -55,14 +55,14 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
-    public async Task SyncAsyncUsesNestedFolderPolicy()
+    public async Task SyncAsyncPlacesNestedZipPackageInParentTargetFolder()
     {
         var workspace = CreateWorkspacePath();
         try
         {
             var sourceRoot = Path.Combine(workspace, "source");
             var targetRoot = Path.Combine(workspace, "target");
-            var photosRoot = Path.Combine(sourceRoot, "photos");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
             await InitializeSourceRootAsync(sourceRoot, targetRoot);
             await WriteTextFileAsync(
                 Path.Combine(sourceRoot, "readme.txt"),
@@ -82,10 +82,10 @@ public sealed class ArchiveSynchronizerTests
             Assert.IsTrue(result.Completed);
             Assert.AreEqual(2, result.NewCount);
             AssertTextFile(Path.Combine(targetRoot, "readme.txt"), "root content");
-            Assert.IsFalse(File.Exists(Path.Combine(targetRoot, "photos", "image.txt")));
+            Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, "albums", "photos")));
 
             var zipFiles = Directory.GetFiles(
-                Path.Combine(targetRoot, "photos"),
+                Path.Combine(targetRoot, "albums"),
                 "photos.*.zip");
             Assert.AreEqual(1, zipFiles.Length);
 
@@ -101,6 +101,441 @@ public sealed class ArchiveSynchronizerTests
         {
             DeleteWorkspace(workspace);
         }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncPreservesNestedMirrorFolder()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WritePolicyAsync(
+                photosRoot,
+                MirrorArchiveFormatName.Value);
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "image content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            var result = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(result.Completed);
+            AssertTextFile(
+                Path.Combine(targetRoot, "albums", "photos", "image.txt"),
+                "image content");
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncUsesZipPolicyNestedWithinMirrorPolicy()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var albumsRoot = Path.Combine(sourceRoot, "albums");
+            var photosRoot = Path.Combine(albumsRoot, "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WritePolicyAsync(
+                albumsRoot,
+                MirrorArchiveFormatName.Value);
+            await WritePolicyAsync(
+                photosRoot,
+                ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "image content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            var result = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(result.Completed);
+            Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, "albums", "photos")));
+            var zipFiles = Directory.GetFiles(
+                Path.Combine(targetRoot, "albums"),
+                "photos.*.zip");
+            Assert.AreEqual(1, zipFiles.Length);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncMovesMirroredFolderToHistoryWhenPolicyChangesToZip()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "image content");
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var mirrorResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(mirrorResult.Completed);
+            AssertTextFile(
+                Path.Combine(targetRoot, "albums", "photos", "image.txt"),
+                "image content");
+            await WriteTextFileAsync(
+                Path.Combine(targetRoot, "albums", "photos", "orphan.txt"),
+                "unexpected target content");
+            Directory.CreateDirectory(Path.Combine(
+                targetRoot,
+                "albums",
+                "photos",
+                "native-empty"));
+
+            await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
+
+            var zipResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(zipResult.Completed);
+            Assert.AreEqual(1, zipResult.NewCount);
+            Assert.AreEqual(2, zipResult.ExtraCount);
+            Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, "albums", "photos")));
+            Assert.AreEqual(
+                1,
+                Directory.GetFiles(Path.Combine(targetRoot, "albums"), "photos.*.zip").Length);
+            var historicalImages = Directory.GetFiles(
+                Path.Combine(targetRoot, ".yabt-hist"),
+                "image.txt",
+                SearchOption.AllDirectories);
+            Assert.AreEqual(1, historicalImages.Length);
+            AssertTextFile(historicalImages[0], "image content");
+            var historicalPhotosRoot = Path.GetDirectoryName(historicalImages[0]);
+            Assert.IsNotNull(historicalPhotosRoot);
+            AssertTextFile(
+                Path.Combine(historicalPhotosRoot, "orphan.txt"),
+                "unexpected target content");
+            Assert.IsTrue(Directory.Exists(Path.Combine(
+                historicalPhotosRoot,
+                "native-empty")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncPreservesEmptyFolderMarkerWhenMirrorChangesToZip()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            Directory.CreateDirectory(photosRoot);
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var mirrorResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(mirrorResult.Completed);
+            Assert.IsTrue(File.Exists(Path.Combine(
+                targetRoot,
+                "albums",
+                "photos",
+                ArchiveFolderMarkerFileNames.EmptyFolder)));
+
+            await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
+
+            var zipResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(zipResult.Completed);
+            Assert.AreEqual(1, zipResult.NewCount);
+            Assert.AreEqual(1, zipResult.ExtraCount);
+            Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, "albums", "photos")));
+            var historicalMarkers = Directory.GetFiles(
+                Path.Combine(targetRoot, ".yabt-hist"),
+                ArchiveFolderMarkerFileNames.EmptyFolder,
+                SearchOption.AllDirectories);
+            Assert.AreEqual(1, historicalMarkers.Length);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncRemovesEmptyFolderMarkerWhenMirrorFolderBecomesNonempty()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            Directory.CreateDirectory(photosRoot);
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var emptyResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(emptyResult.Completed);
+
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "image content");
+
+            var nonemptyResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(nonemptyResult.Completed);
+            Assert.AreEqual(1, nonemptyResult.NewCount);
+            Assert.AreEqual(1, nonemptyResult.ExtraCount);
+            AssertTextFile(
+                Path.Combine(targetRoot, "albums", "photos", "image.txt"),
+                "image content");
+            Assert.IsFalse(File.Exists(Path.Combine(
+                targetRoot,
+                "albums",
+                "photos",
+                ArchiveFolderMarkerFileNames.EmptyFolder)));
+            Assert.AreEqual(
+                1,
+                Directory.GetFiles(
+                    Path.Combine(targetRoot, ".yabt-hist"),
+                    ArchiveFolderMarkerFileNames.EmptyFolder,
+                    SearchOption.AllDirectories).Length);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncMovesSelectedRootMarkerToHistoryWhenRootChangesToZip()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var mirrorResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(mirrorResult.Completed);
+            Assert.IsTrue(File.Exists(Path.Combine(
+                targetRoot,
+                ArchiveFolderMarkerFileNames.EmptyFolder)));
+
+            await WritePolicyAsync(sourceRoot, ZipArchiveFormatName.Value);
+
+            var zipResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(zipResult.Completed);
+            Assert.AreEqual(1, zipResult.NewCount);
+            Assert.AreEqual(1, zipResult.ExtraCount);
+            Assert.IsFalse(File.Exists(Path.Combine(
+                targetRoot,
+                ArchiveFolderMarkerFileNames.EmptyFolder)));
+            Assert.AreEqual(1, Directory.GetFiles(targetRoot, "source.*.zip").Length);
+            Assert.AreEqual(
+                1,
+                Directory.GetFiles(
+                    Path.Combine(targetRoot, ".yabt-hist"),
+                    ArchiveFolderMarkerFileNames.EmptyFolder,
+                    SearchOption.AllDirectories).Length);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task VerifyAsyncReportsStaleEmptyFolder()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "image content");
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var syncResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(syncResult.Completed);
+            Directory.CreateDirectory(Path.Combine(targetRoot, "albums", "photos"));
+
+            var verifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsFalse(verifyResult.Completed);
+            Assert.AreEqual(0, verifyResult.NewCount);
+            Assert.AreEqual(0, verifyResult.ChangedCount);
+            Assert.AreEqual(1, verifyResult.ExtraCount);
+            Assert.AreEqual(1, verifyResult.UnchangedCount);
+            Assert.IsTrue(Directory.Exists(Path.Combine(targetRoot, "albums", "photos")));
+            Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, ".yabt-hist")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncPreservesDesiredAncestorsWhenZipChangesToMirror()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "image content");
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var zipResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(zipResult.Completed);
+
+            await WritePolicyAsync(photosRoot, MirrorArchiveFormatName.Value);
+
+            var mirrorResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(mirrorResult.Completed);
+            Assert.AreEqual(2, mirrorResult.NewCount);
+            Assert.AreEqual(1, mirrorResult.ExtraCount);
+            AssertTextFile(
+                Path.Combine(targetRoot, "albums", "photos", "image.txt"),
+                "image content");
+            Assert.AreEqual(
+                0,
+                Directory.GetFiles(Path.Combine(targetRoot, "albums"), "photos.*.zip").Length);
+            Assert.AreEqual(
+                1,
+                Directory.GetFiles(
+                    Path.Combine(targetRoot, ".yabt-hist"),
+                    "photos.*.zip",
+                    SearchOption.AllDirectories).Length);
+
+            var verifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(verifyResult.Completed);
+            Assert.AreEqual(2, verifyResult.UnchangedCount);
+            Assert.AreEqual(0, verifyResult.ExtraCount);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncAllocatesNewHistoryFolderForRepeatedSameTimeTransition()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "image content");
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
+            await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            await WritePolicyAsync(photosRoot, MirrorArchiveFormatName.Value);
+            await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
+
+            var result = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(result.Completed);
+            Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, "albums", "photos")));
+            var historicalPhotoFolders = Directory.GetDirectories(
+                Path.Combine(targetRoot, ".yabt-hist"),
+                "photos",
+                SearchOption.AllDirectories);
+            Assert.AreEqual(2, historicalPhotoFolders.Length);
+            var historicalRootNames = historicalPhotoFolders
+                .Select(path => Directory.GetParent(path)?.Parent?.Name)
+                .ToArray();
+            CollectionAssert.AreEquivalent(
+                new[]
+                {
+                    "20260724T120000Z",
+                    "20260724T120000Z-1",
+                },
+                historicalRootNames);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncRejectsZipPackageNameCollisionWithSourceObject()
+    {
+        await AssertZipPackageNameCollisionRejectedAsync(
+            createSourceFolderCollision: false);
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncRejectsZipPackageNameCollisionWithSourceFolder()
+    {
+        await AssertZipPackageNameCollisionRejectedAsync(
+            createSourceFolderCollision: true);
     }
 
     [TestMethod]
@@ -136,6 +571,52 @@ public sealed class ArchiveSynchronizerTests
         Assert.AreEqual(
             FailingAfterFirstListedObjectStore.FirstContent,
             Encoding.UTF8.GetString(uploadedObject.Content.Span));
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncHistorizesExactObjectAndSameNamedFolderSeparately()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-object-folder-collision-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadTextObjectAsync(sourceStore, "a/current.txt", "current content");
+        await UploadTextObjectAsync(targetStore, "a/b", "object content");
+        await UploadTextObjectAsync(targetStore, "a/b/file.txt", "folder content");
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            timeProvider).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var result = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(result.Completed);
+        Assert.AreEqual(1, result.NewCount);
+        Assert.AreEqual(2, result.ExtraCount);
+        Assert.IsTrue(targetStore.TryGetObject("a/current.txt", out _));
+        Assert.IsFalse(targetStore.TryGetObject("a/b", out _));
+        Assert.IsFalse(targetStore.TryGetObject("a/b/file.txt", out _));
+        Assert.IsTrue(targetStore.TryGetObject(
+            ".yabt-hist/20260724T120000Z/a/b",
+            out var historicalObject));
+        Assert.AreEqual(
+            "object content",
+            Encoding.UTF8.GetString(historicalObject.Content.Span));
+        Assert.IsTrue(targetStore.TryGetObject(
+            ".yabt-hist/20260724T120000Z-1/a/b/file.txt",
+            out var historicalFolderObject));
+        Assert.AreEqual(
+            "folder content",
+            Encoding.UTF8.GetString(historicalFolderObject.Content.Span));
     }
 
     [TestMethod]
@@ -379,10 +860,73 @@ public sealed class ArchiveSynchronizerTests
         }
     }
 
-    private static ServiceCollection CreateServices()
+    private static async Task AssertZipPackageNameCollisionRejectedAsync
+    (
+        bool createSourceFolderCollision
+    )
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var albumsRoot = Path.Combine(sourceRoot, "albums");
+            var photosRoot = Path.Combine(albumsRoot, "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WritePolicyAsync(
+                photosRoot,
+                ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "image content");
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(firstResult.Completed);
+            var packagePath = Directory.GetFiles(
+                Path.Combine(targetRoot, "albums"),
+                "photos.*.zip").Single();
+            var collisionPath = Path.Combine(
+                albumsRoot,
+                Path.GetFileName(packagePath));
+            if (createSourceFolderCollision)
+            {
+                await WriteTextFileAsync(
+                    Path.Combine(collisionPath, "file.txt"),
+                    "ordinary sibling content");
+            }
+            else
+            {
+                await WriteTextFileAsync(
+                    collisionPath,
+                    "ordinary sibling content");
+            }
+
+            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+                () => synchronizer.SyncAsync(new SyncRunRequest(sourceRoot)));
+
+            StringAssert.Contains(exception.Message, "conflicts with a source item");
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    private static ServiceCollection CreateServices(TimeProvider? timeProvider = default)
     {
         var services = new ServiceCollection();
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        if (timeProvider is not null)
+        {
+            services.AddSingleton(timeProvider);
+        }
+
         services.AddYabtFileSystemObjectStore();
         services.AddYabtMirrorFormatProjector();
         services.AddYabtZipFormatProjector();
@@ -397,11 +941,17 @@ public sealed class ArchiveSynchronizerTests
         string sourceRoot,
         BackupRootDescriptor descriptor,
         IObjectStore sourceStore,
-        IObjectStore targetStore
+        IObjectStore targetStore,
+        TimeProvider? timeProvider = default
     )
     {
         var services = new ServiceCollection();
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        if (timeProvider is not null)
+        {
+            services.AddSingleton(timeProvider);
+        }
+
         services.AddSingleton<IBackupRootLocator>(new FixedBackupRootLocator(
             sourceRoot,
             descriptor));
@@ -507,6 +1057,21 @@ public sealed class ArchiveSynchronizerTests
         await File.WriteAllTextAsync(path, content);
     }
 
+    private static async Task UploadTextObjectAsync
+    (
+        MemoryObjectStore store,
+        string key,
+        string content
+    )
+    {
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content), writable: false);
+        await store.UploadAsync(
+            key,
+            stream,
+            "text/plain",
+            new Dictionary<string, string>(StringComparer.Ordinal));
+    }
+
     private static void AssertTextFile
     (
         string path,
@@ -609,6 +1174,16 @@ public sealed class ArchiveSynchronizerTests
         {
             throw new NotSupportedException();
         }
+
+        public Task MoveFolderAsync
+        (
+            string sourcePrefix,
+            string destinationPrefix,
+            CancellationToken cancellationToken = default
+        )
+        {
+            throw new NotSupportedException();
+        }
     }
 
     private sealed class FixedBackupRootLocator
@@ -674,5 +1249,10 @@ public sealed class ArchiveSynchronizerTests
 
             return _sourceStore;
         }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset _utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => _utcNow;
     }
 }
