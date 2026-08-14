@@ -1,5 +1,7 @@
 using System.IO.Compression;
+using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -41,8 +43,10 @@ public sealed class ZipArchiveFormatProjectorTests
         )));
 
         var projectedObject = projectedObjects.Single();
-        StringAssert.StartsWith(projectedObject.RelativePath, "Photos.");
-        StringAssert.EndsWith(projectedObject.RelativePath, ".zip");
+        StringAssert.Matches(
+            projectedObject.RelativePath,
+            new Regex("^Photos\\.xxh128-[0-9a-f]{32}\\.zip$", RegexOptions.CultureInvariant));
+        Assert.IsNull(projectedObject.ContentHash);
 
         await using var content = await projectedObject.OpenContentAsync(default);
         using var archive = new ZipArchive(content.Content, ZipArchiveMode.Read);
@@ -51,6 +55,104 @@ public sealed class ZipArchiveFormatProjectorTests
         Assert.IsNotNull(entry);
         using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
         Assert.AreEqual("source content", await reader.ReadToEndAsync());
+    }
+
+    [TestMethod]
+    public async Task ProjectAsyncUsesStableFullHashNameForUnchangedSource()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var projector = serviceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var timeProvider = new ZipSourceTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider, provideContentHash: true);
+        await UploadTextAsync(sourceStore, "folder/file.txt", "source content");
+        var request = new ArchiveProjectionRequest
+        (
+            sourceStore,
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        );
+
+        var firstProjection = (await CollectProjectedObjectsAsync(
+            projector.ProjectAsync(request))).Single();
+        var secondProjection = (await CollectProjectedObjectsAsync(
+            projector.ProjectAsync(request))).Single();
+
+        Assert.AreEqual(firstProjection.RelativePath, secondProjection.RelativePath);
+        StringAssert.Matches(
+            firstProjection.RelativePath,
+            new Regex("^Photos\\.xxh128-[0-9a-f]{32}\\.zip$", RegexOptions.CultureInvariant));
+        CollectionAssert.AreEqual(
+            await ReadContentBytesAsync(firstProjection),
+            await ReadContentBytesAsync(secondProjection));
+    }
+
+    [TestMethod]
+    public async Task ProjectAsyncChangesFullHashNameWhenSourceContentChanges()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var projector = serviceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var timeProvider = new ZipSourceTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+        var firstSourceStore = new MemoryObjectStore(timeProvider, provideContentHash: true);
+        var secondSourceStore = new MemoryObjectStore(timeProvider, provideContentHash: true);
+        await UploadTextAsync(firstSourceStore, "folder/file.txt", "first content");
+        await UploadTextAsync(secondSourceStore, "folder/file.txt", "second content");
+
+        var firstProjection = (await CollectProjectedObjectsAsync(projector.ProjectAsync(new
+        (
+            firstSourceStore,
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        )))).Single();
+        var secondProjection = (await CollectProjectedObjectsAsync(projector.ProjectAsync(new
+        (
+            secondSourceStore,
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        )))).Single();
+
+        Assert.AreNotEqual(firstProjection.RelativePath, secondProjection.RelativePath);
+    }
+
+    [TestMethod]
+    public async Task ProjectAsyncUsesDeterministicFallbackWhenSourceTimestampIsMissing()
+    {
+        var firstTimeProvider = new ZipSourceTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+        var secondTimeProvider = new ZipSourceTimeProvider(
+            new DateTimeOffset(2026, 7, 25, 12, 0, 0, TimeSpan.Zero));
+        using var firstServiceProvider = CreateServices(firstTimeProvider).BuildServiceProvider();
+        using var secondServiceProvider = CreateServices(secondTimeProvider).BuildServiceProvider();
+        var firstProjector = firstServiceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var secondProjector = secondServiceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var innerStore = new MemoryObjectStore(provideContentHash: true);
+        await UploadTextAsync(innerStore, "folder/file.txt", "source content");
+        var sourceStore = new MissingLastModifiedObjectStore(innerStore);
+        var request = new ArchiveProjectionRequest
+        (
+            sourceStore,
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        );
+
+        var firstProjection = (await CollectProjectedObjectsAsync(
+            firstProjector.ProjectAsync(request))).Single();
+        var secondProjection = (await CollectProjectedObjectsAsync(
+            secondProjector.ProjectAsync(request))).Single();
+
+        Assert.AreEqual(firstProjection.RelativePath, secondProjection.RelativePath);
+        CollectionAssert.AreEqual(
+            await ReadContentBytesAsync(firstProjection),
+            await ReadContentBytesAsync(secondProjection));
+
+        await using var content = await firstProjection.OpenContentAsync(default);
+        using var archive = new ZipArchive(content.Content, ZipArchiveMode.Read);
+        var entry = archive.GetEntry("folder/file.txt");
+        Assert.IsNotNull(entry);
+        Assert.AreEqual(
+            new DateTime(1980, 1, 1),
+            entry.LastWriteTime.DateTime);
     }
 
     [TestMethod]
@@ -75,10 +177,15 @@ public sealed class ZipArchiveFormatProjectorTests
         Assert.AreEqual(39, contentHash.Length);
     }
 
-    private static ServiceCollection CreateServices()
+    private static ServiceCollection CreateServices(TimeProvider? timeProvider = default)
     {
         var services = new ServiceCollection();
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        if (timeProvider is not null)
+        {
+            services.AddSingleton(timeProvider);
+        }
+
         services.AddYabtZipFormatProjector();
 
         return services;
@@ -111,5 +218,59 @@ public sealed class ZipArchiveFormatProjectorTests
         }
 
         return result;
+    }
+
+    private static async Task<byte[]> ReadContentBytesAsync(ArchiveProjectedObject projectedObject)
+    {
+        await using var content = await projectedObject.OpenContentAsync(default);
+        using var memory = new MemoryStream();
+        await content.Content.CopyToAsync(memory);
+        return memory.ToArray();
+    }
+
+    private sealed class MissingLastModifiedObjectStore(IReadOnlyObjectStore _inner) : IReadOnlyObjectStore
+    {
+        public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
+            _inner.EnsureReadyAsync(cancellationToken);
+
+        public Task<ArchiveObjectContent> OpenReadAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => _inner.OpenReadAsync(key, cancellationToken);
+
+        public Task<bool> ExistsAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => _inner.ExistsAsync(key, cancellationToken);
+
+        public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
+        (
+            string? folderPrefix,
+            bool recursive = false,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default
+        )
+        {
+            var folderItems = _inner.GetFolderItemsAsync(
+                folderPrefix,
+                recursive,
+                cancellationToken);
+            await foreach (var folderItem in folderItems)
+            {
+                yield return folderItem with
+                {
+                    Object = folderItem.Object is null ? null : folderItem.Object with
+                    {
+                        LastModifiedUtc = null,
+                    },
+                };
+            }
+        }
+    }
+
+    private sealed class ZipSourceTimeProvider(DateTimeOffset _utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => _utcNow;
     }
 }

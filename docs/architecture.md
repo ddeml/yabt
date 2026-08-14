@@ -82,7 +82,7 @@ When a subfolder uses a packaging format such as `zip`, its projected package ar
 
 Projectors stream projected objects from `ProjectAsync`. Formats that can emit objects incrementally, such as `mirror`, should do so. Formats that need complete folder knowledge, such as `zip`, may collect their source folder first and then yield the finished package object.
 
-The `mirror` projector maps source files one-to-one. The current initial `zip` projector maps a source folder to a package artifact; the adjacent manifest and external descriptor remain planned parts of the durable format. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
+The `mirror` projector maps source files one-to-one. The current initial `zip` projector maps a source folder to a package artifact; the adjacent manifest and external descriptor remain planned parts of the durable format. Package artifact names use a deterministic, algorithm-tagged full logical-representation hash and exclude per-run creation time, so an unchanged projection retains the same live key. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
 
 ## Project Boundaries
 

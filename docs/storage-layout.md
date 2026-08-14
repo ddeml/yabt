@@ -68,11 +68,15 @@ live/Photos/Vacation/img001.jpg
 The intended layout for folders using the `zip` format keeps the package artifact and adjacent manifest as visible objects:
 
 ```text
-Photos/Vacation.20260524T120000Z.a91f3c2e.zip
-Photos/Vacation.20260524T120000Z.a91f3c2e.manifest.json
+Photos/Vacation.xxh128-a91f3c2e5b7d4f8096a1c3e8d2b4f607.zip
+Photos/Vacation.xxh128-a91f3c2e5b7d4f8096a1c3e8d2b4f607.manifest.json
 ```
 
 Here the source folder is `Photos/Vacation`, but its package objects are placed directly in the target `Photos` folder. No target `Photos/Vacation` folder is created. The folder policy or equivalent artifact-scoped descriptor remains outside the package, in the same parent folder, so a browser or restore tool can identify the folder representation without opening the package first.
+
+The package name is deterministic for the projected representation, including archived metadata such as entry modification times. Package creation time belongs in the planned manifest instead of the live object name, so synchronizing an unchanged projected representation again resolves to the same key. A changed representation produces a different full-hash name, and the synchronizer moves the replaced name to history.
+
+On the first synchronization after upgrading an archive that still uses the older timestamped package-name layout, YABT creates the deterministic live name and moves the old timestamped artifact to history. Later unchanged synchronizations reuse the deterministic name.
 
 The current initial ZIP projector emits the `.zip` artifact only. The adjacent manifest and external descriptor shown above remain planned work.
 

@@ -7,18 +7,16 @@ internal static class PackageArtifactNamer
     public static string CreatePackageName
     (
         string sourceDirectory,
-        DateTimeOffset createdAtUtc,
         string manifestHash,
         string extension
     )
     {
         var folderName = Path.GetFileName(Path.TrimEndingDirectorySeparator(sourceDirectory));
         var safeFolderName = SanitizeFileName(string.IsNullOrWhiteSpace(folderName) ? "root" : folderName);
-        var normalizedHash = NormalizeHash(manifestHash);
-        var hashPrefix = normalizedHash.Length <= 8 ? normalizedHash : normalizedHash[..8];
+        var fileNameHash = ToFileNameHash(manifestHash);
         var normalizedExtension = extension.Trim().TrimStart('.');
 
-        return $"{safeFolderName}.{createdAtUtc:yyyyMMddTHHmmssZ}.{hashPrefix}.{normalizedExtension}";
+        return $"{safeFolderName}.{fileNameHash}.{normalizedExtension}";
     }
 
     private static string SanitizeFileName(string value)
@@ -34,9 +32,15 @@ internal static class PackageArtifactNamer
         return builder.ToString();
     }
 
-    private static string NormalizeHash(string value)
+    private static string ToFileNameHash(string value)
     {
         var separator = value.IndexOf(':', StringComparison.Ordinal);
-        return separator < 0 ? value : value[(separator + 1)..];
+        if (separator <= 0 || separator == value.Length - 1)
+        {
+            throw new YabtPackagingException(
+                "Package identity hash must include an algorithm and value.");
+        }
+
+        return $"{value[..separator]}-{value[(separator + 1)..]}";
     }
 }

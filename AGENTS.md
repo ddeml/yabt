@@ -117,19 +117,19 @@ Each archive format projector owns its format name and projects a source folder 
 
 The format projection contract is `IArchiveFormatProjector`. Do not keep a central format registry in `Yabt.Core`.
 
-Package artifacts should be immutable and named using:
+Package artifacts should be immutable and use deterministic content- or manifest-addressed names:
 
 ```text
-<folder-name>.<timestamp-utc>.<manifest-or-content-hash-prefix>.<extension>
+<folder-name>.<hash-algorithm>-<full-manifest-or-content-hash>.<extension>
 ```
 
 Example:
 
 ```text
-Vacation.20260524T120000Z.a91f3c2e.zip
+Vacation.xxh128-a91f3c2e5b7d4f8096a1c3e8d2b4f607.zip
 ```
 
-Older package versions should remain preserved.
+Do not put the projection or package creation time in the package artifact name. Creation time belongs in the manifest, while synchronization history paths record when a live artifact was replaced. Any creation time embedded inside a package must be stable for that content version rather than regenerated on every projection, so it does not make the package vary on every run. The current ZIP projector uses the full lowercase 128-bit xxHash value of a logical representation containing source paths, lengths, modification times, and content hashes; do not truncate it to an arbitrary short prefix. An unchanged logical source manifest should produce the same live object key, while changed logical source manifests produce new immutable keys. Older package versions should remain preserved in history.
 
 When a subfolder is packaged, place its package artifact and adjacent metadata directly in the logical parent folder. Do not create a target folder corresponding to the packaged source folder. Packaging the selected root still places its artifacts at the target live root.
 

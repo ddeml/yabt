@@ -23,14 +23,16 @@ The manifest describes what was packaged and makes archive inspection possible w
     }
   ],
   "totalBytes": 4821031,
-  "manifestHash": "sha256:a91f3c2e...",
-  "packageName": "Vacation.20260524T120000Z.a91f3c2e.zip"
+  "manifestHash": "sha256:a91f3c2e5b7d4f8096a1c3e8d2b4f607c84d2a1e7395b60f4c8e2d1a7b9306f5",
+  "packageName": "Vacation.sha256-a91f3c2e5b7d4f8096a1c3e8d2b4f607c84d2a1e7395b60f4c8e2d1a7b9306f5.zip"
 }
 ```
 
 ## Hashing
 
 The manifest hash should be computed over a deterministic canonical representation.
+
+`createdAtUtc` records artifact metadata but is not part of the package filename. Once manifests are emitted, this value must remain stable for a particular content version rather than being regenerated on every projection; otherwise an embedded manifest would make unchanged ZIP bytes differ only because synchronization ran at a different time. Reprojecting the same logical representation therefore produces the same live key. The initial ZIP projector uses the full 128-bit xxHash value of its logical source manifest; a future canonical hashing design may select a different explicitly named algorithm.
 
 ## Required Data
 

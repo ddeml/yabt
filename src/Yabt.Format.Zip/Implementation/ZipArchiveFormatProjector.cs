@@ -14,11 +14,24 @@ namespace Yabt.Format.Zip.Implementation;
 internal sealed class ZipArchiveFormatProjector
 (
     ILogger<ZipArchiveFormatProjector> _logger,
-    IOptionsMonitor<ZipArchiveFormatOptions> _options,
-    TimeProvider _timeProvider
+    IOptionsMonitor<ZipArchiveFormatOptions> _options
 ) : IArchiveFormatProjector
 {
     private const int DefaultHashBufferSize = 81_920;
+
+    // ZIP entry timestamps cannot represent dates before 1980. When a source provider does not
+    // supply a modification time, use this fixed value instead of the current time so repeated
+    // projections of unchanged content retain the same identity and ZIP metadata.
+    private static readonly DateTimeOffset DefaultLastModifiedUtc = new
+    (
+        1980,
+        1,
+        1,
+        0,
+        0,
+        0,
+        TimeSpan.Zero
+    );
 
     private static readonly IReadOnlyDictionary<string, string> EmptyMetadata =
         new Dictionary<string, string>(StringComparer.Ordinal).ToFrozenDictionary(StringComparer.Ordinal);
@@ -39,16 +52,13 @@ internal sealed class ZipArchiveFormatProjector
 
         await request.SourceStore.EnsureReadyAsync(cancellationToken);
 
-        var createdAtUtc = _timeProvider.GetUtcNow();
         var sourceObjects = await ListSourceObjectsAsync(
             request,
-            createdAtUtc,
             cancellationToken);
         var manifestHash = ComputeManifestHash(sourceObjects);
         var packageName = CreatePackageName(
             request.SourceDisplayName,
             request.SourcePrefix,
-            createdAtUtc,
             manifestHash);
 
         //TODO: Project the adjacent manifest as a second object once manifest canonicalization is finalized.
@@ -56,8 +66,7 @@ internal sealed class ZipArchiveFormatProjector
         (
             packageName,
             request.SourceStore,
-            sourceObjects,
-            manifestHash
+            sourceObjects
         );
 
         yield return packageObject;
@@ -66,7 +75,6 @@ internal sealed class ZipArchiveFormatProjector
     private async Task<IReadOnlyList<ZipSourceObject>> ListSourceObjectsAsync
     (
         ArchiveProjectionRequest request,
-        DateTimeOffset createdAtUtc,
         CancellationToken cancellationToken
     )
     {
@@ -78,7 +86,6 @@ internal sealed class ZipArchiveFormatProjector
             sourcePrefix,
             sourcePrefix,
             sourceObjects,
-            createdAtUtc,
             cancellationToken
         );
 
@@ -93,7 +100,6 @@ internal sealed class ZipArchiveFormatProjector
         string? sourcePrefix,
         string? folderPrefix,
         List<ZipSourceObject> sourceObjects,
-        DateTimeOffset createdAtUtc,
         CancellationToken cancellationToken
     )
     {
@@ -113,7 +119,6 @@ internal sealed class ZipArchiveFormatProjector
                     sourcePrefix,
                     sourceItem.Key,
                     sourceObjects,
-                    createdAtUtc,
                     cancellationToken);
                 continue;
             }
@@ -147,7 +152,7 @@ internal sealed class ZipArchiveFormatProjector
                 sourceKey,
                 relativePath,
                 hashResult.Length,
-                sourceItem.Object.LastModifiedUtc ?? createdAtUtc,
+                sourceItem.Object.LastModifiedUtc?.ToUniversalTime() ?? DefaultLastModifiedUtc,
                 hashResult.ContentHash
             ));
         }
@@ -172,7 +177,7 @@ internal sealed class ZipArchiveFormatProjector
                     sourceObject.RelativePath,
                     _options.CurrentValue.CompressionLevel ?? default
                 );
-                entry.LastWriteTime = sourceObject.LastModifiedUtc;
+                entry.LastWriteTime = sourceObject.LastModifiedUtc.ToUniversalTime();
 
                 await using var sourceContent = await sourceStore.OpenReadAsync(
                     sourceObject.SourceKey,
@@ -195,8 +200,7 @@ internal sealed class ZipArchiveFormatProjector
     (
         string packageName,
         IReadOnlyObjectStore sourceStore,
-        IReadOnlyList<ZipSourceObject> sourceObjects,
-        string manifestHash
+        IReadOnlyList<ZipSourceObject> sourceObjects
     ) => new
     (
         packageName,
@@ -206,7 +210,9 @@ internal sealed class ZipArchiveFormatProjector
             sourceObjects,
             cancellationToken
         ),
-        ContentHash: manifestHash
+        // The manifest hash identifies logical inputs, not the finished ZIP bytes.
+        // Leave ContentHash unset so synchronization compares the actual package streams.
+        ContentHash: null
     );
 
     private async Task<ZipSourceObjectHashResult> ComputeSourceObjectHashAsync
@@ -273,17 +279,15 @@ internal sealed class ZipArchiveFormatProjector
     (
         string? sourceDisplayName,
         string? sourcePrefix,
-        DateTimeOffset createdAtUtc,
         string manifestHash
     )
     {
         var sourceName = Path.GetFileName(
             ArchiveLayout.NormalizeObjectKey(sourceDisplayName ?? sourcePrefix));
         var safeSourceName = SanitizeFileName(string.IsNullOrWhiteSpace(sourceName) ? "root" : sourceName);
-        var normalizedHash = NormalizeHash(manifestHash);
-        var hashPrefix = normalizedHash.Length <= 8 ? normalizedHash : normalizedHash[..8];
+        var fileNameHash = ToFileNameHash(manifestHash);
 
-        return $"{safeSourceName}.{createdAtUtc:yyyyMMddTHHmmssZ}.{hashPrefix}.zip";
+        return $"{safeSourceName}.{fileNameHash}.zip";
     }
 
     private static string SanitizeFileName(string value)
@@ -299,10 +303,16 @@ internal sealed class ZipArchiveFormatProjector
         return builder.ToString();
     }
 
-    private static string NormalizeHash(string value)
+    private static string ToFileNameHash(string value)
     {
         var separator = value.IndexOf(':', StringComparison.Ordinal);
-        return separator < 0 ? value : value[(separator + 1)..];
+        if (separator <= 0 || separator == value.Length - 1)
+        {
+            throw new YabtFormatZipException(
+                "ZIP package identity hash must include an algorithm and value.");
+        }
+
+        return $"{value[..separator]}-{value[(separator + 1)..]}";
     }
 
     private static string ToContentHash(byte[] hash)

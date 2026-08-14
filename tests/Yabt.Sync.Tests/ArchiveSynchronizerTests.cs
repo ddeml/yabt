@@ -104,6 +104,172 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
+    public async Task SyncAsyncKeepsUnchangedZipWhenSynchronizationTimeChanges()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "image content");
+
+            var firstTimeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using (var firstServiceProvider = CreateServices(firstTimeProvider).BuildServiceProvider())
+            {
+                var synchronizer = firstServiceProvider.GetRequiredService<IArchiveSynchronizer>();
+                var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+                Assert.IsTrue(firstResult.Completed);
+                Assert.AreEqual(1, firstResult.NewCount);
+            }
+
+            var firstPackagePath = Directory.GetFiles(
+                Path.Combine(targetRoot, "albums"),
+                "photos.*.zip").Single();
+
+            var secondTimeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 25, 12, 0, 0, TimeSpan.Zero));
+            using (var secondServiceProvider = CreateServices(secondTimeProvider).BuildServiceProvider())
+            {
+                var synchronizer = secondServiceProvider.GetRequiredService<IArchiveSynchronizer>();
+                var secondResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+                Assert.IsTrue(secondResult.Completed);
+                Assert.AreEqual(0, secondResult.NewCount);
+                Assert.AreEqual(0, secondResult.ChangedCount);
+                Assert.AreEqual(0, secondResult.ExtraCount);
+                Assert.AreEqual(1, secondResult.UnchangedCount);
+            }
+
+            var secondPackagePath = Directory.GetFiles(
+                Path.Combine(targetRoot, "albums"),
+                "photos.*.zip").Single();
+            Assert.AreEqual(firstPackagePath, secondPackagePath);
+            Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, ".yabt-hist")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncCreatesNewFullHashZipNameWhenSourceChanges()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "first image content");
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(firstResult.Completed);
+            var firstPackagePath = Directory.GetFiles(
+                Path.Combine(targetRoot, "albums"),
+                "photos.*.zip").Single();
+
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "second image content");
+
+            var secondResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(secondResult.Completed);
+            Assert.AreEqual(1, secondResult.NewCount);
+            Assert.AreEqual(0, secondResult.ChangedCount);
+            Assert.AreEqual(1, secondResult.ExtraCount);
+            var secondPackagePath = Directory.GetFiles(
+                Path.Combine(targetRoot, "albums"),
+                "photos.*.zip").Single();
+            Assert.AreNotEqual(firstPackagePath, secondPackagePath);
+            Assert.AreEqual(
+                Path.GetFileName(firstPackagePath),
+                Path.GetFileName(Directory.GetFiles(
+                    Path.Combine(targetRoot, ".yabt-hist"),
+                    "photos.*.zip",
+                    SearchOption.AllDirectories).Single()));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncMigratesLegacyTimestampedZipNameOnce()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
+            var targetAlbumsRoot = Path.Combine(targetRoot, "albums");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(
+                Path.Combine(photosRoot, "image.txt"),
+                "image content");
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(firstResult.Completed);
+            var deterministicPackagePath = Directory.GetFiles(
+                targetAlbumsRoot,
+                "photos.*.zip").Single();
+            var deterministicPackageName = Path.GetFileNameWithoutExtension(deterministicPackagePath);
+            var fullHash = deterministicPackageName[(deterministicPackageName.LastIndexOf('-') + 1)..];
+            var legacyPackageName = $"photos.20260724T120000Z.{fullHash[..8]}.zip";
+            var legacyPackagePath = Path.Combine(targetAlbumsRoot, legacyPackageName);
+            File.Move(deterministicPackagePath, legacyPackagePath);
+
+            var migrationResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(migrationResult.Completed);
+            Assert.AreEqual(1, migrationResult.NewCount);
+            Assert.AreEqual(1, migrationResult.ExtraCount);
+            Assert.IsTrue(File.Exists(deterministicPackagePath));
+            Assert.IsFalse(File.Exists(legacyPackagePath));
+            Assert.AreEqual(
+                legacyPackageName,
+                Path.GetFileName(Directory.GetFiles(
+                    Path.Combine(targetRoot, ".yabt-hist"),
+                    legacyPackageName,
+                    SearchOption.AllDirectories).Single()));
+
+            var stableResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(stableResult.Completed);
+            Assert.AreEqual(0, stableResult.NewCount);
+            Assert.AreEqual(0, stableResult.ChangedCount);
+            Assert.AreEqual(0, stableResult.ExtraCount);
+            Assert.AreEqual(1, stableResult.UnchangedCount);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
     public async Task SyncAsyncPreservesNestedMirrorFolder()
     {
         var workspace = CreateWorkspacePath();
@@ -620,6 +786,41 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
+    public async Task SyncAsyncDoesNotCompareManifestHashWithTargetContentHash()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-zip-content-hash-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider, provideContentHash: true);
+        var targetStore = new MemoryObjectStore(timeProvider, provideContentHash: true);
+        await UploadTextObjectAsync(sourceStore, "file.txt", "source content");
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            timeProvider,
+            new FolderPolicy(ZipArchiveFormatName.Value)).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+        var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        var secondResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(firstResult.Completed);
+        Assert.AreEqual(1, firstResult.NewCount);
+        Assert.IsTrue(secondResult.Completed);
+        Assert.AreEqual(0, secondResult.NewCount);
+        Assert.AreEqual(0, secondResult.ChangedCount);
+        Assert.AreEqual(0, secondResult.ExtraCount);
+        Assert.AreEqual(1, secondResult.UnchangedCount);
+    }
+
+    [TestMethod]
     public async Task SyncAsyncMovesChangedTargetObjectToHistory()
     {
         var workspace = CreateWorkspacePath();
@@ -942,7 +1143,8 @@ public sealed class ArchiveSynchronizerTests
         BackupRootDescriptor descriptor,
         IObjectStore sourceStore,
         IObjectStore targetStore,
-        TimeProvider? timeProvider = default
+        TimeProvider? timeProvider = default,
+        FolderPolicy? folderPolicy = default
     )
     {
         var services = new ServiceCollection();
@@ -955,10 +1157,12 @@ public sealed class ArchiveSynchronizerTests
         services.AddSingleton<IBackupRootLocator>(new FixedBackupRootLocator(
             sourceRoot,
             descriptor));
-        services.AddSingleton<IFolderPolicyReader, DefaultFolderPolicyReader>();
+        services.AddSingleton<IFolderPolicyReader>(new FixedFolderPolicyReader(
+            folderPolicy ?? FolderPolicy.Default));
         services.AddSingleton<IBackupRootStoreResolver>(new FixedBackupRootStoreResolver(targetStore));
         services.AddSingleton<ISourceRootObjectStoreResolver>(new FixedSourceRootObjectStoreResolver(sourceStore));
         services.AddYabtMirrorFormatProjector();
+        services.AddYabtZipFormatProjector();
         services.AddYabtSync();
 
         return services;
@@ -1207,7 +1411,7 @@ public sealed class ArchiveSynchronizerTests
         }
     }
 
-    private sealed class DefaultFolderPolicyReader : IFolderPolicyReader
+    private sealed class FixedFolderPolicyReader(FolderPolicy _policy) : IFolderPolicyReader
     {
         public Task<FolderPolicy> ReadPolicyAsync
         (
@@ -1218,7 +1422,7 @@ public sealed class ArchiveSynchronizerTests
             _ = folderPath;
             cancellationToken.ThrowIfCancellationRequested();
 
-            return Task.FromResult(FolderPolicy.Default);
+            return Task.FromResult(_policy);
         }
     }
 
