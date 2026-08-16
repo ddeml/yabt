@@ -11,7 +11,7 @@
     },
     "schemaVersion": {
       "type": "integer",
-      "minimum": 1
+      "const": 1
     },
     "rootRole": {
       "type": "string",

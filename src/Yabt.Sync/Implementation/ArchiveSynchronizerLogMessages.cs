@@ -39,4 +39,15 @@ internal static partial class ArchiveSynchronizerLogMessages
         string archiveId,
         string storeId
     );
+
+    [LoggerMessage(
+        EventId = YabtEventIds.InvalidChangeManifestIgnored,
+        Level = LogLevel.Warning,
+        Message = "Change manifest {ManifestKey} is invalid and will not be trusted. A mutating sync will replace it after a full comparison.")]
+    public static partial void LogInvalidChangeManifestIgnored
+    (
+        this ILogger logger,
+        string manifestKey,
+        Exception exception
+    );
 }

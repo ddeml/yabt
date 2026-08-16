@@ -6,5 +6,6 @@ public sealed record ArchiveProjectedObject
     Func<CancellationToken, Task<ArchiveObjectContent>> OpenContentAsync,
     long? ContentLength = default,
     DateTimeOffset? LastModifiedUtc = default,
-    string? ContentHash = default
+    string? ContentHash = default,
+    string? ChangeFingerprint = default
 );

@@ -297,7 +297,8 @@ internal sealed class ArchiveProjectionObjectStore
                 projectedKey,
                 projectedObject.ContentLength,
                 projectedObject.LastModifiedUtc,
-                projectedObject.ContentHash
+                projectedObject.ContentHash,
+                projectedObject.ChangeFingerprint
             );
             folderItems.TryAdd(
                 relativePath,

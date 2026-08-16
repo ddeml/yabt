@@ -17,6 +17,10 @@ internal sealed class JsonBackupRootSerializer(JsonSerializerOptions _jsonOption
         CancellationToken cancellationToken = default
     )
     {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentNullException.ThrowIfNull(destination);
+
+        ValidateDescriptor(descriptor);
         await JsonSerializer.SerializeAsync(
             destination,
             descriptor,
@@ -49,6 +53,12 @@ internal sealed class JsonBackupRootSerializer(JsonSerializerOptions _jsonOption
             throw new YabtMetadataException("Backup root JSON did not contain a descriptor object.");
         }
 
+        ValidateDescriptor(descriptor);
+        return descriptor;
+    }
+
+    private static void ValidateDescriptor(BackupRootDescriptor descriptor)
+    {
         if (!string.Equals(
                 descriptor.DocumentType,
                 BackupRootDescriptor.ExpectedDocumentType,
@@ -57,6 +67,9 @@ internal sealed class JsonBackupRootSerializer(JsonSerializerOptions _jsonOption
             throw new YabtMetadataException("Backup root JSON has an unexpected document type.");
         }
 
-        return descriptor;
+        if (descriptor.SchemaVersion != BackupRootDescriptor.ExpectedSchemaVersion)
+        {
+            throw new YabtMetadataException("Backup root JSON has an unsupported schema version.");
+        }
     }
 }

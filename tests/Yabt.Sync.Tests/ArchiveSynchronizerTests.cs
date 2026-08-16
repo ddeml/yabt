@@ -211,65 +211,6 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
-    public async Task SyncAsyncMigratesLegacyTimestampedZipNameOnce()
-    {
-        var workspace = CreateWorkspacePath();
-        try
-        {
-            var sourceRoot = Path.Combine(workspace, "source");
-            var targetRoot = Path.Combine(workspace, "target");
-            var photosRoot = Path.Combine(sourceRoot, "albums", "photos");
-            var targetAlbumsRoot = Path.Combine(targetRoot, "albums");
-            await InitializeSourceRootAsync(sourceRoot, targetRoot);
-            await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
-            await WriteTextFileAsync(
-                Path.Combine(photosRoot, "image.txt"),
-                "image content");
-
-            var timeProvider = new FixedTimeProvider(
-                new DateTimeOffset(2026, 7, 24, 12, 0, 0, TimeSpan.Zero));
-            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
-            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
-            var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
-            Assert.IsTrue(firstResult.Completed);
-            var deterministicPackagePath = Directory.GetFiles(
-                targetAlbumsRoot,
-                "photos.*.zip").Single();
-            var deterministicPackageName = Path.GetFileNameWithoutExtension(deterministicPackagePath);
-            var fullHash = deterministicPackageName[(deterministicPackageName.LastIndexOf('-') + 1)..];
-            var legacyPackageName = $"photos.20260724T120000Z.{fullHash[..8]}.zip";
-            var legacyPackagePath = Path.Combine(targetAlbumsRoot, legacyPackageName);
-            File.Move(deterministicPackagePath, legacyPackagePath);
-
-            var migrationResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
-
-            Assert.IsTrue(migrationResult.Completed);
-            Assert.AreEqual(1, migrationResult.NewCount);
-            Assert.AreEqual(1, migrationResult.ExtraCount);
-            Assert.IsTrue(File.Exists(deterministicPackagePath));
-            Assert.IsFalse(File.Exists(legacyPackagePath));
-            Assert.AreEqual(
-                legacyPackageName,
-                Path.GetFileName(Directory.GetFiles(
-                    Path.Combine(targetRoot, ".yabt-hist"),
-                    legacyPackageName,
-                    SearchOption.AllDirectories).Single()));
-
-            var stableResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
-
-            Assert.IsTrue(stableResult.Completed);
-            Assert.AreEqual(0, stableResult.NewCount);
-            Assert.AreEqual(0, stableResult.ChangedCount);
-            Assert.AreEqual(0, stableResult.ExtraCount);
-            Assert.AreEqual(1, stableResult.UnchangedCount);
-        }
-        finally
-        {
-            DeleteWorkspace(workspace);
-        }
-    }
-
-    [TestMethod]
     public async Task SyncAsyncPreservesNestedMirrorFolder()
     {
         var workspace = CreateWorkspacePath();
@@ -821,6 +762,346 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
+    public async Task SyncAndVerifyUseZipChangeManifestWithoutRebuildingUnchangedPackage()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-fast-change-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadTextObjectAsync(sourceStore, "file.txt", "source content");
+        var guardedSourceStore = new DataReadGuardObjectStore(sourceStore);
+        var guardedTargetStore = new DataReadGuardObjectStore(targetStore);
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            guardedSourceStore,
+            guardedTargetStore,
+            timeProvider,
+            new FolderPolicy(ZipArchiveFormatName.Value)).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(firstResult.Completed);
+        Assert.IsTrue(targetStore.TryGetObject(ArchiveChangeManifest.FileName, out var manifestObject));
+        var manifestSerializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+        await using var manifestContent = new MemoryStream(manifestObject.Content.ToArray(), writable: false);
+        var manifest = await manifestSerializer.ReadAsync(manifestContent);
+        var manifestEntry = manifest.Entries.Single();
+        Assert.IsTrue(manifestEntry.RelativePath.EndsWith(".zip", StringComparison.Ordinal));
+        Assert.IsTrue(manifestEntry.ChangeFingerprint.StartsWith(
+            "xxh128:",
+            StringComparison.Ordinal));
+        Assert.IsTrue(manifestEntry.ContentHash?.StartsWith("xxh128:", StringComparison.Ordinal));
+
+        guardedSourceStore.RejectDataReads = true;
+        guardedTargetStore.RejectDataReads = true;
+
+        var secondSyncResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+        var verifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(secondSyncResult.Completed);
+        Assert.AreEqual(1, secondSyncResult.UnchangedCount);
+        Assert.IsTrue(verifyResult.Completed);
+        Assert.AreEqual(1, verifyResult.UnchangedCount);
+
+        await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.VerifyAsync(
+            new SyncRunRequest(sourceRoot, ByteForByte: true)));
+
+        guardedTargetStore.HideContentLengths = true;
+        await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.VerifyAsync(
+            new SyncRunRequest(sourceRoot)));
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncRejectsTargetUploadThatDoesNotConsumeCompleteZip()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-partial-upload-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadTextObjectAsync(sourceStore, "file.txt", "source content");
+        var partialTargetStore = new DataReadGuardObjectStore(targetStore)
+        {
+            StopUploadsAfterEmptyRead = true,
+        };
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            partialTargetStore,
+            timeProvider,
+            new FolderPolicy(ZipArchiveFormatName.Value)).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.SyncAsync(
+            new SyncRunRequest(sourceRoot)));
+
+        StringAssert.Contains(exception.ToString(), "before consuming all projected content");
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.FileName, out _));
+        var partialPackage = targetStore.Snapshot().Single();
+        Assert.IsTrue(partialPackage.Key.EndsWith(".zip", StringComparison.Ordinal));
+        Assert.AreEqual(0, partialPackage.Content.Length);
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncStoresChangeManifestOutsideExplicitLivePrefix()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-explicit-live-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadTextObjectAsync(sourceStore, "live/file.txt", "source content");
+        var descriptor = new BackupRootDescriptor
+        (
+            BackupRootDescriptor.ExpectedDocumentType,
+            1,
+            "source-archive",
+            new DateTimeOffset(2026, 5, 31, 0, 0, 0, TimeSpan.Zero),
+            new ArchiveLayout("live", "hist"),
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)],
+            "source"
+        );
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            timeProvider).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var syncResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+        var verifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(syncResult.Completed);
+        Assert.IsTrue(verifyResult.Completed);
+        Assert.IsTrue(targetStore.TryGetObject("live/file.txt", out _));
+        Assert.IsTrue(targetStore.TryGetObject(ArchiveChangeManifest.FileName, out var manifestObject));
+        Assert.IsFalse(targetStore.TryGetObject(
+            $"live/{ArchiveChangeManifest.FileName}",
+            out _));
+
+        var serializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+        await using var content = new MemoryStream(manifestObject.Content.ToArray(), writable: false);
+        var manifest = await serializer.ReadAsync(content);
+        Assert.AreEqual("file.txt", manifest.Entries.Single().RelativePath);
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncRejectsLayoutsOverlappingTemporaryUploadPrefix()
+    {
+        var layouts = new[]
+        {
+            new ArchiveLayout(ArchiveInternalFolderNames.TemporaryUploads, "hist"),
+            new ArchiveLayout("live", $"{ArchiveInternalFolderNames.TemporaryUploads}/history"),
+            new ArchiveLayout($"{ArchiveInternalFolderNames.TemporaryUploads}/live", "hist"),
+            new ArchiveLayout("live", ".YABT-TMP/history"),
+        };
+
+        foreach (var layout in layouts)
+        {
+            var sourceRoot = Path.Combine(
+                Path.GetTempPath(),
+                $"yabt-reserved-layout-test-{Guid.NewGuid():N}");
+            var sourceStore = new MemoryObjectStore();
+            var targetStore = new MemoryObjectStore();
+            var descriptor = new BackupRootDescriptor
+            (
+                BackupRootDescriptor.ExpectedDocumentType,
+                1,
+                "source-archive",
+                new DateTimeOffset(2026, 5, 31, 0, 0, 0, TimeSpan.Zero),
+                layout,
+                [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)],
+                "source"
+            );
+            using var serviceProvider = CreateStreamingServices(
+                sourceRoot,
+                descriptor,
+                sourceStore,
+                targetStore).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+                () => synchronizer.SyncAsync(new SyncRunRequest(sourceRoot)));
+
+            StringAssert.Contains(exception.Message, ArchiveInternalFolderNames.TemporaryUploads);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAndVerifyIgnoreFilesystemTemporaryUploadWorkspace()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var orphanPath = Path.Combine
+            (
+                targetRoot,
+                ".YABT-TMP",
+                "interrupted-upload.tmp"
+            );
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "source content");
+            await WriteTextFileAsync(orphanPath, "partial content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            var syncResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            var verifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(syncResult.Completed);
+            Assert.AreEqual(1, syncResult.NewCount);
+            Assert.AreEqual(0, syncResult.ExtraCount);
+            Assert.IsTrue(verifyResult.Completed);
+            Assert.AreEqual(1, verifyResult.UnchangedCount);
+            Assert.AreEqual(0, verifyResult.ExtraCount);
+            Assert.IsTrue(File.Exists(orphanPath));
+
+            var manifestSerializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+            await using var manifestContent = File.OpenRead(Path.Combine(
+                targetRoot,
+                ArchiveChangeManifest.FileName));
+            var manifest = await manifestSerializer.ReadAsync(manifestContent);
+            Assert.AreEqual("file.txt", manifest.Entries.Single().RelativePath);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task ByteForByteComparisonDetectsContentChangeWithSameFingerprint()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var sourceFile = Path.Combine(sourceRoot, "file.txt");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WriteTextFileAsync(sourceFile, "first-value");
+            var originalLastWriteTimeUtc = File.GetLastWriteTimeUtc(sourceFile);
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(firstResult.Completed);
+
+            await WriteTextFileAsync(sourceFile, "other-value");
+            File.SetLastWriteTimeUtc(sourceFile, originalLastWriteTimeUtc);
+
+            var fastVerifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+            var fullVerifyResult = await synchronizer.VerifyAsync(
+                new SyncRunRequest(sourceRoot, ByteForByte: true));
+
+            Assert.IsTrue(fastVerifyResult.Completed);
+            Assert.AreEqual(1, fastVerifyResult.UnchangedCount);
+            Assert.IsFalse(fullVerifyResult.Completed);
+            Assert.AreEqual(1, fullVerifyResult.ChangedCount);
+
+            var fullSyncResult = await synchronizer.SyncAsync(
+                new SyncRunRequest(sourceRoot, ByteForByte: true));
+
+            Assert.IsTrue(fullSyncResult.Completed);
+            Assert.AreEqual(1, fullSyncResult.ChangedCount);
+            AssertTextFile(Path.Combine(targetRoot, "file.txt"), "other-value");
+
+            var stableVerifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(stableVerifyResult.Completed);
+            Assert.AreEqual(1, stableVerifyResult.UnchangedCount);
+
+            await WriteTextFileAsync(Path.Combine(targetRoot, "file.txt"), "wrong-value");
+
+            var fastCorruptionResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+            var fullCorruptionResult = await synchronizer.VerifyAsync(
+                new SyncRunRequest(sourceRoot, ByteForByte: true));
+
+            Assert.IsTrue(fastCorruptionResult.Completed);
+            Assert.AreEqual(1, fastCorruptionResult.UnchangedCount);
+            Assert.IsFalse(fullCorruptionResult.Completed);
+            Assert.AreEqual(1, fullCorruptionResult.ChangedCount);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncRebuildsInvalidChangeManifestAfterFullComparison()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var manifestPath = Path.Combine(targetRoot, ArchiveChangeManifest.FileName);
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "source content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(firstResult.Completed);
+
+            await File.WriteAllTextAsync(manifestPath, "{ invalid manifest");
+
+            await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.VerifyAsync(
+                new SyncRunRequest(sourceRoot)));
+
+            var fullVerifyResult = await synchronizer.VerifyAsync(
+                new SyncRunRequest(sourceRoot, ByteForByte: true));
+            Assert.IsTrue(fullVerifyResult.Completed);
+            Assert.AreEqual(1, fullVerifyResult.UnchangedCount);
+
+            var recoveryResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(recoveryResult.Completed);
+            Assert.AreEqual(0, recoveryResult.NewCount);
+            Assert.AreEqual(0, recoveryResult.ChangedCount);
+            Assert.AreEqual(1, recoveryResult.UnchangedCount);
+
+            var serializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+            await using (var manifestContent = File.OpenRead(manifestPath))
+            {
+                var rebuiltManifest = await serializer.ReadAsync(manifestContent);
+                Assert.AreEqual(1, rebuiltManifest.Entries.Count());
+            }
+
+            var historicalManifestPath = Directory.GetFiles(
+                Path.Combine(targetRoot, ".yabt-hist"),
+                ArchiveChangeManifest.FileName,
+                SearchOption.AllDirectories).Single();
+            Assert.AreEqual("{ invalid manifest", await File.ReadAllTextAsync(historicalManifestPath));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
     public async Task SyncAsyncMovesChangedTargetObjectToHistory()
     {
         var workspace = CreateWorkspacePath();
@@ -1154,6 +1435,7 @@ public sealed class ArchiveSynchronizerTests
             services.AddSingleton(timeProvider);
         }
 
+        services.AddYabtMetadata();
         services.AddSingleton<IBackupRootLocator>(new FixedBackupRootLocator(
             sourceRoot,
             descriptor));
@@ -1291,6 +1573,115 @@ public sealed class ArchiveSynchronizerTests
         {
             Directory.Delete(workspace, recursive: true);
         }
+    }
+
+    private sealed class DataReadGuardObjectStore(IObjectStore _innerStore) : IObjectStore
+    {
+        public bool RejectDataReads { get; set; }
+
+        public bool HideContentLengths { get; set; }
+
+        public bool StopUploadsAfterEmptyRead { get; set; }
+
+        public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
+            _innerStore.EnsureReadyAsync(cancellationToken);
+
+        public async Task UploadAsync
+        (
+            string key,
+            Stream content,
+            string contentType,
+            IReadOnlyDictionary<string, string> metadata,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (!StopUploadsAfterEmptyRead)
+            {
+                await _innerStore.UploadAsync(
+                    key,
+                    content,
+                    contentType,
+                    metadata,
+                    cancellationToken);
+                return;
+            }
+
+            _ = await content.ReadAsync(Memory<byte>.Empty, cancellationToken);
+            await using var partialContent = new MemoryStream([], writable: false);
+            await _innerStore.UploadAsync(
+                key,
+                partialContent,
+                contentType,
+                metadata,
+                cancellationToken);
+        }
+
+        public Task<ArchiveObjectContent> OpenReadAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (RejectDataReads &&
+                !string.Equals(key, ArchiveChangeManifest.FileName, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Data object '{key}' must not be opened.");
+            }
+
+            return _innerStore.OpenReadAsync(key, cancellationToken);
+        }
+
+        public Task<bool> ExistsAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => _innerStore.ExistsAsync(key, cancellationToken);
+
+        public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
+        (
+            string? folderPrefix,
+            bool recursive = false,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default
+        )
+        {
+            var items = _innerStore.GetFolderItemsAsync(
+                folderPrefix,
+                recursive,
+                cancellationToken);
+            await foreach (var item in items)
+            {
+                if (HideContentLengths && item.Object is not null)
+                {
+                    yield return item with
+                    {
+                        Object = item.Object with
+                        {
+                            ContentLength = null,
+                        },
+                    };
+                    continue;
+                }
+
+                yield return item;
+            }
+        }
+
+        public Task MoveAsync
+        (
+            string source,
+            string destination,
+            CancellationToken cancellationToken = default
+        ) => _innerStore.MoveAsync(source, destination, cancellationToken);
+
+        public Task MoveFolderAsync
+        (
+            string sourcePrefix,
+            string destinationPrefix,
+            CancellationToken cancellationToken = default
+        ) => _innerStore.MoveFolderAsync(
+            sourcePrefix,
+            destinationPrefix,
+            cancellationToken);
     }
 
     private sealed class FailingAfterFirstListedObjectStore : IObjectStore

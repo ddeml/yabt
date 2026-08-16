@@ -117,6 +117,8 @@ internal sealed class MirrorArchiveFormatProjector
         string relativePath
     )
     {
+        var changeFingerprint = GetChangeFingerprint(sourceObject);
+
         return new
         (
             relativePath,
@@ -125,8 +127,23 @@ internal sealed class MirrorArchiveFormatProjector
                 cancellationToken),
             sourceObject.ContentLength,
             sourceObject.LastModifiedUtc,
-            sourceObject.ContentHash
+            sourceObject.ContentHash,
+            changeFingerprint
         );
+    }
+
+    private static string? GetChangeFingerprint(ArchiveObjectInfo sourceObject)
+    {
+        if (!string.IsNullOrWhiteSpace(sourceObject.ChangeFingerprint))
+        {
+            return sourceObject.ChangeFingerprint;
+        }
+
+        ArchiveChangeFingerprint.TryCreate(
+            sourceObject.ContentLength,
+            sourceObject.LastModifiedUtc,
+            out var changeFingerprint);
+        return changeFingerprint;
     }
 
     private static ArchiveProjectedObject CreateEmptyFolderMarker
@@ -152,7 +169,8 @@ internal sealed class MirrorArchiveFormatProjector
                 return Task.FromResult(new ArchiveObjectContent(
                     new MemoryStream([], writable: false)));
             },
-            0
+            0,
+            ChangeFingerprint: "yabt-empty-v1:present"
         );
     }
 }

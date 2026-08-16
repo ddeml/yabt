@@ -11,6 +11,35 @@ namespace Yabt.FileSystem.Tests;
 public sealed class FileSystemObjectStoreTests
 {
     [TestMethod]
+    public async Task UploadAsyncLeavesSharedTemporaryDirectoryEmpty()
+    {
+        var rootPath = CreateTemporaryRoot();
+        try
+        {
+            using var serviceProvider = CreateServices(rootPath, listChunkSize: 10).BuildServiceProvider();
+            var store = serviceProvider.GetRequiredService<IObjectStore>();
+            await using var content = new MemoryStream("content"u8.ToArray());
+
+            await store.UploadAsync
+            (
+                "folder/file.txt",
+                content,
+                "text/plain",
+                new Dictionary<string, string>(StringComparer.Ordinal)
+            );
+
+            Assert.IsTrue(File.Exists(Path.Combine(rootPath, "folder", "file.txt")));
+            var temporaryDirectory = Path.Combine(rootPath, ".yabt-tmp");
+            Assert.IsTrue(Directory.Exists(temporaryDirectory));
+            Assert.IsFalse(Directory.EnumerateFileSystemEntries(temporaryDirectory).Any());
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task GetFolderItemsAsyncReturnsAllObjectsAcrossChunks()
     {
         var rootPath = CreateTemporaryRoot();

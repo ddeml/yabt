@@ -20,13 +20,19 @@
           "relativePath": { "type": "string" },
           "length": { "type": "integer", "minimum": 0 },
           "lastWriteTimeUtc": { "type": "string", "format": "date-time" },
-          "contentHash": { "type": ["string", "null"] }
+          "contentHash": {
+            "type": ["string", "null"],
+            "pattern": "^xxh128:[0-9a-f]{32}$"
+          }
         },
         "required": ["relativePath", "length", "lastWriteTimeUtc"]
       }
     },
     "totalBytes": { "type": "integer", "minimum": 0 },
-    "manifestHash": { "type": "string" },
+    "manifestHash": {
+      "type": "string",
+      "pattern": "^xxh128:[0-9a-f]{32}$"
+    },
     "packageName": {
       "type": "string",
       "minLength": 1

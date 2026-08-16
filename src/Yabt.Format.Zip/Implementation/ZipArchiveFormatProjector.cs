@@ -1,5 +1,5 @@
+using System.Buffers.Binary;
 using System.Collections.Frozen;
-using System.Globalization;
 using System.IO.Compression;
 using System.IO.Hashing;
 using System.Runtime.CompilerServices;
@@ -18,6 +18,9 @@ internal sealed class ZipArchiveFormatProjector
 ) : IArchiveFormatProjector
 {
     private const int DefaultHashBufferSize = 81_920;
+
+    private static readonly byte[] PackageFingerprintDomain =
+        Encoding.UTF8.GetBytes("yabt-zip-change-v1");
 
     // ZIP entry timestamps cannot represent dates before 1980. When a source provider does not
     // supply a modification time, use this fixed value instead of the current time so repeated
@@ -55,18 +58,23 @@ internal sealed class ZipArchiveFormatProjector
         var sourceObjects = await ListSourceObjectsAsync(
             request,
             cancellationToken);
-        var manifestHash = ComputeManifestHash(sourceObjects);
+        var compressionLevel = _options.CurrentValue.CompressionLevel ?? default;
+        var packageChangeFingerprint = ComputePackageChangeFingerprint(
+            sourceObjects,
+            compressionLevel);
         var packageName = CreatePackageName(
             request.SourceDisplayName,
             request.SourcePrefix,
-            manifestHash);
+            packageChangeFingerprint);
 
         //TODO: Project the adjacent manifest as a second object once manifest canonicalization is finalized.
         var packageObject = CreatePackageObject
         (
             packageName,
             request.SourceStore,
-            sourceObjects
+            sourceObjects,
+            compressionLevel,
+            packageChangeFingerprint
         );
 
         yield return packageObject;
@@ -135,33 +143,72 @@ internal sealed class ZipArchiveFormatProjector
                 continue;
             }
 
-            //TODO: Replace eager per-file hashing with the shared manifest hashing pipeline.
-            var hashResult = string.IsNullOrWhiteSpace(sourceItem.Object.ContentHash) ?
-                await ComputeSourceObjectHashAsync(
-                    sourceStore,
-                    sourceKey,
-                    cancellationToken) :
-                new ZipSourceObjectHashResult
-                (
-                    sourceItem.Object.ContentLength,
-                    sourceItem.Object.ContentHash
-                );
+            var fingerprintResult = await GetSourceObjectFingerprintAsync(
+                sourceStore,
+                sourceItem.Object,
+                sourceKey,
+                cancellationToken);
 
             sourceObjects.Add(new
             (
                 sourceKey,
                 relativePath,
-                hashResult.Length,
+                fingerprintResult.Length,
                 sourceItem.Object.LastModifiedUtc?.ToUniversalTime() ?? DefaultLastModifiedUtc,
-                hashResult.ContentHash
+                fingerprintResult.ChangeFingerprint
             ));
         }
+    }
+
+    private async Task<ZipSourceObjectFingerprintResult> GetSourceObjectFingerprintAsync
+    (
+        IReadOnlyObjectStore sourceStore,
+        ArchiveObjectInfo sourceObject,
+        string sourceKey,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!string.IsNullOrWhiteSpace(sourceObject.ChangeFingerprint))
+        {
+            return new
+            (
+                sourceObject.ContentLength,
+                sourceObject.ChangeFingerprint
+            );
+        }
+
+        if (ArchiveChangeFingerprint.TryCreate(
+                sourceObject.ContentLength,
+                sourceObject.LastModifiedUtc,
+                out var changeFingerprint))
+        {
+            return new
+            (
+                sourceObject.ContentLength,
+                changeFingerprint
+            );
+        }
+
+        if (!string.IsNullOrWhiteSpace(sourceObject.ContentHash))
+        {
+            return new
+            (
+                sourceObject.ContentLength,
+                sourceObject.ContentHash
+            );
+        }
+
+        return await ComputeSourceObjectHashAsync(
+            sourceStore,
+            sourceKey,
+            cancellationToken);
     }
 
     private async Task<ArchiveObjectContent> BuildPackageAsync
     (
         IReadOnlyObjectStore sourceStore,
         IReadOnlyList<ZipSourceObject> sourceObjects,
+        CompressionLevel compressionLevel,
         CancellationToken cancellationToken
     )
     {
@@ -175,7 +222,7 @@ internal sealed class ZipArchiveFormatProjector
                 var entry = archive.CreateEntry
                 (
                     sourceObject.RelativePath,
-                    _options.CurrentValue.CompressionLevel ?? default
+                    compressionLevel
                 );
                 entry.LastWriteTime = sourceObject.LastModifiedUtc.ToUniversalTime();
 
@@ -200,7 +247,9 @@ internal sealed class ZipArchiveFormatProjector
     (
         string packageName,
         IReadOnlyObjectStore sourceStore,
-        IReadOnlyList<ZipSourceObject> sourceObjects
+        IReadOnlyList<ZipSourceObject> sourceObjects,
+        CompressionLevel compressionLevel,
+        string packageChangeFingerprint
     ) => new
     (
         packageName,
@@ -208,14 +257,16 @@ internal sealed class ZipArchiveFormatProjector
         (
             sourceStore,
             sourceObjects,
+            compressionLevel,
             cancellationToken
         ),
-        // The manifest hash identifies logical inputs, not the finished ZIP bytes.
-        // Leave ContentHash unset so synchronization compares the actual package streams.
-        ContentHash: null
+        // The change fingerprint identifies logical inputs, not the finished ZIP bytes.
+        // Leave ContentHash unset so full verification can compare the actual package streams.
+        ContentHash: null,
+        ChangeFingerprint: packageChangeFingerprint
     );
 
-    private async Task<ZipSourceObjectHashResult> ComputeSourceObjectHashAsync
+    private async Task<ZipSourceObjectFingerprintResult> ComputeSourceObjectHashAsync
     (
         IReadOnlyObjectStore sourceStore,
         string sourceKey,
@@ -243,7 +294,7 @@ internal sealed class ZipArchiveFormatProjector
         return new
         (
             length,
-            ToContentHash(hash.GetHashAndReset())
+            ArchiveHash.Format(hash.GetHashAndReset())
         );
     }
 
@@ -258,21 +309,57 @@ internal sealed class ZipArchiveFormatProjector
         return hashBufferSize;
     }
 
-    private static string ComputeManifestHash(IReadOnlyList<ZipSourceObject> sourceObjects)
+    private static string ComputePackageChangeFingerprint
+    (
+        IReadOnlyList<ZipSourceObject> sourceObjects,
+        CompressionLevel compressionLevel
+    )
     {
         var hash = new XxHash128();
+        hash.Append(PackageFingerprintDomain);
+
+        Span<byte> compressionLevelValue = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32BigEndian(
+            compressionLevelValue,
+            (int)compressionLevel);
+        hash.Append(compressionLevelValue);
 
         foreach (var sourceObject in sourceObjects)
         {
-            var length = sourceObject.Length?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
-            var line =
-                $"{sourceObject.RelativePath}\t{length}\t" +
-                $"{sourceObject.LastModifiedUtc.UtcDateTime:O}\t{sourceObject.ContentHash}\n";
-            var bytes = Encoding.UTF8.GetBytes(line);
-            hash.Append(bytes);
+            AppendCanonicalString(hash, sourceObject.RelativePath);
+            AppendCanonicalNullableInt64(hash, sourceObject.Length);
+            AppendCanonicalInt64(hash, sourceObject.LastModifiedUtc.UtcDateTime.Ticks);
+            AppendCanonicalString(hash, sourceObject.ChangeFingerprint);
         }
 
-        return ToContentHash(hash.GetHashAndReset());
+        return ArchiveHash.Format(hash.GetHashAndReset());
+    }
+
+    private static void AppendCanonicalString(XxHash128 hash, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32BigEndian(length, bytes.Length);
+        hash.Append(length);
+        hash.Append(bytes);
+    }
+
+    private static void AppendCanonicalNullableInt64(XxHash128 hash, long? value)
+    {
+        Span<byte> hasValue = stackalloc byte[1];
+        hasValue[0] = value.HasValue ? (byte)1 : (byte)0;
+        hash.Append(hasValue);
+        if (value.HasValue)
+        {
+            AppendCanonicalInt64(hash, value.Value);
+        }
+    }
+
+    private static void AppendCanonicalInt64(XxHash128 hash, long value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(long)];
+        BinaryPrimitives.WriteInt64BigEndian(bytes, value);
+        hash.Append(bytes);
     }
 
     private static string CreatePackageName
@@ -315,23 +402,18 @@ internal sealed class ZipArchiveFormatProjector
         return $"{value[..separator]}-{value[(separator + 1)..]}";
     }
 
-    private static string ToContentHash(byte[] hash)
-    {
-        return $"xxh128:{Convert.ToHexString(hash).ToLowerInvariant()}";
-    }
-
     private sealed record ZipSourceObject
     (
         string SourceKey,
         string RelativePath,
         long? Length,
         DateTimeOffset LastModifiedUtc,
-        string ContentHash
+        string ChangeFingerprint
     );
 
-    private sealed record ZipSourceObjectHashResult
+    private sealed record ZipSourceObjectFingerprintResult
     (
         long? Length,
-        string ContentHash
+        string ChangeFingerprint
     );
 }

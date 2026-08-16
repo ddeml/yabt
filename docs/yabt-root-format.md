@@ -25,6 +25,8 @@ The root descriptor records:
 
 It does not record operational state such as last sync time, scan cursors, upload checkpoints, cache keys, or retry state.
 
+During MVP development, readers accept only `schemaVersion: 1`.
+
 ## Object Stores
 
 Object stores are identified by provider-owned string names.

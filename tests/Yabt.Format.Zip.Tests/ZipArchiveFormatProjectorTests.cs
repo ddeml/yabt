@@ -47,6 +47,12 @@ public sealed class ZipArchiveFormatProjectorTests
             projectedObject.RelativePath,
             new Regex("^Photos\\.xxh128-[0-9a-f]{32}\\.zip$", RegexOptions.CultureInvariant));
         Assert.IsNull(projectedObject.ContentHash);
+        StringAssert.Matches(
+            projectedObject.ChangeFingerprint,
+            new Regex("^xxh128:[0-9a-f]{32}$", RegexOptions.CultureInvariant));
+        StringAssert.Contains(
+            projectedObject.RelativePath,
+            projectedObject.ChangeFingerprint.Replace(':', '-'));
 
         await using var content = await projectedObject.OpenContentAsync(default);
         using var archive = new ZipArchive(content.Content, ZipArchiveMode.Read);
@@ -79,6 +85,9 @@ public sealed class ZipArchiveFormatProjectorTests
             projector.ProjectAsync(request))).Single();
 
         Assert.AreEqual(firstProjection.RelativePath, secondProjection.RelativePath);
+        Assert.AreEqual(
+            "Photos.xxh128-3d588f692fb138a6fec2d5713302c07f.zip",
+            firstProjection.RelativePath);
         StringAssert.Matches(
             firstProjection.RelativePath,
             new Regex("^Photos\\.xxh128-[0-9a-f]{32}\\.zip$", RegexOptions.CultureInvariant));
@@ -113,6 +122,55 @@ public sealed class ZipArchiveFormatProjectorTests
         )))).Single();
 
         Assert.AreNotEqual(firstProjection.RelativePath, secondProjection.RelativePath);
+    }
+
+    [TestMethod]
+    public async Task ProjectAsyncUsesMetadataFingerprintWithoutOpeningSourceContent()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var projector = serviceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var innerStore = new MemoryObjectStore(provideContentHash: false);
+        await UploadTextAsync(innerStore, "folder/file.txt", "source content");
+        var sourceStore = new CountingReadOnlyObjectStore(innerStore);
+
+        var projectedObject = (await CollectProjectedObjectsAsync(projector.ProjectAsync(new
+        (
+            sourceStore,
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        )))).Single();
+
+        Assert.AreEqual(0, sourceStore.OpenReadCount);
+        StringAssert.StartsWith(
+            projectedObject.ChangeFingerprint,
+            "xxh128:");
+
+        _ = await ReadContentBytesAsync(projectedObject);
+
+        Assert.AreEqual(1, sourceStore.OpenReadCount);
+    }
+
+    [TestMethod]
+    public async Task ProjectAsyncReadsSourceToFingerprintWhenMetadataAndContentHashAreIncomplete()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var projector = serviceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var innerStore = new MemoryObjectStore(provideContentHash: false);
+        await UploadTextAsync(innerStore, "folder/file.txt", "source content");
+        var countingStore = new CountingReadOnlyObjectStore(innerStore);
+        var sourceStore = new MissingLastModifiedObjectStore(countingStore);
+
+        var projectedObject = (await CollectProjectedObjectsAsync(projector.ProjectAsync(new
+        (
+            sourceStore,
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        )))).Single();
+
+        Assert.AreEqual(1, countingStore.OpenReadCount);
+        StringAssert.StartsWith(
+            projectedObject.ChangeFingerprint,
+            "xxh128:");
     }
 
     [TestMethod]
@@ -153,6 +211,36 @@ public sealed class ZipArchiveFormatProjectorTests
         Assert.AreEqual(
             new DateTime(1980, 1, 1),
             entry.LastWriteTime.DateTime);
+    }
+
+    [TestMethod]
+    public async Task ProjectAsyncIncludesTimestampWhenLengthIsMissing()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var projector = serviceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var firstStore = new MemoryObjectStore(
+            new ZipSourceTimeProvider(new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero)),
+            provideContentHash: true);
+        var secondStore = new MemoryObjectStore(
+            new ZipSourceTimeProvider(new DateTimeOffset(2026, 8, 16, 13, 0, 0, TimeSpan.Zero)),
+            provideContentHash: true);
+        await UploadTextAsync(firstStore, "folder/file.txt", "same content");
+        await UploadTextAsync(secondStore, "folder/file.txt", "same content");
+
+        var firstProjection = (await CollectProjectedObjectsAsync(projector.ProjectAsync(new
+        (
+            new MissingContentLengthObjectStore(firstStore),
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        )))).Single();
+        var secondProjection = (await CollectProjectedObjectsAsync(projector.ProjectAsync(new
+        (
+            new MissingContentLengthObjectStore(secondStore),
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        )))).Single();
+
+        Assert.AreNotEqual(firstProjection.RelativePath, secondProjection.RelativePath);
     }
 
     [TestMethod]
@@ -265,6 +353,86 @@ public sealed class ZipArchiveFormatProjectorTests
                         LastModifiedUtc = null,
                     },
                 };
+            }
+        }
+    }
+
+    private sealed class MissingContentLengthObjectStore(IReadOnlyObjectStore _inner) : IReadOnlyObjectStore
+    {
+        public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
+            _inner.EnsureReadyAsync(cancellationToken);
+
+        public Task<ArchiveObjectContent> OpenReadAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => _inner.OpenReadAsync(key, cancellationToken);
+
+        public Task<bool> ExistsAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => _inner.ExistsAsync(key, cancellationToken);
+
+        public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
+        (
+            string? folderPrefix,
+            bool recursive = false,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default
+        )
+        {
+            var folderItems = _inner.GetFolderItemsAsync(
+                folderPrefix,
+                recursive,
+                cancellationToken);
+            await foreach (var folderItem in folderItems)
+            {
+                yield return folderItem with
+                {
+                    Object = folderItem.Object is null ? null : folderItem.Object with
+                    {
+                        ContentLength = null,
+                    },
+                };
+            }
+        }
+    }
+
+    private sealed class CountingReadOnlyObjectStore(IReadOnlyObjectStore _inner) : IReadOnlyObjectStore
+    {
+        public int OpenReadCount { get; private set; }
+
+        public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
+            _inner.EnsureReadyAsync(cancellationToken);
+
+        public Task<ArchiveObjectContent> OpenReadAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        )
+        {
+            OpenReadCount++;
+            return _inner.OpenReadAsync(key, cancellationToken);
+        }
+
+        public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) =>
+            _inner.ExistsAsync(key, cancellationToken);
+
+        public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
+        (
+            string? folderPrefix,
+            bool recursive = false,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default
+        )
+        {
+            var folderItems = _inner.GetFolderItemsAsync(
+                folderPrefix,
+                recursive,
+                cancellationToken);
+
+            await foreach (var folderItem in folderItems)
+            {
+                yield return folderItem;
             }
         }
     }

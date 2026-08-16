@@ -52,6 +52,8 @@ Archive-style roots may still configure explicit prefixes such as `livePrefix = 
 
 When `livePrefix` is empty, YABT metadata paths and the configured history prefix are internal to the archive root and are not ordinary live data.
 
+The filesystem provider reserves `.yabt-tmp` at the archive root for same-filesystem upload staging. Each upload should use a uniquely named temporary file, remove that file after the completed file is atomically moved into place or after a controlled failure, and leave the shared staging directory in place. Deleting and recreating the shared directory can race concurrent YABT processes. An empty directory means no upload is currently staged; nonempty contents may belong to a concurrent upload or an interrupted run. Reject live or history prefixes that overlap `.yabt-tmp`, including case variants, so staging can never mix with archive data.
+
 Do not deduplicate the logical live branch.
 
 Future deduplication may occur only under the logical history branch, and only through explicit reference placeholder JSON files. Do not implement deduplication until requested.
@@ -129,7 +131,7 @@ Example:
 Vacation.xxh128-a91f3c2e5b7d4f8096a1c3e8d2b4f607.zip
 ```
 
-Do not put the projection or package creation time in the package artifact name. Creation time belongs in the manifest, while synchronization history paths record when a live artifact was replaced. Any creation time embedded inside a package must be stable for that content version rather than regenerated on every projection, so it does not make the package vary on every run. The current ZIP projector uses the full lowercase 128-bit xxHash value of a logical representation containing source paths, lengths, modification times, and content hashes; do not truncate it to an arbitrary short prefix. An unchanged logical source manifest should produce the same live object key, while changed logical source manifests produce new immutable keys. Older package versions should remain preserved in history.
+Do not put the projection or package creation time in the package artifact name. Creation time belongs in the manifest, while synchronization history paths record when a live artifact was replaced. Any creation time embedded inside a package must be stable for that content version rather than regenerated on every projection, so it does not make the package vary on every run. YABT-owned hashes use the full lowercase 128-bit xxHash128 value. The current ZIP projector hashes a logical representation containing ordered source paths, archived lengths and modification times, versioned per-object change fingerprints, and output-affecting compression settings. A normal file fingerprint uses its known length and exact UTC modification time; incomplete metadata falls back to a provider content hash or a byte scan. Do not truncate the aggregate hash to an arbitrary short prefix. An unchanged logical source manifest should produce the same live object key, while changed logical source manifests produce new immutable keys. Older package versions should remain preserved in history. Provider-supplied checksums may use provider-owned algorithms and must not be treated as comparable unless their algorithm is known.
 
 When a subfolder is packaged, place its package artifact and adjacent metadata directly in the logical parent folder. Do not create a target folder corresponding to the packaged source folder. Packaging the selected root still places its artifacts at the target live root.
 
@@ -163,18 +165,19 @@ Metadata files should move with folders and survive reorganization.
 
 Operational state belongs in disposable cache only.
 
+The root `.yabt-change-manifest.json` is durable, human-readable comparison evidence rather than operational state or a disposable cache. It records live-relative artifact fingerprints, actual lengths, and actual-byte content hashes. Do not use target-native modification time as a substitute for the persisted source-derived fingerprint.
+
+During MVP development, accept only the exact current metadata filenames, schema versions, and hash formats. Do not add legacy aliases, backward-compatibility readers, or migration paths unless Leo explicitly requests them.
+
 ## Change Detection
 
-The system must eventually support scalable change detection for millions of files.
+Normal `sync` and `verify` use `.yabt-change-manifest.json` and versioned metadata fingerprints to avoid opening unchanged objects. A file metadata fingerprint is based on known length plus its exact modification time converted to UTC. Keep `ChangeFingerprint` distinct from `ContentHash`: both use xxHash128, but the fingerprint hashes quick-change metadata while the content hash covers the actual projected artifact bytes. xxHash128 provides fast accidental-change detection with a very low probability of an accidental collision; it is not intended as a cryptographic or adversarial integrity guarantee.
 
-Architecture should allow future integration with:
+Metadata fingerprints are not content proof. Same-length data whose timestamp was preserved, and same-length target corruption, may pass a quick check. `sync --byte-for-byte` and `verify --byte-for-byte` must bypass the fast match and compare complete streams. Missing timestamps, incomplete target length metadata, absent manifest evidence, or changed fingerprints must fall back to stream comparison. Do not use the ZIP-safe 1980 timestamp fallback as a general change-detection timestamp.
 
-- Synology btrfs snapshot diffing.
-- Filesystem event monitoring.
-- Manifest hashing.
-- Incremental reconciliation.
+Store the live change manifest at the archive root, outside an explicit `livePrefix`, with logical live-relative entry paths. Treat `.yabt-change-manifest.json` as reserved internal metadata when `livePrefix` is empty. Move the prior manifest aside before the first live mutation and write the replacement last so interruption removes trusted quick evidence. A mutating sync should quarantine and rebuild an invalid manifest; byte-for-byte comparison must remain usable without trusting it.
 
-Do not implement full scanning logic in the scaffold. Keep abstractions ready for future scalable delta discovery.
+The current root-wide manifest avoids repeated byte scans but still performs metadata traversal and O(total objects) manifest work. Architecture should allow future folder-local or sharded manifests, Synology btrfs snapshot diffing, filesystem event monitoring, and incremental reconciliation for millions of files. Any cache remains disposable and non-authoritative.
 
 ## Initial Technical Stack
 
@@ -238,7 +241,7 @@ Future command surface:
 - `pack`
 - `reconcile`
 
-Only scaffold command structure until sync semantics are designed.
+`sync` and `verify` are implemented. Keep restore, scan, pack, and reconcile behavior scaffolded until their semantics are designed.
 
 ## Coding Style
 

@@ -407,7 +407,11 @@ internal sealed class FileSystemObjectStore
         }
     }
 
-    private static string GetTemporaryDirectory(string rootPath) => ResolveObjectPath(rootPath, ".yabt-tmp");
+    private static string GetTemporaryDirectory(string rootPath) => ResolveObjectPath
+    (
+        rootPath,
+        ArchiveInternalFolderNames.TemporaryUploads
+    );
 
     private static IEnumerable<ArchiveFolderItem> EnumerateFolderItems
     (

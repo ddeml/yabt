@@ -18,6 +18,7 @@ public static class YabtMetadataServiceCollectionExtensions
         services.AddSingleton<IBackupRootLocator, JsonBackupRootLocator>();
         services.AddSingleton<IBackupRootReader, JsonBackupRootReader>();
         services.AddSingleton<IBackupRootSerializer, JsonBackupRootSerializer>();
+        services.AddSingleton<IChangeManifestSerializer, JsonChangeManifestSerializer>();
         services.AddSingleton<IFolderPolicyReader, JsonFolderPolicyReader>();
         services.AddSingleton<IManifestSerializer, JsonManifestSerializer>();
         return services;

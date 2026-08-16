@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Frozen;
+using System.IO.Hashing;
 using Microsoft.Extensions.Logging;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
@@ -15,6 +16,7 @@ internal sealed class ArchiveSynchronizer
     IEnumerable<IArchiveFormatProjector> projectors,
     IEnumerable<IBackupRootStoreResolver> storeResolvers,
     IEnumerable<ISourceRootObjectStoreResolver> sourceRootObjectStoreResolvers,
+    IChangeManifestSerializer _changeManifestSerializer,
     TimeProvider _timeProvider
 ) : IArchiveSynchronizer
 {
@@ -57,6 +59,7 @@ internal sealed class ArchiveSynchronizer
             context,
             writeChanges: !request.DryRun,
             verifyOnly: false,
+            byteForByte: request.ByteForByte,
             operationName: request.DryRun ? "sync dry run" : "sync",
             cancellationToken);
     }
@@ -113,6 +116,7 @@ internal sealed class ArchiveSynchronizer
             context,
             writeChanges: false,
             verifyOnly: true,
+            byteForByte: request.ByteForByte,
             operationName: "verify",
             cancellationToken);
     }
@@ -168,6 +172,7 @@ internal sealed class ArchiveSynchronizer
             sourceRootPath,
             cancellationToken);
         var sourceDescriptor = sourceLocation.Descriptor;
+        ValidateInternalLayoutPrefixes(sourceDescriptor.Layout);
         var targetStoreConfiguration = GetTargetStoreConfiguration(
             sourceDescriptor,
             request.TargetStoreId);
@@ -299,12 +304,24 @@ internal sealed class ArchiveSynchronizer
         ArchiveSyncContext context,
         bool writeChanges,
         bool verifyOnly,
+        bool byteForByte,
         string operationName,
         CancellationToken cancellationToken
     )
     {
         await context.SourceStore.EnsureReadyAsync(cancellationToken);
         await context.TargetStore.EnsureReadyAsync(cancellationToken);
+
+        var changeManifestLoad = await ReadChangeManifestAsync(
+            context.TargetStore,
+            recoverInvalidManifest: writeChanges || byteForByte,
+            cancellationToken);
+        var previousChangeManifest = changeManifestLoad.Manifest;
+        var previousManifestEntries = previousChangeManifest?.Entries.ToDictionary(
+            entry => entry.RelativePath,
+            StringComparer.Ordinal) ??
+            new Dictionary<string, ArchiveChangeManifestEntry>(StringComparer.Ordinal);
+        var nextManifestEntries = new Dictionary<string, ArchiveChangeManifestEntry>(StringComparer.Ordinal);
 
         var targetFolders = new Dictionary<string, TargetFolderState>(StringComparer.Ordinal);
         var desiredFolderPaths = new HashSet<string>(StringComparer.Ordinal);
@@ -323,6 +340,21 @@ internal sealed class ArchiveSynchronizer
             context.TargetStore,
             context.TargetDescriptor.Layout,
             _timeProvider.GetUtcNow());
+        var changeManifestInvalidated = false;
+
+        async Task EnsureChangeManifestInvalidatedAsync(CancellationToken currentCancellationToken)
+        {
+            if (!changeManifestLoad.Exists || changeManifestInvalidated)
+            {
+                return;
+            }
+
+            await MoveChangeManifestToHistoryAsync(
+                context.TargetStore,
+                historyKeyAllocator,
+                currentCancellationToken);
+            changeManifestInvalidated = true;
+        }
 
         await foreach (var projectedObject in projectedObjects)
         {
@@ -348,19 +380,30 @@ internal sealed class ArchiveSynchronizer
 
             if (targetObject is not null)
             {
-                if (await HasSameContentAsync(
+                previousManifestEntries.TryGetValue(relativePath, out var previousManifestEntry);
+                var comparison = await CompareProjectedObjectAsync(
                         projectedObject,
                         context.TargetStore,
                         targetObject,
-                        cancellationToken))
+                        previousManifestEntry,
+                        byteForByte,
+                        cancellationToken);
+                if (comparison.Same)
                 {
                     summary.AddUnchanged();
+                    nextManifestEntries.Add(
+                        relativePath,
+                        comparison.ManifestEntry ??
+                            throw new YabtSyncException(
+                                $"Content comparison for '{relativePath}' did not produce manifest evidence."));
                     continue;
                 }
 
                 summary.AddChanged();
                 if (writeChanges)
                 {
+                    await EnsureChangeManifestInvalidatedAsync(cancellationToken);
+
                     await MoveTargetObjectToHistoryAsync(
                         context.TargetStore,
                         historyKeyAllocator,
@@ -368,12 +411,13 @@ internal sealed class ArchiveSynchronizer
                         relativePath,
                         cancellationToken);
 
-                    await UploadProjectedObjectAsync(
+                    var manifestEntry = await UploadProjectedObjectAsync(
                         context.TargetStore,
                         context.TargetDescriptor.Layout,
                         projectedObject,
                         relativePath,
                         cancellationToken);
+                    nextManifestEntries.Add(relativePath, manifestEntry);
                 }
 
                 continue;
@@ -382,12 +426,15 @@ internal sealed class ArchiveSynchronizer
             summary.AddNew();
             if (writeChanges)
             {
-                await UploadProjectedObjectAsync(
+                await EnsureChangeManifestInvalidatedAsync(cancellationToken);
+
+                var manifestEntry = await UploadProjectedObjectAsync(
                     context.TargetStore,
                     context.TargetDescriptor.Layout,
                     projectedObject,
                     relativePath,
                     cancellationToken);
+                nextManifestEntries.Add(relativePath, manifestEntry);
             }
         }
 
@@ -405,7 +452,27 @@ internal sealed class ArchiveSynchronizer
             targetFolders,
             summary,
             writeChanges,
+            EnsureChangeManifestInvalidatedAsync,
             cancellationToken);
+
+        if (writeChanges)
+        {
+            var nextChangeManifest = _changeManifestSerializer.Create(nextManifestEntries.Values);
+            var changeManifestNeedsWrite = changeManifestInvalidated ||
+                previousChangeManifest is null ||
+                !string.Equals(
+                    previousChangeManifest.ManifestHash,
+                    nextChangeManifest.ManifestHash,
+                    StringComparison.Ordinal);
+            if (changeManifestNeedsWrite)
+            {
+                await EnsureChangeManifestInvalidatedAsync(cancellationToken);
+                await UploadChangeManifestAsync(
+                    context.TargetStore,
+                    nextChangeManifest,
+                    cancellationToken);
+            }
+        }
 
         _logger.LogArchiveSyncCompleted(
             operationName,
@@ -418,7 +485,11 @@ internal sealed class ArchiveSynchronizer
             summary.NewCount == 0 &&
             summary.ChangedCount == 0 &&
             summary.ExtraCount == 0;
-        var message = BuildSummaryMessage(operationName, summary, verifyOnly);
+        var message = BuildSummaryMessage(
+            operationName,
+            summary,
+            verifyOnly,
+            byteForByte);
 
         return new
         (
@@ -583,6 +654,7 @@ internal sealed class ArchiveSynchronizer
         Dictionary<string, TargetFolderState> targetFolders,
         ArchiveSyncSummary summary,
         bool writeChanges,
+        Func<CancellationToken, Task> beforeFirstWriteAsync,
         CancellationToken cancellationToken
     )
     {
@@ -607,6 +679,8 @@ internal sealed class ArchiveSynchronizer
                 summary.AddExtra();
                 if (writeChanges)
                 {
+                    await beforeFirstWriteAsync(cancellationToken);
+
                     await MoveTargetObjectToHistoryAsync(
                         targetStore,
                         historyKeyAllocator,
@@ -626,6 +700,7 @@ internal sealed class ArchiveSynchronizer
                 relativeFolderPath,
                 summary,
                 writeChanges,
+                beforeFirstWriteAsync,
                 cancellationToken);
         }
     }
@@ -638,6 +713,7 @@ internal sealed class ArchiveSynchronizer
         string relativeFolderPath,
         ArchiveSyncSummary summary,
         bool writeChanges,
+        Func<CancellationToken, Task> beforeWriteAsync,
         CancellationToken cancellationToken
     )
     {
@@ -685,6 +761,8 @@ internal sealed class ArchiveSynchronizer
             return;
         }
 
+        await beforeWriteAsync(cancellationToken);
+
         var destinationFolderPrefix = await historyKeyAllocator.CreateHistoricalKeyAsync(
             relativeFolderPath,
             cancellationToken);
@@ -704,7 +782,7 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task UploadProjectedObjectAsync
+    private static async Task<ArchiveChangeManifestEntry> UploadProjectedObjectAsync
     (
         IObjectStore targetStore,
         ArchiveLayout targetLayout,
@@ -717,18 +795,133 @@ internal sealed class ArchiveSynchronizer
         try
         {
             await using var content = await projectedObject.OpenContentAsync(cancellationToken);
+            using var hashingContent = new ContentHashingReadStream(content.Content);
 
             await targetStore.UploadAsync(
                 targetKey,
-                content.Content,
+                hashingContent,
                 content.ContentType,
                 content.Metadata ?? EmptyMetadata,
                 cancellationToken);
+
+            var endProbe = new byte[1];
+            var unreadByteCount = await hashingContent.ReadAsync(
+                endProbe,
+                cancellationToken);
+            if (unreadByteCount != 0)
+            {
+                throw new InvalidDataException(
+                    $"Target upload for '{targetKey}' completed before consuming all projected content.");
+            }
+
+            return CreateManifestEntry(
+                relativePath,
+                projectedObject,
+                hashingContent.BytesRead,
+                hashingContent.CompleteHash());
         }
         catch (Exception ex)
         {
             throw new YabtSyncException(
                 $"Sync upload failed for projected object '{relativePath}' to target object '{targetKey}'.",
+                ex);
+        }
+    }
+
+    private async Task<ChangeManifestLoad> ReadChangeManifestAsync
+    (
+        IObjectStore targetStore,
+        bool recoverInvalidManifest,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!await targetStore.ExistsAsync(
+                ArchiveChangeManifest.FileName,
+                cancellationToken))
+        {
+            return new(false, null);
+        }
+
+        try
+        {
+            await using var content = await targetStore.OpenReadAsync(
+                ArchiveChangeManifest.FileName,
+                cancellationToken);
+            var manifest = await _changeManifestSerializer.ReadAsync(
+                content.Content,
+                cancellationToken);
+            return new(true, manifest);
+        }
+        catch (Exception ex)
+        {
+            if (recoverInvalidManifest)
+            {
+                _logger.LogInvalidChangeManifestIgnored(
+                    ArchiveChangeManifest.FileName,
+                    ex);
+                return new(true, null);
+            }
+
+            throw new YabtSyncException(
+                $"Change manifest '{ArchiveChangeManifest.FileName}' could not be read or validated.",
+                ex);
+        }
+    }
+
+    private async Task UploadChangeManifestAsync
+    (
+        IObjectStore targetStore,
+        ArchiveChangeManifest manifest,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await using var content = new MemoryStream();
+            await _changeManifestSerializer.WriteAsync(
+                manifest,
+                content,
+                cancellationToken);
+            content.Position = 0;
+
+            await targetStore.UploadAsync(
+                ArchiveChangeManifest.FileName,
+                content,
+                "application/json",
+                EmptyMetadata,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtSyncException(
+                $"Change manifest '{ArchiveChangeManifest.FileName}' could not be uploaded.",
+                ex);
+        }
+    }
+
+    private static async Task MoveChangeManifestToHistoryAsync
+    (
+        IObjectStore targetStore,
+        ArchiveHistoryKeyAllocator historyKeyAllocator,
+        CancellationToken cancellationToken
+    )
+    {
+        var destinationKey = await historyKeyAllocator.CreateHistoricalKeyAsync(
+            ArchiveChangeManifest.FileName,
+            cancellationToken);
+
+        try
+        {
+            await targetStore.MoveAsync(
+                ArchiveChangeManifest.FileName,
+                destinationKey,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtSyncException(
+                $"Change manifest history move failed from '{ArchiveChangeManifest.FileName}' " +
+                    $"to '{destinationKey}'.",
                 ex);
         }
     }
@@ -759,28 +952,31 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task<bool> HasSameContentAsync
+    private static async Task<ProjectedObjectComparison> CompareProjectedObjectAsync
     (
         ArchiveProjectedObject projectedObject,
         IObjectStore targetStore,
         ArchiveObjectInfo targetObject,
+        ArchiveChangeManifestEntry? previousManifestEntry,
+        bool byteForByte,
         CancellationToken cancellationToken
     )
     {
+        if (!byteForByte &&
+            TryCreateFastManifestEntry(
+                projectedObject,
+                targetObject,
+                previousManifestEntry,
+                out var fastManifestEntry))
+        {
+            return new(true, fastManifestEntry);
+        }
+
         if (projectedObject.ContentLength.HasValue &&
             targetObject.ContentLength.HasValue &&
             projectedObject.ContentLength.Value != targetObject.ContentLength.Value)
         {
-            return false;
-        }
-
-        if (!string.IsNullOrWhiteSpace(projectedObject.ContentHash) &&
-            !string.IsNullOrWhiteSpace(targetObject.ContentHash))
-        {
-            return string.Equals(
-                projectedObject.ContentHash,
-                targetObject.ContentHash,
-                StringComparison.Ordinal);
+            return new(false, null);
         }
 
         try
@@ -790,11 +986,26 @@ internal sealed class ArchiveSynchronizer
                 targetObject.Key,
                 cancellationToken);
 
-            return await StreamsHaveSameContentAsync(
+            var streamComparison = await CompareStreamsAsync(
                 sourceContent.Content,
                 targetContent.Content,
                 DefaultBufferSize,
                 cancellationToken);
+            if (!streamComparison.Same)
+            {
+                return new(false, null);
+            }
+
+            return new
+            (
+                true,
+                CreateManifestEntry(
+                    ArchiveLayout.NormalizeObjectKey(projectedObject.RelativePath),
+                    projectedObject,
+                    streamComparison.SourceLength,
+                    streamComparison.SourceContentHash ??
+                        throw new YabtSyncException("Successful byte comparison did not produce a content hash."))
+            );
         }
         catch (Exception ex)
         {
@@ -804,7 +1015,103 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task<bool> StreamsHaveSameContentAsync
+    private static bool TryCreateFastManifestEntry
+    (
+        ArchiveProjectedObject projectedObject,
+        ArchiveObjectInfo targetObject,
+        ArchiveChangeManifestEntry? previousManifestEntry,
+        out ArchiveChangeManifestEntry? manifestEntry
+    )
+    {
+        // A matching metadata fingerprint is a quick presumption, not byte-level verification.
+        // --byte-for-byte bypasses this method, and incomplete target evidence falls back to streams.
+        manifestEntry = null;
+        if (previousManifestEntry is null ||
+            string.IsNullOrWhiteSpace(projectedObject.ChangeFingerprint) ||
+            string.IsNullOrWhiteSpace(previousManifestEntry.ContentHash) ||
+            !ArchiveHash.IsValid(previousManifestEntry.ContentHash) ||
+            !string.Equals(
+                projectedObject.ChangeFingerprint,
+                previousManifestEntry.ChangeFingerprint,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (projectedObject.ContentLength.HasValue &&
+            projectedObject.ContentLength.Value != previousManifestEntry.Length)
+        {
+            return false;
+        }
+
+        if (!targetObject.ContentLength.HasValue)
+        {
+            if (!IsEmptyFolderMarker(projectedObject.RelativePath))
+            {
+                return false;
+            }
+        }
+        else if (targetObject.ContentLength.Value != previousManifestEntry.Length)
+        {
+            return false;
+        }
+
+        if (HaveSameHashAlgorithm(
+                targetObject.ContentHash,
+                previousManifestEntry.ContentHash) &&
+            !string.Equals(
+                targetObject.ContentHash,
+                previousManifestEntry.ContentHash,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        manifestEntry = CreateManifestEntry(
+            previousManifestEntry.RelativePath,
+            projectedObject,
+            previousManifestEntry.Length,
+            previousManifestEntry.ContentHash);
+        return true;
+    }
+
+    private static ArchiveChangeManifestEntry CreateManifestEntry
+    (
+        string relativePath,
+        ArchiveProjectedObject projectedObject,
+        long contentLength,
+        string contentHash
+    ) => new
+    (
+        ArchiveLayout.NormalizeObjectKey(relativePath),
+        contentLength,
+        projectedObject.LastModifiedUtc?.ToUniversalTime(),
+        string.IsNullOrWhiteSpace(projectedObject.ChangeFingerprint) ?
+            contentHash :
+            projectedObject.ChangeFingerprint,
+        contentHash
+    );
+
+    private static bool HaveSameHashAlgorithm
+    (
+        string? firstHash,
+        string? secondHash
+    )
+    {
+        if (string.IsNullOrWhiteSpace(firstHash) ||
+            string.IsNullOrWhiteSpace(secondHash))
+        {
+            return false;
+        }
+
+        var firstSeparator = firstHash.IndexOf(':', StringComparison.Ordinal);
+        var secondSeparator = secondHash.IndexOf(':', StringComparison.Ordinal);
+        return firstSeparator > 0 &&
+            secondSeparator == firstSeparator &&
+            firstHash.AsSpan(0, firstSeparator).SequenceEqual(secondHash.AsSpan(0, secondSeparator));
+    }
+
+    private static async Task<StreamComparison> CompareStreamsAsync
     (
         Stream source,
         Stream target,
@@ -814,33 +1121,46 @@ internal sealed class ArchiveSynchronizer
     {
         var sourceBuffer = ArrayPool<byte>.Shared.Rent(bufferSize);
         var targetBuffer = ArrayPool<byte>.Shared.Rent(bufferSize);
+        var sourceHash = new XxHash128();
+        long sourceLength = 0;
 
         try
         {
             while (true)
             {
-                var sourceBytesRead = await source.ReadAsync(
+                var sourceBytesRead = await FillBufferAsync(
+                    source,
                     sourceBuffer.AsMemory(0, bufferSize),
                     cancellationToken);
-                var targetBytesRead = await target.ReadAsync(
+                var targetBytesRead = await FillBufferAsync(
+                    target,
                     targetBuffer.AsMemory(0, bufferSize),
                     cancellationToken);
 
+                sourceHash.Append(sourceBuffer.AsSpan(0, sourceBytesRead));
+                sourceLength += sourceBytesRead;
+
                 if (sourceBytesRead != targetBytesRead)
                 {
-                    return false;
+                    return new(false, sourceLength, null);
                 }
 
                 if (sourceBytesRead == 0)
                 {
-                    return true;
+                    var hash = sourceHash.GetHashAndReset();
+                    return new
+                    (
+                        true,
+                        sourceLength,
+                        ArchiveHash.Format(hash)
+                    );
                 }
 
                 var sourceSpan = sourceBuffer.AsSpan(0, sourceBytesRead);
                 var targetSpan = targetBuffer.AsSpan(0, targetBytesRead);
                 if (!sourceSpan.SequenceEqual(targetSpan))
                 {
-                    return false;
+                    return new(false, sourceLength, null);
                 }
             }
         }
@@ -851,6 +1171,28 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
+    private static async Task<int> FillBufferAsync
+    (
+        Stream stream,
+        Memory<byte> buffer,
+        CancellationToken cancellationToken
+    )
+    {
+        var totalBytesRead = 0;
+        while (totalBytesRead < buffer.Length)
+        {
+            var bytesRead = await stream.ReadAsync(buffer[totalBytesRead..], cancellationToken);
+            if (bytesRead == 0)
+            {
+                break;
+            }
+
+            totalBytesRead += bytesRead;
+        }
+
+        return totalBytesRead;
+    }
+
     private static IEnumerable<string> CreateInternalObjectKeys(ArchiveLayout layout)
     {
         if (!string.IsNullOrEmpty(ArchiveLayout.NormalizeObjectKey(layout.LivePrefix)))
@@ -858,7 +1200,11 @@ internal sealed class ArchiveSynchronizer
             return [];
         }
 
-        return [BackupRootFileNames.Primary];
+        return
+        [
+            BackupRootFileNames.Primary,
+            ArchiveChangeManifest.FileName,
+        ];
     }
 
     private static List<string> CreateInternalObjectPrefixes(ArchiveLayout layout)
@@ -875,9 +1221,45 @@ internal sealed class ArchiveSynchronizer
             prefixes.Add(histPrefix);
         }
 
-        //TODO: Formalize provider-private temporary prefixes instead of hard-coding the filesystem adapter prefix.
-        prefixes.Add(".yabt-tmp");
+        prefixes.Add(ArchiveInternalFolderNames.TemporaryUploads);
         return prefixes;
+    }
+
+    private static void ValidateInternalLayoutPrefixes(ArchiveLayout layout)
+    {
+        var temporaryPrefix = ArchiveInternalFolderNames.TemporaryUploads;
+        var livePrefix = ArchiveLayout.NormalizeObjectPrefix(layout.LivePrefix);
+        if (livePrefix is not null && PrefixesOverlap(livePrefix, temporaryPrefix))
+        {
+            throw new YabtSyncException(
+                $"Archive live prefix '{livePrefix}' conflicts with reserved internal prefix " +
+                    $"'{temporaryPrefix}'.");
+        }
+
+        var histPrefix = ArchiveLayout.NormalizeObjectPrefix(layout.HistPrefix);
+        if (histPrefix is not null && PrefixesOverlap(histPrefix, temporaryPrefix))
+        {
+            throw new YabtSyncException(
+                $"Archive history prefix '{histPrefix}' conflicts with reserved internal prefix " +
+                    $"'{temporaryPrefix}'.");
+        }
+    }
+
+    private static bool PrefixesOverlap(string firstPrefix, string secondPrefix) =>
+        IsSameOrUnderPrefix(firstPrefix, secondPrefix) ||
+        IsSameOrUnderPrefix(secondPrefix, firstPrefix);
+
+    private static bool IsSameOrUnderPrefix(string objectKey, string prefix)
+    {
+        var normalizedObjectKey = ArchiveLayout.NormalizeObjectKey(objectKey);
+        var normalizedPrefix = ArchiveLayout.NormalizeObjectKey(prefix);
+        return string.Equals(
+                normalizedObjectKey,
+                normalizedPrefix,
+                StringComparison.OrdinalIgnoreCase) ||
+            normalizedObjectKey.StartsWith(
+                $"{normalizedPrefix}/",
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsInternalObject(string objectKey, ArchiveLayout layout)
@@ -897,7 +1279,7 @@ internal sealed class ArchiveSynchronizer
             if (string.Equals(
                     objectKey,
                     ArchiveLayout.NormalizeObjectKey(internalObjectKey),
-                    StringComparison.Ordinal))
+                    StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
@@ -916,7 +1298,7 @@ internal sealed class ArchiveSynchronizer
         {
             var normalizedPrefix = ArchiveLayout.NormalizeObjectPrefix(internalObjectPrefix);
             if (normalizedPrefix is not null &&
-                ArchiveLayout.IsUnderPrefix(objectKey, normalizedPrefix))
+                IsSameOrUnderPrefix(objectKey, normalizedPrefix))
             {
                 return true;
             }
@@ -991,7 +1373,8 @@ internal sealed class ArchiveSynchronizer
     (
         string operationName,
         ArchiveSyncSummary summary,
-        bool verifyOnly
+        bool verifyOnly,
+        bool byteForByte
     )
     {
         if (verifyOnly &&
@@ -999,7 +1382,17 @@ internal sealed class ArchiveSynchronizer
             summary.ChangedCount == 0 &&
             summary.ExtraCount == 0)
         {
-            return $"Archive {operationName} completed; verified {summary.UnchangedCount} unchanged object(s).";
+            return byteForByte ?
+                $"Archive {operationName} completed byte-for-byte; " +
+                    $"verified {summary.UnchangedCount} unchanged object(s)." :
+                $"Archive {operationName} quick check completed from metadata fingerprints; " +
+                    $"{summary.UnchangedCount} object(s) appear unchanged. " +
+                    "Use --byte-for-byte for a full content comparison.";
+        }
+
+        if (verifyOnly && !byteForByte)
+        {
+            operationName += " quick metadata check";
         }
 
         return $"Archive {operationName} completed; {summary.NewCount} new object(s), " +
@@ -1013,5 +1406,24 @@ internal sealed class ArchiveSynchronizer
 
         public Dictionary<string, string> Folders { get; } = new(StringComparer.Ordinal);
     }
+
+    private sealed record ProjectedObjectComparison
+    (
+        bool Same,
+        ArchiveChangeManifestEntry? ManifestEntry
+    );
+
+    private sealed record ChangeManifestLoad
+    (
+        bool Exists,
+        ArchiveChangeManifest? Manifest
+    );
+
+    private sealed record StreamComparison
+    (
+        bool Same,
+        long SourceLength,
+        string? SourceContentHash
+    );
 
 }

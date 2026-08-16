@@ -1,6 +1,6 @@
 # YABT
 
-YABT (Yet Another Backup Tool) is an object-store archival synchronization tool scaffold. It is intended to replicate ordinary folders into directly browsable archive targets without turning the archive into a proprietary backup repository.
+YABT (Yet Another Backup Tool) is an object-store archival synchronization tool. It replicates ordinary folders into directly browsable archive targets without turning the archive into a proprietary backup repository.
 
 The initial target runtime is .NET 10 on Windows. The architecture keeps platform-specific concerns behind interfaces so Linux support, NAS workflows, WebDAV targets, Azure Blob Storage, and alternate storage targets can be added without changing the archive format.
 
@@ -22,7 +22,6 @@ The initial target runtime is .NET 10 on Windows. The architecture keeps platfor
 - No opaque block store for the logical live branch.
 - No initial deduplication implementation.
 - No initial metadata cache.
-- No full synchronization engine in this scaffold.
 
 ## Why This Differs From Traditional Backup Tools
 
@@ -37,24 +36,29 @@ The filesystem plus metadata files are the source of truth. Object stores such a
 - `src/Yabt.Metadata` reads and writes human-readable JSON metadata.
 - `src/Yabt.Packaging` defines package building contracts and naming rules.
 - Format projector projects own representations such as `mirror` and `zip`.
-- Object-store provider projects will adapt stores such as the filesystem, Azure Blob Storage, and WebDAV.
-- `src/Yabt.Sync` holds orchestration contracts.
-- `src/Yabt.Cli` exposes the future command surface.
+- Object-store provider projects adapt stores such as the filesystem, Azure Blob Storage, and WebDAV.
+- `src/Yabt.Sync` holds synchronization orchestration and change-manifest comparison.
+- `src/Yabt.Cli` exposes the command surface.
 - `docs` contains architecture and format notes.
 - `spec` contains draft JSON schemas.
 - `examples` contains a sample root descriptor and folder policy files.
 
-## CLI Skeleton
+## CLI
 
-Future commands are scaffolded:
+`sync` and `verify` are implemented. Their default comparison uses the durable change manifest and metadata fingerprints to avoid reading unchanged file contents. Use `--byte-for-byte` when a full content comparison is required:
 
 ```console
-yabt sync
+yabt sync <source-root>
+yabt sync <source-root> --byte-for-byte
+yabt verify <source-root>
+yabt verify <source-root> --byte-for-byte
+```
+
+Additional commands remain scaffolded while their semantics are designed:
+
+```console
 yabt restore
 yabt scan
-yabt verify
 yabt pack
 yabt reconcile
 ```
-
-These commands currently report that implementation is pending.

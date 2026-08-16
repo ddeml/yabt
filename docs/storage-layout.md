@@ -4,6 +4,7 @@ Archive paths are ordinary object names with a root descriptor and two logical d
 
 ```text
 /.yabt-root.json
+/.yabt-change-manifest.json
 <livePrefix>/...
 <histPrefix>/...
 ```
@@ -26,9 +27,13 @@ livePrefix = ""
 histPrefix = ".yabt-hist"
 ```
 
-This keeps ordinary source folders rooted at their actual folder root. If a real data name would clash with `.yabt-root.json`, `.yabt-policy.json`, or the configured history prefix, initialize the root with different prefixes before using it.
+This keeps ordinary source folders rooted at their actual folder root. If a real data name would clash with `.yabt-root.json`, `.yabt-change-manifest.json`, `.yabt-policy.json`, `.yabt-tmp`, or the configured history prefix, initialize the root with different prefixes before using it.
 
 When `livePrefix` is empty, YABT metadata paths and the configured history prefix are internal to the archive root. They are not ordinary live data even though they physically sit under the same root.
+
+`.yabt-change-manifest.json` always sits at the archive root, outside an explicit `livePrefix`. Its paths are logical live-relative paths. The name is reserved when the live prefix is empty, so an ordinary root source file with that exact name is excluded from live projection.
+
+The filesystem provider uses the reserved `.yabt-tmp` directory to stage each upload before atomically moving the completed file to its final path. Each upload uses a unique temporary file and removes that file after success or a controlled failure. The shared directory intentionally remains so concurrent YABT processes have a stable staging location without racing directory creation against deletion; an empty directory simply means no upload is currently staged. A nonempty directory may belong to an active upload or contain evidence of an interrupted run, so synchronization ignores it as provider plumbing. YABT rejects live or history prefixes that overlap `.yabt-tmp`, including case variants, to keep staging separate from archive data.
 
 An archive target may still use explicit branch directories:
 
@@ -75,8 +80,6 @@ Photos/Vacation.xxh128-a91f3c2e5b7d4f8096a1c3e8d2b4f607.manifest.json
 Here the source folder is `Photos/Vacation`, but its package objects are placed directly in the target `Photos` folder. No target `Photos/Vacation` folder is created. The folder policy or equivalent artifact-scoped descriptor remains outside the package, in the same parent folder, so a browser or restore tool can identify the folder representation without opening the package first.
 
 The package name is deterministic for the projected representation, including archived metadata such as entry modification times. Package creation time belongs in the planned manifest instead of the live object name, so synchronizing an unchanged projected representation again resolves to the same key. A changed representation produces a different full-hash name, and the synchronizer moves the replaced name to history.
-
-On the first synchronization after upgrading an archive that still uses the older timestamped package-name layout, YABT creates the deterministic live name and moves the old timestamped artifact to history. Later unchanged synchronizations reuse the deterministic name.
 
 The current initial ZIP projector emits the `.zip` artifact only. The adjacent manifest and external descriptor shown above remain planned work.
 

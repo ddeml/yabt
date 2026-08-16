@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
-using System.IO.Hashing;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -474,12 +473,7 @@ public sealed class MemoryObjectStore
     }
 
     private static string ComputeContentHash(ReadOnlyMemory<byte> content)
-    {
-        var hash = new XxHash128();
-        hash.Append(content.Span);
-
-        return $"xxh128:{Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()}";
-    }
+        => ArchiveHash.Compute(content.Span);
 
     private static InMemoryArchiveObject ToPublicObject
     (

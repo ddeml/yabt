@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -40,7 +41,44 @@ public sealed class MirrorArchiveFormatProjectorTests
 
         var projectedObject = projectedObjects.Single();
         Assert.AreEqual("folder/file.txt", projectedObject.RelativePath);
+        StringAssert.StartsWith(
+            projectedObject.ChangeFingerprint,
+            "yabt-stat-v1-xxh128:");
         await AssertProjectedTextAsync(projectedObject, "source content");
+    }
+
+    [TestMethod]
+    public void ArchiveChangeFingerprintUsesCanonicalUtcTimeAndCompleteMetadata()
+    {
+        var localTime = new DateTimeOffset(
+            2026,
+            8,
+            16,
+            14,
+            30,
+            0,
+            TimeSpan.FromHours(2));
+
+        var localFingerprint = ArchiveChangeFingerprint.Create(42, localTime);
+        var utcFingerprint = ArchiveChangeFingerprint.Create(42, localTime.ToUniversalTime());
+        var differentLengthFingerprint = ArchiveChangeFingerprint.Create(43, localTime);
+        var hasIncompleteFingerprint = ArchiveChangeFingerprint.TryCreate(
+            42,
+            lastModifiedUtc: null,
+            out var incompleteFingerprint);
+
+        Assert.AreEqual(localFingerprint, utcFingerprint);
+        Assert.AreEqual(
+            "yabt-stat-v1-xxh128:4eacc29d198498b8913eb1972d12aba7",
+            localFingerprint);
+        Assert.AreNotEqual(localFingerprint, differentLengthFingerprint);
+        StringAssert.Matches(
+            localFingerprint,
+            new Regex(
+                "^yabt-stat-v1-xxh128:[0-9a-f]{32}$",
+                RegexOptions.CultureInvariant));
+        Assert.IsFalse(hasIncompleteFingerprint);
+        Assert.IsNull(incompleteFingerprint);
     }
 
     [TestMethod]

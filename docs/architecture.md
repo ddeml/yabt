@@ -5,6 +5,7 @@ YABT separates durable archive truth from runtime convenience.
 The durable state is:
 
 - Root archive metadata such as `.yabt-root.json`.
+- The root `.yabt-change-manifest.json` used for fast live-state comparison.
 - Per-folder metadata such as `.yabt-policy.json`.
 - Human-readable manifests next to package artifacts.
 - Embedded manifests inside package artifacts.
@@ -82,7 +83,7 @@ When a subfolder uses a packaging format such as `zip`, its projected package ar
 
 Projectors stream projected objects from `ProjectAsync`. Formats that can emit objects incrementally, such as `mirror`, should do so. Formats that need complete folder knowledge, such as `zip`, may collect their source folder first and then yield the finished package object.
 
-The `mirror` projector maps source files one-to-one. The current initial `zip` projector maps a source folder to a package artifact; the adjacent manifest and external descriptor remain planned parts of the durable format. Package artifact names use a deterministic, algorithm-tagged full logical-representation hash and exclude per-run creation time, so an unchanged projection retains the same live key. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
+The `mirror` projector maps source files one-to-one. The current initial `zip` projector maps a source folder to a package artifact; the adjacent manifest and external descriptor remain planned parts of the durable format. Package artifact names use a deterministic, algorithm-tagged full xxHash128 logical-representation hash and exclude per-run creation time, so an unchanged projection retains the same live key. ZIP identity includes ordered relative paths, archived lengths and modification times, per-object change fingerprints, and output-affecting compression settings. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
 
 ## Project Boundaries
 
@@ -90,7 +91,7 @@ The `mirror` projector maps source files one-to-one. The current initial `zip` p
 
 `Yabt.Common` contains shared cross-cutting primitives that should not pull in provider dependencies.
 
-`Yabt.Metadata` handles JSON formats such as `.yabt-root.json`, `.yabt-policy.json`, and package manifests.
+`Yabt.Metadata` handles JSON formats such as `.yabt-root.json`, `.yabt-policy.json`, the live change manifest, and package manifests.
 
 Format projector projects implement source-to-archive projection behavior such as `mirror` and `zip`.
 
@@ -102,15 +103,17 @@ Object-store provider projects adapt storage systems such as the filesystem, Azu
 
 ## Change Detection
 
-The sync engine is expected to support multiple future change sources:
+The archive root contains `.yabt-change-manifest.json`. Each live projected object has a logical change fingerprint and, after synchronization, an xxHash128 hash and length of the actual stored artifact. The document is deterministic, ordered by live-relative path, human-readable, and protected by its own xxHash128 self-hash. It is durable comparison evidence, not a disposable cache and not a replacement for the planned per-package manifests.
 
-- Full manifest reconciliation.
-- Incremental filesystem event monitoring.
-- Synology btrfs snapshot diffs.
-- Hash-based package manifest comparison.
-- Periodic repair scans.
+For ordinary files, the versioned quick fingerprint is an xxHash128 digest derived from the known length and exact modification time converted to UTC. Hashing this metadata makes the value compact and canonical; it does not turn the metadata into proof of file contents. A same-length edit whose modification time is preserved, or same-length target corruption, can pass a quick check. YABT uses xxHash128 for both its logical fingerprints and actual-byte content hashes, while keeping the two meanings distinct. It is chosen for fast non-adversarial change detection; use byte-for-byte mode when complete content comparison is required.
 
-These belong behind change-detection abstractions so scalable delta sources can be introduced without changing storage layout.
+Normal `sync` and `verify` use matching fingerprints plus the prior manifest to avoid opening unchanged source and target objects. A missing fingerprint, missing reliable target length, missing manifest, or changed fingerprint falls back to stream comparison. `sync --byte-for-byte` and `verify --byte-for-byte` bypass the quick match and compare complete streams. The byte-for-byte mode is the integrity check; the default verify result is explicitly a quick metadata check.
+
+Target-native modification times are not compared with source times because uploads and remote servers assign different target times. The manifest preserves the source-derived fingerprint instead. Missing source timestamps do not receive a fake quick fingerprint; formats may use a separate deterministic timestamp only where an encoding such as ZIP requires one.
+
+The old manifest is moved aside before the first live mutation and the replacement is written last. An interrupted run therefore leaves no trusted live manifest and the next sync performs full comparisons. A mutating sync can quarantine and rebuild an invalid manifest; byte-for-byte mode can proceed without trusting it.
+
+The current manifest is root-wide. It removes repeated byte scanning but still requires metadata enumeration and rewrites the JSON document when it changes. Folder-local or sharded manifests, filesystem event monitoring, Synology btrfs snapshot diffs, and other scalable delta sources remain future improvements behind change-detection abstractions.
 
 ## Restore Symmetry
 

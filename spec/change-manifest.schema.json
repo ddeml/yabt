@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/yabt/change-manifest.schema.json",
+  "title": "YABT live change manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "documentType",
+    "schemaVersion",
+    "entries",
+    "manifestHash"
+  ],
+  "properties": {
+    "documentType": {
+      "const": "yabt.changeManifest"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    },
+    "manifestHash": {
+      "type": "string",
+      "pattern": "^xxh128:[0-9a-f]{32}$"
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relativePath",
+        "length",
+        "changeFingerprint"
+      ],
+      "properties": {
+        "relativePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastModifiedUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "changeFingerprint": {
+          "type": "string",
+          "pattern": "^[a-z0-9_.-]+:[^\\s]+$"
+        },
+        "contentHash": {
+          "type": "string",
+          "pattern": "^xxh128:[0-9a-f]{32}$"
+        }
+      }
+    }
+  }
+}

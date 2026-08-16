@@ -73,24 +73,36 @@ internal sealed class CommandRunner
         {
             Description = "Target store id from the root descriptor.",
         };
+        var byteForByteOption = new Option<bool>("--byte-for-byte")
+        {
+            Description = "Compare full file contents instead of using metadata fingerprints.",
+        };
 
         var command = new Command(commandName, GetCommandDescription(commandName))
         {
             Arguments = { sourceRootArgument },
             Options = { dryRunOption, targetStoreIdOption },
         };
+        var supportsByteForByte =
+            commandName is YabtCliCommandNames.Sync or YabtCliCommandNames.Verify;
+        if (supportsByteForByte)
+        {
+            command.Options.Add(byteForByteOption);
+        }
 
         command.SetAction(async (parseResult, cancellationToken) =>
         {
             var sourceRoot = parseResult.GetValue(sourceRootArgument) ?? Directory.GetCurrentDirectory();
             var dryRun = parseResult.GetValue(dryRunOption);
             var targetStoreId = parseResult.GetValue(targetStoreIdOption);
+            var byteForByte = supportsByteForByte && parseResult.GetValue(byteForByteOption);
             return await RunArchiveCommandAsync
             (
                 commandName,
                 sourceRoot,
                 dryRun,
                 targetStoreId,
+                byteForByte,
                 cancellationToken
             );
         });
@@ -104,10 +116,11 @@ internal sealed class CommandRunner
         string sourceRoot,
         bool dryRun,
         string? targetStoreId,
+        bool byteForByte,
         CancellationToken cancellationToken
     )
     {
-        var request = new SyncRunRequest(sourceRoot, dryRun, targetStoreId);
+        var request = new SyncRunRequest(sourceRoot, dryRun, targetStoreId, byteForByte);
         var result = commandName switch
         {
             YabtCliCommandNames.Sync => await _archiveSynchronizer.SyncAsync(request, cancellationToken),
@@ -130,7 +143,8 @@ internal sealed class CommandRunner
             YabtCliCommandNames.Sync => "Synchronize a folder to the archive.",
             YabtCliCommandNames.Restore => "Restore from an archive.",
             YabtCliCommandNames.Scan => "Scan a folder for future synchronization planning.",
-            YabtCliCommandNames.Verify => "Verify a folder against an archive.",
+            YabtCliCommandNames.Verify =>
+                "Quickly verify a folder from metadata fingerprints; use --byte-for-byte for full comparison.",
             YabtCliCommandNames.Pack => "Project a folder into a package representation.",
             YabtCliCommandNames.Reconcile => "Reconcile two archive roots.",
             _ => "Run a YABT command.",

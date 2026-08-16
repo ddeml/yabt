@@ -14,4 +14,5 @@ public sealed record BackupRootDescriptor
 )
 {
     public const string ExpectedDocumentType = "yabt.backupRoot";
+    public const int ExpectedSchemaVersion = 1;
 }

@@ -8,6 +8,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Core", "src\Yabt.Core\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Metadata", "src\Yabt.Metadata\Yabt.Metadata.csproj", "{0427BC8D-94D3-4D2B-A9A0-59B2D6356B18}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Metadata.Tests", "tests\Yabt.Metadata.Tests\Yabt.Metadata.Tests.csproj", "{A2E3342F-17AA-45FA-B966-91182DA4C78E}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Packaging", "src\Yabt.Packaging\Yabt.Packaging.csproj", "{8B35D005-9043-41F1-BEA7-4E629B728063}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.AzureBlob", "src\Yabt.AzureBlob\Yabt.AzureBlob.csproj", "{3C25F038-C514-498F-BC15-B18CD7378765}"
@@ -50,6 +52,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "spec", "spec", "{6DB32EB6-A
 		spec\yabt-root.schema.json = spec\yabt-root.schema.json
 		spec\yabt-policy.schema.json = spec\yabt-policy.schema.json
 		spec\manifest.schema.json = spec\manifest.schema.json
+		spec\change-manifest.schema.json = spec\change-manifest.schema.json
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.FileSystem", "src\Yabt.FileSystem\Yabt.FileSystem.csproj", "{A8CEE945-40EA-4627-AFF6-2BE03B83181C}"
@@ -90,6 +93,10 @@ Global
 		{0427BC8D-94D3-4D2B-A9A0-59B2D6356B18}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0427BC8D-94D3-4D2B-A9A0-59B2D6356B18}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0427BC8D-94D3-4D2B-A9A0-59B2D6356B18}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A2E3342F-17AA-45FA-B966-91182DA4C78E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A2E3342F-17AA-45FA-B966-91182DA4C78E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A2E3342F-17AA-45FA-B966-91182DA4C78E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A2E3342F-17AA-45FA-B966-91182DA4C78E}.Release|Any CPU.Build.0 = Release|Any CPU
 		{8B35D005-9043-41F1-BEA7-4E629B728063}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{8B35D005-9043-41F1-BEA7-4E629B728063}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8B35D005-9043-41F1-BEA7-4E629B728063}.Release|Any CPU.ActiveCfg = Release|Any CPU
