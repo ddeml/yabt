@@ -1,4 +1,5 @@
 using System.Text;
+using Yabt.Core.Models;
 
 namespace Yabt.Packaging.Implementation;
 
@@ -34,13 +35,12 @@ internal static class PackageArtifactNamer
 
     private static string ToFileNameHash(string value)
     {
-        var separator = value.IndexOf(':', StringComparison.Ordinal);
-        if (separator <= 0 || separator == value.Length - 1)
+        if (!ArchiveHash.IsValid(value))
         {
             throw new YabtPackagingException(
-                "Package identity hash must include an algorithm and value.");
+                "Package identity hash must be a canonical YABT xxHash128 hash.");
         }
 
-        return $"{value[..separator]}-{value[(separator + 1)..]}";
+        return ArchiveHash.FormatFileNameToken(value);
     }
 }

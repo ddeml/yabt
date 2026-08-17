@@ -5,7 +5,7 @@ YABT separates durable archive truth from runtime convenience.
 The durable state is:
 
 - Root archive metadata such as `.yabt-root.json`.
-- The root `.yabt-change-manifest.json` used for fast live-state comparison.
+- The root change manifest, stored by default as Brotli-compressed `.yabt-change-manifest.json.br`, used for fast live-state comparison.
 - Per-folder metadata such as `.yabt-policy.json`.
 - Human-readable manifests next to package artifacts.
 - Embedded manifests inside package artifacts.
@@ -29,7 +29,7 @@ The object-store abstraction provides raw access to the underlying store. It exp
 
 Traversal is hierarchical: callers ask for the files and immediate child folders under a folder prefix. Filesystem and WebDAV providers can expose native folders directly. Providers without real folders, such as Azure Blob Storage, emulate folders from object-name prefixes.
 
-Empty folders may be represented by the reserved `.yabt-empty` marker object when a provider or archive representation cannot otherwise preserve them. The marker is YABT folder plumbing rather than ordinary source data.
+The current `mirror` projection represents every empty folder with the reserved zero-byte `.yabt-empty` marker object, including on filesystem targets. The object-only projection contract has no native folder-creation operation, so the marker is the portable durable representation of that folder. It remains live while the folder is empty and moves to history when the folder gains content or changes format. Providers hide it from normal YABT traversal, although ordinary filesystem, Azure, or WebDAV browsers may display it. The marker is YABT folder plumbing rather than ordinary source data or temporary cleanup residue.
 
 Initial object store providers:
 
@@ -83,7 +83,7 @@ When a subfolder uses a packaging format such as `zip`, its projected package ar
 
 Projectors stream projected objects from `ProjectAsync`. Formats that can emit objects incrementally, such as `mirror`, should do so. Formats that need complete folder knowledge, such as `zip`, may collect their source folder first and then yield the finished package object.
 
-The `mirror` projector maps source files one-to-one. The current initial `zip` projector maps a source folder to a package artifact; the adjacent manifest and external descriptor remain planned parts of the durable format. Package artifact names use a deterministic, algorithm-tagged full xxHash128 logical-representation hash and exclude per-run creation time, so an unchanged projection retains the same live key. ZIP identity includes ordered relative paths, archived lengths and modification times, per-object change fingerprints, and output-affecting compression settings. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
+The `mirror` projector maps source files one-to-one. The current initial `zip` projector maps a source folder to a package artifact; the adjacent manifest and external descriptor remain planned parts of the durable format. Package artifact names use a deterministic, algorithm-tagged full xxHash128 logical-representation hash and exclude per-run creation time, so an unchanged projection retains the same live key. The hash token is lowercase unpadded Base32hex in file names so it remains stable on case-insensitive file systems; JSON uses the shorter unpadded Base64URL form. ZIP identity includes ordered relative paths, archived lengths and modification times, per-object change fingerprints, and output-affecting compression settings. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
 
 ## Project Boundaries
 
@@ -103,11 +103,13 @@ Object-store provider projects adapt storage systems such as the filesystem, Azu
 
 ## Change Detection
 
-The archive root contains `.yabt-change-manifest.json`. Each live projected object has a logical change fingerprint and, after synchronization, an xxHash128 hash and length of the actual stored artifact. The document is deterministic, ordered by live-relative path, human-readable, and protected by its own xxHash128 self-hash. It is durable comparison evidence, not a disposable cache and not a replacement for the planned per-package manifests.
+The archive root contains a logical JSON change manifest. It is stored as Brotli-compressed `.yabt-change-manifest.json.br` by default or as plain `.yabt-change-manifest.json` when configured with `changeManifestCompression: "none"`. Each live projected object has a logical change fingerprint and, after synchronization, an xxHash128 hash of the actual stored artifact. Ordinary files do not repeat their source length or modification time outside the readable fingerprint. An optional `artifactLength` is recorded only when the projector cannot supply the produced object's length, such as for a lazily built ZIP, so quick verification can still detect target truncation. xxHash128 values use canonical unpadded Base64URL. The decompressed document is deterministic, ordered by live-relative path, human-readable, and protected by its own xxHash128 self-hash. It is durable comparison evidence, not a disposable cache and not a replacement for the planned per-package manifests.
 
-For ordinary files, the versioned quick fingerprint is an xxHash128 digest derived from the known length and exact modification time converted to UTC. Hashing this metadata makes the value compact and canonical; it does not turn the metadata into proof of file contents. A same-length edit whose modification time is preserved, or same-length target corruption, can pass a quick check. YABT uses xxHash128 for both its logical fingerprints and actual-byte content hashes, while keeping the two meanings distinct. It is chosen for fast non-adversarial change detection; use byte-for-byte mode when complete content comparison is required.
+For ordinary files, the versioned quick fingerprint stores the known length and exact modification time converted to UTC directly as `stat-v1:<UTC timestamp>:<length>`. This is compact, canonical, and human-readable, but it is not proof of file contents. A same-length edit whose modification time is preserved, or same-length target corruption, can pass a quick check. YABT uses xxHash128 for actual-byte content hashes and aggregate ZIP identities. It is chosen for fast non-adversarial change detection; use byte-for-byte mode when complete content comparison is required.
 
 Normal `sync` and `verify` use matching fingerprints plus the prior manifest to avoid opening unchanged source and target objects. A missing fingerprint, missing reliable target length, missing manifest, or changed fingerprint falls back to stream comparison. `sync --byte-for-byte` and `verify --byte-for-byte` bypass the quick match and compare complete streams. The byte-for-byte mode is the integrity check; the default verify result is explicitly a quick metadata check.
+
+The configured compression controls only what a mutating sync writes. Readers always inspect both supported filenames. If both exist, they are trusted only when both validate and have the same logical self-hash; a corrupt or conflicting pair forces full comparison. Before moving multiple untrusted representations, sync creates `.yabt-change-manifest.invalid`. Its presence prevents a partially completed quarantine from leaving one stale manifest that appears trustworthy. The marker remains until the replacement manifest is safely written, then moves to history last. A successful mutating sync leaves exactly the configured representation live.
 
 Target-native modification times are not compared with source times because uploads and remote servers assign different target times. The manifest preserves the source-derived fingerprint instead. Missing source timestamps do not receive a fake quick fingerprint; formats may use a separate deterministic timestamp only where an encoding such as ZIP requires one.
 

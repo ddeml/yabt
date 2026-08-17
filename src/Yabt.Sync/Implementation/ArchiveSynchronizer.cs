@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Frozen;
+using System.IO.Compression;
 using System.IO.Hashing;
 using Microsoft.Extensions.Logging;
 using Yabt.Core.Abstractions;
@@ -312,6 +313,8 @@ internal sealed class ArchiveSynchronizer
         await context.SourceStore.EnsureReadyAsync(cancellationToken);
         await context.TargetStore.EnsureReadyAsync(cancellationToken);
 
+        var changeManifestFileName = GetChangeManifestFileName(
+            context.TargetDescriptor.ChangeManifestCompression);
         var changeManifestLoad = await ReadChangeManifestAsync(
             context.TargetStore,
             recoverInvalidManifest: writeChanges || byteForByte,
@@ -341,6 +344,8 @@ internal sealed class ArchiveSynchronizer
             context.TargetDescriptor.Layout,
             _timeProvider.GetUtcNow());
         var changeManifestInvalidated = false;
+        var changeManifestInvalidationMarkerActive =
+            changeManifestLoad.InvalidationMarkerExists;
 
         async Task EnsureChangeManifestInvalidatedAsync(CancellationToken currentCancellationToken)
         {
@@ -349,9 +354,19 @@ internal sealed class ArchiveSynchronizer
                 return;
             }
 
-            await MoveChangeManifestToHistoryAsync(
+            if (changeManifestLoad.RequiresInvalidationMarker &&
+                !changeManifestInvalidationMarkerActive)
+            {
+                await UploadChangeManifestInvalidationMarkerAsync(
+                    context.TargetStore,
+                    currentCancellationToken);
+                changeManifestInvalidationMarkerActive = true;
+            }
+
+            await MoveChangeManifestsToHistoryAsync(
                 context.TargetStore,
                 historyKeyAllocator,
+                changeManifestLoad.ExistingFileNames,
                 currentCancellationToken);
             changeManifestInvalidated = true;
         }
@@ -459,6 +474,7 @@ internal sealed class ArchiveSynchronizer
         {
             var nextChangeManifest = _changeManifestSerializer.Create(nextManifestEntries.Values);
             var changeManifestNeedsWrite = changeManifestInvalidated ||
+                changeManifestLoad.NeedsRepresentationRewrite(changeManifestFileName) ||
                 previousChangeManifest is null ||
                 !string.Equals(
                     previousChangeManifest.ManifestHash,
@@ -470,7 +486,16 @@ internal sealed class ArchiveSynchronizer
                 await UploadChangeManifestAsync(
                     context.TargetStore,
                     nextChangeManifest,
+                    changeManifestFileName,
                     cancellationToken);
+                if (changeManifestInvalidationMarkerActive)
+                {
+                    await MoveChangeManifestInvalidationMarkerToHistoryAsync(
+                        context.TargetStore,
+                        historyKeyAllocator,
+                        cancellationToken);
+                    changeManifestInvalidationMarkerActive = false;
+                }
             }
         }
 
@@ -835,71 +860,216 @@ internal sealed class ArchiveSynchronizer
         CancellationToken cancellationToken
     )
     {
-        if (!await targetStore.ExistsAsync(
-                ArchiveChangeManifest.FileName,
-                cancellationToken))
+        var existingFileNames = new List<string>(2);
+        foreach (var fileName in GetChangeManifestFileNames())
         {
-            return new(false, null);
+            if (await targetStore.ExistsAsync(fileName, cancellationToken))
+            {
+                existingFileNames.Add(fileName);
+            }
+        }
+
+        var invalidationMarkerExists = await targetStore.ExistsAsync(
+            ArchiveChangeManifest.InvalidationMarkerFileName,
+            cancellationToken);
+        if (existingFileNames.Count == 0 && !invalidationMarkerExists)
+        {
+            return new(existingFileNames, false, null);
         }
 
         try
         {
-            await using var content = await targetStore.OpenReadAsync(
-                ArchiveChangeManifest.FileName,
-                cancellationToken);
-            var manifest = await _changeManifestSerializer.ReadAsync(
-                content.Content,
-                cancellationToken);
-            return new(true, manifest);
+            if (invalidationMarkerExists)
+            {
+                throw new InvalidDataException(
+                    "A prior change-manifest replacement did not complete.");
+            }
+
+            ArchiveChangeManifest? selectedManifest = null;
+            foreach (var fileName in existingFileNames)
+            {
+                var manifest = await ReadChangeManifestFileAsync(
+                    targetStore,
+                    fileName,
+                    cancellationToken);
+                if (selectedManifest is not null &&
+                    !string.Equals(
+                        selectedManifest.ManifestHash,
+                        manifest.ManifestHash,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "The compressed and uncompressed change manifests describe different live states.");
+                }
+
+                selectedManifest = manifest;
+            }
+
+            return new(existingFileNames, false, selectedManifest);
         }
         catch (Exception ex)
         {
+            var evidenceFileNames = invalidationMarkerExists ?
+                existingFileNames.Append(ArchiveChangeManifest.InvalidationMarkerFileName) :
+                existingFileNames;
+            var manifestNames = string.Join("', '", evidenceFileNames);
             if (recoverInvalidManifest)
             {
                 _logger.LogInvalidChangeManifestIgnored(
-                    ArchiveChangeManifest.FileName,
+                    manifestNames,
                     ex);
-                return new(true, null);
+                return new(existingFileNames, invalidationMarkerExists, null);
             }
 
             throw new YabtSyncException(
-                $"Change manifest '{ArchiveChangeManifest.FileName}' could not be read or validated.",
+                $"Change manifest state containing '{manifestNames}' could not be read or validated.",
                 ex);
         }
+    }
+
+    private async Task<ArchiveChangeManifest> ReadChangeManifestFileAsync
+    (
+        IObjectStore targetStore,
+        string fileName,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var content = await targetStore.OpenReadAsync(
+            fileName,
+            cancellationToken);
+        if (!string.Equals(
+                fileName,
+                ArchiveChangeManifest.BrotliFileName,
+                StringComparison.Ordinal))
+        {
+            return await _changeManifestSerializer.ReadAsync(
+                content.Content,
+                cancellationToken);
+        }
+
+        await using var decompressedContent = new BrotliStream(
+            content.Content,
+            CompressionMode.Decompress,
+            leaveOpen: true);
+        return await _changeManifestSerializer.ReadAsync(
+            decompressedContent,
+            cancellationToken);
     }
 
     private async Task UploadChangeManifestAsync
     (
         IObjectStore targetStore,
         ArchiveChangeManifest manifest,
+        string fileName,
         CancellationToken cancellationToken
     )
     {
         try
         {
             await using var content = new MemoryStream();
-            await _changeManifestSerializer.WriteAsync(
-                manifest,
-                content,
-                cancellationToken);
+            if (string.Equals(
+                    fileName,
+                    ArchiveChangeManifest.BrotliFileName,
+                    StringComparison.Ordinal))
+            {
+                await using (var compressedContent = new BrotliStream(
+                    content,
+                    CompressionLevel.Optimal,
+                    leaveOpen: true))
+                {
+                    await _changeManifestSerializer.WriteAsync(
+                        manifest,
+                        compressedContent,
+                        cancellationToken);
+                }
+            }
+            else
+            {
+                await _changeManifestSerializer.WriteAsync(
+                    manifest,
+                    content,
+                    cancellationToken);
+            }
+
             content.Position = 0;
 
             await targetStore.UploadAsync(
-                ArchiveChangeManifest.FileName,
+                fileName,
                 content,
-                "application/json",
+                string.Equals(
+                    fileName,
+                    ArchiveChangeManifest.BrotliFileName,
+                    StringComparison.Ordinal) ?
+                        "application/octet-stream" :
+                        "application/json",
                 EmptyMetadata,
                 cancellationToken);
         }
         catch (Exception ex)
         {
             throw new YabtSyncException(
-                $"Change manifest '{ArchiveChangeManifest.FileName}' could not be uploaded.",
+                $"Change manifest '{fileName}' could not be uploaded.",
                 ex);
         }
     }
 
-    private static async Task MoveChangeManifestToHistoryAsync
+    private static async Task UploadChangeManifestInvalidationMarkerAsync
+    (
+        IObjectStore targetStore,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await using var content = new MemoryStream([], writable: false);
+            await targetStore.UploadAsync(
+                ArchiveChangeManifest.InvalidationMarkerFileName,
+                content,
+                "application/octet-stream",
+                EmptyMetadata,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtSyncException(
+                $"Change manifest invalidation marker " +
+                    $"'{ArchiveChangeManifest.InvalidationMarkerFileName}' could not be uploaded.",
+                ex);
+        }
+    }
+
+    private static async Task MoveChangeManifestsToHistoryAsync
+    (
+        IObjectStore targetStore,
+        ArchiveHistoryKeyAllocator historyKeyAllocator,
+        IEnumerable<string> fileNames,
+        CancellationToken cancellationToken
+    )
+    {
+        foreach (var fileName in fileNames)
+        {
+            var destinationKey = await historyKeyAllocator.CreateHistoricalKeyAsync(
+                fileName,
+                cancellationToken);
+
+            try
+            {
+                await targetStore.MoveAsync(
+                    fileName,
+                    destinationKey,
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                throw new YabtSyncException(
+                    $"Change manifest history move failed from '{fileName}' " +
+                        $"to '{destinationKey}'.",
+                    ex);
+            }
+        }
+    }
+
+    private static async Task MoveChangeManifestInvalidationMarkerToHistoryAsync
     (
         IObjectStore targetStore,
         ArchiveHistoryKeyAllocator historyKeyAllocator,
@@ -907,21 +1077,20 @@ internal sealed class ArchiveSynchronizer
     )
     {
         var destinationKey = await historyKeyAllocator.CreateHistoricalKeyAsync(
-            ArchiveChangeManifest.FileName,
+            ArchiveChangeManifest.InvalidationMarkerFileName,
             cancellationToken);
-
         try
         {
             await targetStore.MoveAsync(
-                ArchiveChangeManifest.FileName,
+                ArchiveChangeManifest.InvalidationMarkerFileName,
                 destinationKey,
                 cancellationToken);
         }
         catch (Exception ex)
         {
             throw new YabtSyncException(
-                $"Change manifest history move failed from '{ArchiveChangeManifest.FileName}' " +
-                    $"to '{destinationKey}'.",
+                $"Change manifest invalidation marker history move failed from " +
+                    $"'{ArchiveChangeManifest.InvalidationMarkerFileName}' to '{destinationKey}'.",
                 ex);
         }
     }
@@ -962,6 +1131,15 @@ internal sealed class ArchiveSynchronizer
         CancellationToken cancellationToken
     )
     {
+        var expectedArtifactLength = projectedObject.ContentLength ??
+            (byteForByte ? null : previousManifestEntry?.ArtifactLength);
+        if (expectedArtifactLength.HasValue &&
+            targetObject.ContentLength.HasValue &&
+            expectedArtifactLength.Value != targetObject.ContentLength.Value)
+        {
+            return new(false, null);
+        }
+
         if (!byteForByte &&
             TryCreateFastManifestEntry(
                 projectedObject,
@@ -970,13 +1148,6 @@ internal sealed class ArchiveSynchronizer
                 out var fastManifestEntry))
         {
             return new(true, fastManifestEntry);
-        }
-
-        if (projectedObject.ContentLength.HasValue &&
-            targetObject.ContentLength.HasValue &&
-            projectedObject.ContentLength.Value != targetObject.ContentLength.Value)
-        {
-            return new(false, null);
         }
 
         try
@@ -1038,8 +1209,9 @@ internal sealed class ArchiveSynchronizer
             return false;
         }
 
-        if (projectedObject.ContentLength.HasValue &&
-            projectedObject.ContentLength.Value != previousManifestEntry.Length)
+        var expectedArtifactLength = projectedObject.ContentLength ??
+            previousManifestEntry.ArtifactLength;
+        if (!expectedArtifactLength.HasValue)
         {
             return false;
         }
@@ -1051,7 +1223,7 @@ internal sealed class ArchiveSynchronizer
                 return false;
             }
         }
-        else if (targetObject.ContentLength.Value != previousManifestEntry.Length)
+        else if (targetObject.ContentLength.Value != expectedArtifactLength.Value)
         {
             return false;
         }
@@ -1070,7 +1242,7 @@ internal sealed class ArchiveSynchronizer
         manifestEntry = CreateManifestEntry(
             previousManifestEntry.RelativePath,
             projectedObject,
-            previousManifestEntry.Length,
+            expectedArtifactLength.Value,
             previousManifestEntry.ContentHash);
         return true;
     }
@@ -1081,16 +1253,27 @@ internal sealed class ArchiveSynchronizer
         ArchiveProjectedObject projectedObject,
         long contentLength,
         string contentHash
-    ) => new
-    (
-        ArchiveLayout.NormalizeObjectKey(relativePath),
-        contentLength,
-        projectedObject.LastModifiedUtc?.ToUniversalTime(),
-        string.IsNullOrWhiteSpace(projectedObject.ChangeFingerprint) ?
+    )
+    {
+        if (projectedObject.ContentLength.HasValue &&
+            projectedObject.ContentLength.Value != contentLength)
+        {
+            throw new YabtSyncException(
+                $"Projected object '{relativePath}' reported length " +
+                $"{projectedObject.ContentLength.Value}, but its content contained {contentLength} bytes.");
+        }
+
+        var changeFingerprint = string.IsNullOrWhiteSpace(projectedObject.ChangeFingerprint) ?
             contentHash :
-            projectedObject.ChangeFingerprint,
-        contentHash
-    );
+            projectedObject.ChangeFingerprint;
+        return new
+        (
+            ArchiveLayout.NormalizeObjectKey(relativePath),
+            changeFingerprint,
+            ArtifactLength: projectedObject.ContentLength.HasValue ? null : contentLength,
+            ContentHash: contentHash
+        );
+    }
 
     private static bool HaveSameHashAlgorithm
     (
@@ -1203,8 +1386,29 @@ internal sealed class ArchiveSynchronizer
         return
         [
             BackupRootFileNames.Primary,
-            ArchiveChangeManifest.FileName,
+            ArchiveChangeManifest.UncompressedFileName,
+            ArchiveChangeManifest.BrotliFileName,
+            ArchiveChangeManifest.InvalidationMarkerFileName,
         ];
+    }
+
+    private static IEnumerable<string> GetChangeManifestFileNames() =>
+    [
+        ArchiveChangeManifest.BrotliFileName,
+        ArchiveChangeManifest.UncompressedFileName,
+    ];
+
+    private static string GetChangeManifestFileName(string? configuredCompression)
+    {
+        var effectiveCompression = ArchiveChangeManifestCompression.GetEffective(
+            configuredCompression);
+        return effectiveCompression switch
+        {
+            ArchiveChangeManifestCompression.Brotli => ArchiveChangeManifest.BrotliFileName,
+            ArchiveChangeManifestCompression.None => ArchiveChangeManifest.UncompressedFileName,
+            _ => throw new YabtSyncException(
+                $"Unsupported change manifest compression '{effectiveCompression}'."),
+        };
     }
 
     private static List<string> CreateInternalObjectPrefixes(ArchiveLayout layout)
@@ -1415,9 +1619,25 @@ internal sealed class ArchiveSynchronizer
 
     private sealed record ChangeManifestLoad
     (
-        bool Exists,
+        IReadOnlyList<string> ExistingFileNames,
+        bool InvalidationMarkerExists,
         ArchiveChangeManifest? Manifest
-    );
+    )
+    {
+        public bool Exists => ExistingFileNames.Count != 0 || InvalidationMarkerExists;
+
+        public bool RequiresInvalidationMarker =>
+            InvalidationMarkerExists ||
+            Manifest is null && ExistingFileNames.Count > 1;
+
+        public bool NeedsRepresentationRewrite(string expectedFileName) =>
+            InvalidationMarkerExists ||
+            ExistingFileNames.Count != 1 ||
+            !string.Equals(
+                ExistingFileNames[0],
+                expectedFileName,
+                StringComparison.Ordinal);
+    }
 
     private sealed record StreamComparison
     (

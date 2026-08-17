@@ -159,13 +159,13 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
                 throw new YabtMetadataException("Change manifest entry paths cannot be empty.");
             }
 
-            if (entry.Length < 0)
+            if (entry.ArtifactLength < 0)
             {
                 throw new YabtMetadataException(
-                    $"Change manifest entry '{relativePath}' has a negative content length.");
+                    $"Change manifest entry '{relativePath}' has a negative artifact length.");
             }
 
-            ValidateQualifiedHash(
+            ValidateFingerprint(
                 entry.ChangeFingerprint,
                 $"Change manifest entry '{relativePath}' change fingerprint");
 
@@ -179,7 +179,6 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             canonicalEntries.Add(entry with
             {
                 RelativePath = relativePath,
-                LastModifiedUtc = entry.LastModifiedUtc?.ToUniversalTime(),
             });
         }
 
@@ -211,14 +210,11 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         {
             var serializedEntry = serializedEntries[index];
             var canonicalEntry = canonicalEntries[index];
-            var hasCanonicalTimestamp = serializedEntry.LastModifiedUtc is null ||
-                serializedEntry.LastModifiedUtc.Value.Offset == TimeSpan.Zero;
 
             if (!string.Equals(
                     serializedEntry.RelativePath,
                     canonicalEntry.RelativePath,
                     StringComparison.Ordinal) ||
-                !hasCanonicalTimestamp ||
                 !string.Equals(
                     serializedEntry.ChangeFingerprint,
                     canonicalEntry.ChangeFingerprint,
@@ -229,12 +225,12 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
                     StringComparison.Ordinal))
             {
                 throw new YabtMetadataException(
-                    "Change manifest entries are not in canonical path order with UTC timestamps.");
+                    "Change manifest entries are not in canonical path order or contain noncanonical values.");
             }
         }
     }
 
-    private static void ValidateQualifiedHash(string value, string description)
+    private static void ValidateFingerprint(string value, string description)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -244,20 +240,21 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         var separator = value.IndexOf(':', StringComparison.Ordinal);
         if (separator <= 0 || separator == value.Length - 1)
         {
-            throw new YabtMetadataException($"{description} must include an algorithm and value.");
+            throw new YabtMetadataException($"{description} must include a type and value.");
         }
 
-        var algorithm = value.AsSpan(0, separator);
-        var hashValue = value.AsSpan(separator + 1);
-        if (!IsValidAlgorithm(algorithm) || hashValue.IndexOfAny([' ', '\t', '\r', '\n']) >= 0)
+        var qualifier = value.AsSpan(0, separator);
+        var fingerprintValue = value.AsSpan(separator + 1);
+        if (!IsValidQualifier(qualifier) ||
+            fingerprintValue.IndexOfAny([' ', '\t', '\r', '\n']) >= 0)
         {
-            throw new YabtMetadataException($"{description} is not a valid algorithm-qualified hash.");
+            throw new YabtMetadataException($"{description} is not a valid type-qualified fingerprint.");
         }
     }
 
-    private static bool IsValidAlgorithm(ReadOnlySpan<char> algorithm)
+    private static bool IsValidQualifier(ReadOnlySpan<char> qualifier)
     {
-        foreach (var character in algorithm)
+        foreach (var character in qualifier)
         {
             if ((character < 'a' || character > 'z') &&
                 (character < '0' || character > '9') &&
@@ -306,12 +303,11 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             {
                 writer.WriteStartObject();
                 writer.WriteString("relativePath", entry.RelativePath);
-                writer.WriteNumber("length", entry.Length);
-                if (entry.LastModifiedUtc.HasValue)
-                {
-                    writer.WriteString("lastModifiedUtc", entry.LastModifiedUtc.Value);
-                }
                 writer.WriteString("changeFingerprint", entry.ChangeFingerprint);
+                if (entry.ArtifactLength.HasValue)
+                {
+                    writer.WriteNumber("artifactLength", entry.ArtifactLength.Value);
+                }
                 if (entry.ContentHash is not null)
                 {
                     writer.WriteString("contentHash", entry.ContentHash);

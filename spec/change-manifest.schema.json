@@ -25,7 +25,7 @@
     },
     "manifestHash": {
       "type": "string",
-      "pattern": "^xxh128:[0-9a-f]{32}$"
+      "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
     }
   },
   "$defs": {
@@ -34,7 +34,6 @@
       "additionalProperties": false,
       "required": [
         "relativePath",
-        "length",
         "changeFingerprint"
       ],
       "properties": {
@@ -42,21 +41,19 @@
           "type": "string",
           "minLength": 1
         },
-        "length": {
+        "artifactLength": {
           "type": "integer",
-          "minimum": 0
-        },
-        "lastModifiedUtc": {
-          "type": "string",
-          "format": "date-time"
+          "minimum": 0,
+          "description": "Actual stored byte length, present only when the projector cannot supply a length for quick target comparison."
         },
         "changeFingerprint": {
           "type": "string",
+          "description": "Ordinary files use stat-v1:<UTC timestamp>:<length>; format and provider fingerprints remain type-qualified opaque values.",
           "pattern": "^[a-z0-9_.-]+:[^\\s]+$"
         },
         "contentHash": {
           "type": "string",
-          "pattern": "^xxh128:[0-9a-f]{32}$"
+          "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
         }
       }
     }

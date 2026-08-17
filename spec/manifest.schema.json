@@ -22,7 +22,7 @@
           "lastWriteTimeUtc": { "type": "string", "format": "date-time" },
           "contentHash": {
             "type": ["string", "null"],
-            "pattern": "^xxh128:[0-9a-f]{32}$"
+            "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
           }
         },
         "required": ["relativePath", "length", "lastWriteTimeUtc"]
@@ -31,7 +31,7 @@
     "totalBytes": { "type": "integer", "minimum": 0 },
     "manifestHash": {
       "type": "string",
-      "pattern": "^xxh128:[0-9a-f]{32}$"
+      "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
     },
     "packageName": {
       "type": "string",

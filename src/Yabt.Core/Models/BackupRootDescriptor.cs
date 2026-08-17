@@ -1,5 +1,8 @@
+using System.Text.Json.Serialization;
+
 namespace Yabt.Core.Models;
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record BackupRootDescriptor
 (
     string DocumentType,
@@ -10,7 +13,8 @@ public sealed record BackupRootDescriptor
     IEnumerable<BackupRootStore> Stores,
     string? RootRole = default,
     string? Name = default,
-    string? DefaultStoreId = default
+    string? DefaultStoreId = default,
+    string? ChangeManifestCompression = default
 )
 {
     public const string ExpectedDocumentType = "yabt.backupRoot";

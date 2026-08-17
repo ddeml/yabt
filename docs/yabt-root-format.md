@@ -20,6 +20,7 @@ The root descriptor records:
 - Layout prefixes for logical live and history branches.
 - Known object stores.
 - Optional default object store id.
+- Optional change manifest compression.
 - Non-secret store configuration.
 - Credential references.
 
@@ -79,9 +80,18 @@ Archive-style roots may instead use explicit branch directories:
 }
 ```
 
-If a real data name would clash with `.yabt-root.json`, `.yabt-policy.json`, or the configured history prefix, initialize the root with alternate prefixes before using it.
+If a real data name would clash with `.yabt-root.json`, any root change-manifest internal filename, `.yabt-policy.json`, `.yabt-tmp`, or the configured history prefix, initialize the root with alternate prefixes before using it.
 
 When `livePrefix` is empty, YABT metadata paths and the configured history prefix are internal to the archive root. They are not ordinary live data even though they physically sit under the same root.
+
+## Change Manifest Compression
+
+The optional root-level `changeManifestCompression` property controls how YABT writes the root live change manifest:
+
+- `brotli`: write `.yabt-change-manifest.json.br` using Brotli compression.
+- `none`: write the uncompressed `.yabt-change-manifest.json` document.
+
+When the property is omitted, YABT uses `brotli`. Readers inspect both supported file names regardless of the configured write format so that changing this option does not make an existing manifest unreadable. Values are case-sensitive, and no other compression names are accepted during MVP development.
 
 ## Secrets
 
@@ -99,6 +109,7 @@ Store declarations may include a `credentialRef` value. Runtime configuration re
   "archiveId": "018fc4c7-8ec8-7cf4-b5cb-5e31d5d8d15a",
   "name": "Personal archive",
   "defaultStoreId": "local-archive",
+  "changeManifestCompression": "brotli",
   "createdAtUtc": "2026-05-28T18:30:00Z",
   "layout": {
     "livePrefix": "",

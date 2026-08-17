@@ -15,18 +15,14 @@ public sealed class JsonChangeManifestSerializerTests
         var firstEntry = new ArchiveChangeManifestEntry
         (
             "folder\\b.txt",
-            20,
-            new DateTimeOffset(2026, 8, 16, 14, 0, 0, TimeSpan.FromHours(2)),
-            "yabt-stat-v1-xxh128:22222222222222222222222222222222",
-            CreateContentHash("second")
+            "stat-v1:2026-08-16T12:00:00.0000000Z:20",
+            ContentHash: CreateContentHash("second")
         );
         var secondEntry = new ArchiveChangeManifestEntry
         (
             "folder/a.txt",
-            10,
-            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero),
-            "yabt-stat-v1-xxh128:11111111111111111111111111111111",
-            CreateContentHash("first")
+            "stat-v1:2026-08-16T12:00:00.0000000Z:10",
+            ContentHash: CreateContentHash("first")
         );
 
         var forwardManifest = serializer.Create([firstEntry, secondEntry]);
@@ -43,7 +39,9 @@ public sealed class JsonChangeManifestSerializerTests
         );
         Assert.IsTrue(forwardManifest.ManifestHash.StartsWith("xxh128:", StringComparison.Ordinal));
         StringAssert.Contains(forwardJson, "\"documentType\": \"yabt.changeManifest\"");
-        StringAssert.Contains(forwardJson, "\"lastModifiedUtc\": \"2026-08-16T12:00:00+00:00\"");
+        Assert.IsFalse(forwardJson.Contains("artifactLength", StringComparison.Ordinal));
+        Assert.IsFalse(forwardJson.Contains("\"length\"", StringComparison.Ordinal));
+        Assert.IsFalse(forwardJson.Contains("lastModifiedUtc", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -55,10 +53,9 @@ public sealed class JsonChangeManifestSerializerTests
             new
             (
                 "file.txt",
-                7,
-                LastModifiedUtc: null,
-                "xxh128:11111111111111111111111111111111",
-                CreateContentHash("content")
+                ArchiveHash.Compute(Encoding.UTF8.GetBytes("logical input")),
+                ArtifactLength: 7,
+                ContentHash: CreateContentHash("content")
             ),
         ]);
         await using var json = new MemoryStream();
@@ -70,8 +67,7 @@ public sealed class JsonChangeManifestSerializerTests
 
         Assert.AreEqual(manifest.ManifestHash, restored.ManifestHash);
         Assert.AreEqual("file.txt", entry.RelativePath);
-        Assert.AreEqual(7, entry.Length);
-        Assert.IsNull(entry.LastModifiedUtc);
+        Assert.AreEqual(7, entry.ArtifactLength);
         Assert.AreEqual(CreateContentHash("content"), entry.ContentHash);
     }
 
@@ -85,10 +81,8 @@ public sealed class JsonChangeManifestSerializerTests
             new
             (
                 "file.txt",
-                8,
-                DateTimeOffset.Parse("2026-08-16T12:00:00Z"),
-                "xxh128:11111111111111111111111111111111",
-                originalContentHash
+                "stat-v1:2026-08-16T12:00:00.0000000Z:8",
+                ContentHash: originalContentHash
             ),
         ]);
         var json = await WriteToStringAsync(serializer, manifest);
@@ -114,14 +108,31 @@ public sealed class JsonChangeManifestSerializerTests
             new
             (
                 "file.txt",
-                8,
-                DateTimeOffset.Parse("2026-08-16T12:00:00Z"),
-                "xxh128:11111111111111111111111111111111",
-                "not-qualified"
+                "stat-v1:2026-08-16T12:00:00.0000000Z:8",
+                ContentHash: "not-qualified"
             ),
         ]));
 
         StringAssert.Contains(exception.Message, "content hash");
+    }
+
+    [TestMethod]
+    public void CreateRejectsNegativeArtifactLength()
+    {
+        var serializer = CreateSerializer();
+
+        var exception = Assert.Throws<YabtMetadataException>(() => serializer.Create
+        ([
+            new
+            (
+                "package.zip",
+                ArchiveHash.Compute(Encoding.UTF8.GetBytes("logical input")),
+                ArtifactLength: -1,
+                ContentHash: CreateContentHash("content")
+            ),
+        ]));
+
+        StringAssert.Contains(exception.Message, "negative artifact length");
     }
 
     [TestMethod]
@@ -132,6 +143,11 @@ public sealed class JsonChangeManifestSerializerTests
         [
             "md5:11111111111111111111111111111111",
             "xxh128:not-a-hash",
+            "xxh128:11111111111111111111111111111111",
+            "xxh128:AAAAAAAAAAAAAAAAAAAAAB",
+            "xxh128:AAAAAAAAAAAAAAAAAAAAA=",
+            "xxh128:AAAAAAAAAAAAAAAAAAAAA+",
+            "xxh128:AAAAAAAAAAAAAAAAAAAAA/",
             "sha256:11111111111111111111111111111111" +
                 "11111111111111111111111111111111",
         ];
@@ -143,10 +159,8 @@ public sealed class JsonChangeManifestSerializerTests
                 new
                 (
                     "file.txt",
-                    8,
-                    DateTimeOffset.Parse("2026-08-16T12:00:00Z"),
-                    "xxh128:11111111111111111111111111111111",
-                    invalidHash
+                    "stat-v1:2026-08-16T12:00:00.0000000Z:8",
+                    ContentHash: invalidHash
                 ),
             ]));
 
@@ -165,10 +179,8 @@ public sealed class JsonChangeManifestSerializerTests
             new
             (
                 "file.txt",
-                8,
-                DateTimeOffset.Parse("2026-08-16T12:00:00Z"),
                 providerFingerprint,
-                CreateContentHash("content")
+                ContentHash: CreateContentHash("content")
             ),
         ]);
         await using var stream = new MemoryStream();
@@ -191,18 +203,14 @@ public sealed class JsonChangeManifestSerializerTests
             new
             (
                 "folder/file.txt",
-                7,
-                DateTimeOffset.Parse("2026-08-16T12:00:00Z"),
-                "xxh128:11111111111111111111111111111111",
-                contentHash
+                "stat-v1:2026-08-16T12:00:00.0000000Z:7",
+                ContentHash: contentHash
             ),
             new
             (
                 "folder\\file.txt",
-                7,
-                DateTimeOffset.Parse("2026-08-16T12:00:00Z"),
-                "xxh128:11111111111111111111111111111111",
-                contentHash
+                "stat-v1:2026-08-16T12:00:00.0000000Z:7",
+                ContentHash: contentHash
             ),
         ]));
 

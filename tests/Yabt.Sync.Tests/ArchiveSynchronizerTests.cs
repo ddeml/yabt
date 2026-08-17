@@ -372,6 +372,11 @@ public sealed class ArchiveSynchronizerTests
                 "photos",
                 ArchiveFolderMarkerFileNames.EmptyFolder)));
 
+            var unchangedResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(unchangedResult.Completed);
+            Assert.AreEqual(1, unchangedResult.UnchangedCount);
+
             await WritePolicyAsync(photosRoot, ZipArchiveFormatName.Value);
 
             var zipResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
@@ -789,15 +794,25 @@ public sealed class ArchiveSynchronizerTests
         var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
 
         Assert.IsTrue(firstResult.Completed);
-        Assert.IsTrue(targetStore.TryGetObject(ArchiveChangeManifest.FileName, out var manifestObject));
+        Assert.IsTrue(targetStore.TryGetObject(
+            ArchiveChangeManifest.BrotliFileName,
+            out var manifestObject));
+        Assert.IsFalse(targetStore.TryGetObject(
+            ArchiveChangeManifest.UncompressedFileName,
+            out _));
+        Assert.AreEqual("application/octet-stream", manifestObject.ContentType);
         var manifestSerializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
         await using var manifestContent = new MemoryStream(manifestObject.Content.ToArray(), writable: false);
-        var manifest = await manifestSerializer.ReadAsync(manifestContent);
+        var manifest = await ReadChangeManifestAsync(
+            manifestSerializer,
+            manifestContent,
+            ArchiveChangeManifestCompression.Brotli);
         var manifestEntry = manifest.Entries.Single();
         Assert.IsTrue(manifestEntry.RelativePath.EndsWith(".zip", StringComparison.Ordinal));
         Assert.IsTrue(manifestEntry.ChangeFingerprint.StartsWith(
             "xxh128:",
             StringComparison.Ordinal));
+        Assert.IsTrue(manifestEntry.ArtifactLength > 0);
         Assert.IsTrue(manifestEntry.ContentHash?.StartsWith("xxh128:", StringComparison.Ordinal));
 
         guardedSourceStore.RejectDataReads = true;
@@ -817,6 +832,377 @@ public sealed class ArchiveSynchronizerTests
         guardedTargetStore.HideContentLengths = true;
         await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.VerifyAsync(
             new SyncRunRequest(sourceRoot)));
+
+        guardedTargetStore.HideContentLengths = false;
+        await targetStore.MoveAsync(
+            manifestEntry.RelativePath,
+            $"{ArchiveInternalFolderNames.TemporaryUploads}/original-package.zip");
+        await UploadTextObjectAsync(targetStore, manifestEntry.RelativePath, "x");
+        Assert.IsTrue(targetStore.TryGetObject(manifestEntry.RelativePath, out var truncatedPackage));
+        Assert.AreEqual(1, truncatedPackage.Content.Length);
+        Assert.IsTrue(targetStore.TryGetObject(
+            ArchiveChangeManifest.BrotliFileName,
+            out var currentManifestObject));
+        await using var currentManifestContent = new MemoryStream(
+            currentManifestObject.Content.ToArray(),
+            writable: false);
+        var currentManifest = await ReadChangeManifestAsync(
+            manifestSerializer,
+            currentManifestContent,
+            ArchiveChangeManifestCompression.Brotli);
+        Assert.IsTrue(currentManifest.Entries.Single().ArtifactLength > 1);
+
+        var truncatedResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsFalse(truncatedResult.Completed);
+        Assert.AreEqual(1, truncatedResult.ChangedCount);
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncWritesUncompressedChangeManifestWhenConfigured()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-uncompressed-manifest-test-{Guid.NewGuid():N}");
+        var sourceStore = new MemoryObjectStore();
+        var targetStore = new MemoryObjectStore();
+        await UploadTextObjectAsync(sourceStore, "file.txt", "source content");
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)],
+            changeManifestCompression: ArchiveChangeManifestCompression.None);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var result = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(result.Completed);
+        Assert.IsTrue(targetStore.TryGetObject(
+            ArchiveChangeManifest.UncompressedFileName,
+            out var manifestObject));
+        Assert.IsFalse(targetStore.TryGetObject(
+            ArchiveChangeManifest.BrotliFileName,
+            out _));
+        Assert.AreEqual("application/json", manifestObject.ContentType);
+
+        var serializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+        await using var content = new MemoryStream(manifestObject.Content.ToArray(), writable: false);
+        var manifest = await ReadChangeManifestAsync(
+            serializer,
+            content,
+            ArchiveChangeManifestCompression.None);
+        Assert.AreEqual(1, manifest.Entries.Count());
+    }
+
+    [TestMethod]
+    [DataRow(ArchiveChangeManifestCompression.None, ArchiveChangeManifestCompression.Brotli)]
+    [DataRow(ArchiveChangeManifestCompression.Brotli, ArchiveChangeManifestCompression.None)]
+    public async Task SyncAsyncReadsEitherChangeManifestAndConvertsToConfiguredRepresentation
+    (
+        string initialCompression,
+        string nextCompression
+    )
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-manifest-conversion-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadTextObjectAsync(sourceStore, "file.txt", "source content");
+        var storeConfiguration = new BackupRootStore(
+            "target",
+            FixedBackupRootStoreResolver.StoreKindValue);
+        var initialDescriptor = CreateRootDescriptor(
+            [storeConfiguration],
+            changeManifestCompression: initialCompression);
+
+        using (var initialServiceProvider = CreateStreamingServices(
+            sourceRoot,
+            initialDescriptor,
+            sourceStore,
+            targetStore,
+            timeProvider).BuildServiceProvider())
+        {
+            var initialSynchronizer = initialServiceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var initialResult = await initialSynchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(initialResult.Completed);
+        }
+
+        var initialFileName = GetChangeManifestFileName(initialCompression);
+        var nextFileName = GetChangeManifestFileName(nextCompression);
+        Assert.IsTrue(targetStore.TryGetObject(initialFileName, out _));
+        Assert.IsFalse(targetStore.TryGetObject(nextFileName, out _));
+
+        var nextDescriptor = CreateRootDescriptor(
+            [storeConfiguration],
+            changeManifestCompression: nextCompression);
+        var guardedSourceStore = new DataReadGuardObjectStore(sourceStore)
+        {
+            RejectDataReads = true,
+        };
+        var guardedTargetStore = new DataReadGuardObjectStore(targetStore)
+        {
+            RejectDataReads = true,
+        };
+        using var nextServiceProvider = CreateStreamingServices(
+            sourceRoot,
+            nextDescriptor,
+            guardedSourceStore,
+            guardedTargetStore,
+            timeProvider).BuildServiceProvider();
+        var nextSynchronizer = nextServiceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var conversionResult = await nextSynchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(conversionResult.Completed);
+        Assert.AreEqual(1, conversionResult.UnchangedCount);
+        Assert.IsFalse(targetStore.TryGetObject(initialFileName, out _));
+        Assert.IsTrue(targetStore.TryGetObject(nextFileName, out var convertedManifestObject));
+        Assert.IsTrue(targetStore.TryGetObject(
+            $".yabt-hist/20260816T120000Z/{initialFileName}",
+            out _));
+
+        var serializer = nextServiceProvider.GetRequiredService<IChangeManifestSerializer>();
+        await using var convertedContent = new MemoryStream(
+            convertedManifestObject.Content.ToArray(),
+            writable: false);
+        var convertedManifest = await ReadChangeManifestAsync(
+            serializer,
+            convertedContent,
+            nextCompression);
+        Assert.AreEqual(1, convertedManifest.Entries.Count());
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncAcceptsMatchingDualChangeManifestsAndConvergesToConfiguredRepresentation()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-matching-dual-manifest-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadTextObjectAsync(sourceStore, "file.txt", "source content");
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            timeProvider).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+        var serializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+
+        var initialResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+        Assert.IsTrue(initialResult.Completed);
+        Assert.IsTrue(targetStore.TryGetObject(
+            ArchiveChangeManifest.BrotliFileName,
+            out var compressedManifestObject));
+        await using var compressedContent = new MemoryStream(
+            compressedManifestObject.Content.ToArray(),
+            writable: false);
+        var manifest = await ReadChangeManifestAsync(
+            serializer,
+            compressedContent,
+            ArchiveChangeManifestCompression.Brotli);
+        await UploadChangeManifestAsync(
+            targetStore,
+            serializer,
+            manifest,
+            ArchiveChangeManifestCompression.None);
+
+        var verifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+        var convergenceResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(verifyResult.Completed);
+        Assert.AreEqual(1, verifyResult.UnchangedCount);
+        Assert.IsTrue(convergenceResult.Completed);
+        Assert.AreEqual(1, convergenceResult.UnchangedCount);
+        Assert.IsTrue(targetStore.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.UncompressedFileName, out _));
+        Assert.IsTrue(targetStore.TryGetObject(
+            $".yabt-hist/20260816T120000Z/{ArchiveChangeManifest.BrotliFileName}",
+            out _));
+        Assert.IsTrue(targetStore.TryGetObject(
+            $".yabt-hist/20260816T120000Z/{ArchiveChangeManifest.UncompressedFileName}",
+            out _));
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncRejectsConflictingDualChangeManifestsAndRebuildsBoth()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-conflicting-dual-manifest-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadTextObjectAsync(sourceStore, "file.txt", "source content");
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            timeProvider).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+        var serializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+
+        var initialResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+        Assert.IsTrue(initialResult.Completed);
+        var conflictingManifest = serializer.Create([]);
+        await UploadChangeManifestAsync(
+            targetStore,
+            serializer,
+            conflictingManifest,
+            ArchiveChangeManifestCompression.None);
+
+        await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.VerifyAsync(
+            new SyncRunRequest(sourceRoot)));
+        var byteForByteResult = await synchronizer.VerifyAsync(
+            new SyncRunRequest(sourceRoot, ByteForByte: true));
+        var recoveryResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(byteForByteResult.Completed);
+        Assert.AreEqual(1, byteForByteResult.UnchangedCount);
+        Assert.IsTrue(recoveryResult.Completed);
+        Assert.AreEqual(1, recoveryResult.UnchangedCount);
+        Assert.IsTrue(targetStore.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.UncompressedFileName, out _));
+        Assert.IsTrue(targetStore.TryGetObject(
+            $".yabt-hist/20260816T120000Z/{ArchiveChangeManifest.BrotliFileName}",
+            out _));
+        Assert.IsTrue(targetStore.TryGetObject(
+            $".yabt-hist/20260816T120000Z/{ArchiveChangeManifest.UncompressedFileName}",
+            out _));
+    }
+
+    [TestMethod]
+    public async Task InterruptedDualManifestQuarantineLeavesEvidenceUntrusted()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-interrupted-manifest-quarantine-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        var guardedTargetStore = new DataReadGuardObjectStore(targetStore);
+        await UploadTextObjectAsync(sourceStore, "file.txt", "source content");
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            guardedTargetStore,
+            timeProvider).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+        var serializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+
+        var initialResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+        Assert.IsTrue(initialResult.Completed);
+        await UploadChangeManifestAsync(
+            targetStore,
+            serializer,
+            serializer.Create([]),
+            ArchiveChangeManifestCompression.None);
+        guardedTargetStore.RejectMoveSource = ArchiveChangeManifest.UncompressedFileName;
+
+        await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.SyncAsync(
+            new SyncRunRequest(sourceRoot)));
+
+        Assert.IsTrue(targetStore.TryGetObject(
+            ArchiveChangeManifest.InvalidationMarkerFileName,
+            out _));
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
+        Assert.IsTrue(targetStore.TryGetObject(ArchiveChangeManifest.UncompressedFileName, out _));
+        await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.VerifyAsync(
+            new SyncRunRequest(sourceRoot)));
+        var byteForByteResult = await synchronizer.VerifyAsync(
+            new SyncRunRequest(sourceRoot, ByteForByte: true));
+        Assert.IsTrue(byteForByteResult.Completed);
+
+        guardedTargetStore.RejectMoveSource = null;
+        var recoveryResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(recoveryResult.Completed);
+        Assert.AreEqual(1, recoveryResult.UnchangedCount);
+        Assert.IsTrue(targetStore.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.UncompressedFileName, out _));
+        Assert.IsFalse(targetStore.TryGetObject(
+            ArchiveChangeManifest.InvalidationMarkerFileName,
+            out _));
+    }
+
+    [TestMethod]
+    public async Task ByteForByteVerifyIgnoresIncorrectManifestArtifactLength()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-byte-manifest-length-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadTextObjectAsync(sourceStore, "file.txt", "source content");
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            timeProvider,
+            new FolderPolicy(ZipArchiveFormatName.Value)).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+        var serializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+
+        var syncResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+        Assert.IsTrue(syncResult.Completed);
+        Assert.IsTrue(targetStore.TryGetObject(
+            ArchiveChangeManifest.BrotliFileName,
+            out var manifestObject));
+        await using var manifestContent = new MemoryStream(
+            manifestObject.Content.ToArray(),
+            writable: false);
+        var manifest = await ReadChangeManifestAsync(
+            serializer,
+            manifestContent,
+            ArchiveChangeManifestCompression.Brotli);
+        var incorrectManifest = serializer.Create(manifest.Entries.Select(entry => entry with
+        {
+            ArtifactLength = entry.ArtifactLength + 1,
+        }));
+
+        await targetStore.MoveAsync(
+            ArchiveChangeManifest.BrotliFileName,
+            $"{ArchiveInternalFolderNames.TemporaryUploads}/original-change-manifest.json.br");
+        await UploadChangeManifestAsync(
+            targetStore,
+            serializer,
+            incorrectManifest,
+            ArchiveChangeManifestCompression.Brotli);
+
+        var verifyResult = await synchronizer.VerifyAsync(
+            new SyncRunRequest(sourceRoot, ByteForByte: true));
+
+        Assert.IsTrue(verifyResult.Completed);
+        Assert.AreEqual(1, verifyResult.UnchangedCount);
     }
 
     [TestMethod]
@@ -850,10 +1236,45 @@ public sealed class ArchiveSynchronizerTests
             new SyncRunRequest(sourceRoot)));
 
         StringAssert.Contains(exception.ToString(), "before consuming all projected content");
-        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.FileName, out _));
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.UncompressedFileName, out _));
         var partialPackage = targetStore.Snapshot().Single();
         Assert.IsTrue(partialPackage.Key.EndsWith(".zip", StringComparison.Ordinal));
         Assert.AreEqual(0, partialPackage.Content.Length);
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncRejectsProjectedLengthThatDoesNotMatchReadContent()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-source-length-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadTextObjectAsync(sourceStore, "file.txt", "source content");
+        var inaccurateSourceStore = new DataReadGuardObjectStore(sourceStore)
+        {
+            ContentLengthAdjustment = 1,
+        };
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            inaccurateSourceStore,
+            targetStore,
+            timeProvider).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+            () => synchronizer.SyncAsync(new SyncRunRequest(sourceRoot)));
+
+        StringAssert.Contains(exception.ToString(), "reported length");
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.UncompressedFileName, out _));
     }
 
     [TestMethod]
@@ -892,15 +1313,25 @@ public sealed class ArchiveSynchronizerTests
         Assert.IsTrue(syncResult.Completed);
         Assert.IsTrue(verifyResult.Completed);
         Assert.IsTrue(targetStore.TryGetObject("live/file.txt", out _));
-        Assert.IsTrue(targetStore.TryGetObject(ArchiveChangeManifest.FileName, out var manifestObject));
+        Assert.IsTrue(targetStore.TryGetObject(
+            ArchiveChangeManifest.BrotliFileName,
+            out var manifestObject));
         Assert.IsFalse(targetStore.TryGetObject(
-            $"live/{ArchiveChangeManifest.FileName}",
+            $"live/{ArchiveChangeManifest.BrotliFileName}",
+            out _));
+        Assert.IsFalse(targetStore.TryGetObject(
+            $"live/{ArchiveChangeManifest.UncompressedFileName}",
             out _));
 
         var serializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
         await using var content = new MemoryStream(manifestObject.Content.ToArray(), writable: false);
-        var manifest = await serializer.ReadAsync(content);
-        Assert.AreEqual("file.txt", manifest.Entries.Single().RelativePath);
+        var manifest = await ReadChangeManifestAsync(
+            serializer,
+            content,
+            ArchiveChangeManifestCompression.Brotli);
+        var manifestEntry = manifest.Entries.Single();
+        Assert.AreEqual("file.txt", manifestEntry.RelativePath);
+        Assert.IsNull(manifestEntry.ArtifactLength);
     }
 
     [TestMethod]
@@ -980,9 +1411,14 @@ public sealed class ArchiveSynchronizerTests
             var manifestSerializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
             await using var manifestContent = File.OpenRead(Path.Combine(
                 targetRoot,
-                ArchiveChangeManifest.FileName));
-            var manifest = await manifestSerializer.ReadAsync(manifestContent);
-            Assert.AreEqual("file.txt", manifest.Entries.Single().RelativePath);
+                ArchiveChangeManifest.BrotliFileName));
+            var manifest = await ReadChangeManifestAsync(
+                manifestSerializer,
+                manifestContent,
+                ArchiveChangeManifestCompression.Brotli);
+            var manifestEntry = manifest.Entries.Single();
+            Assert.AreEqual("file.txt", manifestEntry.RelativePath);
+            Assert.IsNull(manifestEntry.ArtifactLength);
         }
         finally
         {
@@ -1056,7 +1492,7 @@ public sealed class ArchiveSynchronizerTests
         {
             var sourceRoot = Path.Combine(workspace, "source");
             var targetRoot = Path.Combine(workspace, "target");
-            var manifestPath = Path.Combine(targetRoot, ArchiveChangeManifest.FileName);
+            var manifestPath = Path.Combine(targetRoot, ArchiveChangeManifest.BrotliFileName);
             await InitializeSourceRootAsync(sourceRoot, targetRoot);
             await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "source content");
 
@@ -1085,13 +1521,16 @@ public sealed class ArchiveSynchronizerTests
             var serializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
             await using (var manifestContent = File.OpenRead(manifestPath))
             {
-                var rebuiltManifest = await serializer.ReadAsync(manifestContent);
+                var rebuiltManifest = await ReadChangeManifestAsync(
+                    serializer,
+                    manifestContent,
+                    ArchiveChangeManifestCompression.Brotli);
                 Assert.AreEqual(1, rebuiltManifest.Entries.Count());
             }
 
             var historicalManifestPath = Directory.GetFiles(
                 Path.Combine(targetRoot, ".yabt-hist"),
-                ArchiveChangeManifest.FileName,
+                ArchiveChangeManifest.BrotliFileName,
                 SearchOption.AllDirectories).Single();
             Assert.AreEqual("{ invalid manifest", await File.ReadAllTextAsync(historicalManifestPath));
         }
@@ -1500,7 +1939,8 @@ public sealed class ArchiveSynchronizerTests
     private static BackupRootDescriptor CreateRootDescriptor
     (
         IEnumerable<BackupRootStore> stores,
-        string? defaultStoreId = default
+        string? defaultStoreId = default,
+        string? changeManifestCompression = default
     )
     {
         return new
@@ -1512,8 +1952,96 @@ public sealed class ArchiveSynchronizerTests
             ArchiveLayout.Default,
             stores,
             "source",
-            DefaultStoreId: defaultStoreId
+            DefaultStoreId: defaultStoreId,
+            ChangeManifestCompression: changeManifestCompression
         );
+    }
+
+    private static string GetChangeManifestFileName(string compression) => compression switch
+    {
+        ArchiveChangeManifestCompression.Brotli => ArchiveChangeManifest.BrotliFileName,
+        ArchiveChangeManifestCompression.None => ArchiveChangeManifest.UncompressedFileName,
+        _ => throw new InvalidOperationException(
+            $"Unsupported test change manifest compression '{compression}'."),
+    };
+
+    private static async Task<ArchiveChangeManifest> ReadChangeManifestAsync
+    (
+        IChangeManifestSerializer serializer,
+        Stream content,
+        string compression
+    )
+    {
+        if (string.Equals(
+                compression,
+                ArchiveChangeManifestCompression.None,
+                StringComparison.Ordinal))
+        {
+            return await serializer.ReadAsync(content);
+        }
+
+        if (!string.Equals(
+                compression,
+                ArchiveChangeManifestCompression.Brotli,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Unsupported test change manifest compression '{compression}'.");
+        }
+
+        await using var decompressedContent = new BrotliStream(
+            content,
+            CompressionMode.Decompress,
+            leaveOpen: true);
+        return await serializer.ReadAsync(decompressedContent);
+    }
+
+    private static async Task UploadChangeManifestAsync
+    (
+        MemoryObjectStore targetStore,
+        IChangeManifestSerializer serializer,
+        ArchiveChangeManifest manifest,
+        string compression
+    )
+    {
+        await using var content = new MemoryStream();
+        if (string.Equals(
+                compression,
+                ArchiveChangeManifestCompression.Brotli,
+                StringComparison.Ordinal))
+        {
+            await using (var compressedContent = new BrotliStream(
+                content,
+                CompressionLevel.Optimal,
+                leaveOpen: true))
+            {
+                await serializer.WriteAsync(manifest, compressedContent);
+            }
+        }
+        else if (string.Equals(
+                     compression,
+                     ArchiveChangeManifestCompression.None,
+                     StringComparison.Ordinal))
+        {
+            await serializer.WriteAsync(manifest, content);
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"Unsupported test change manifest compression '{compression}'.");
+        }
+
+        content.Position = 0;
+        await targetStore.UploadAsync(
+            GetChangeManifestFileName(compression),
+            content,
+            string.Equals(
+                compression,
+                ArchiveChangeManifestCompression.Brotli,
+                StringComparison.Ordinal) ?
+                    "application/octet-stream" :
+                    "application/json",
+            new Dictionary<string, string>(StringComparer.Ordinal));
     }
 
     private static BackupRootStore CreateFileSystemStore
@@ -1581,7 +2109,11 @@ public sealed class ArchiveSynchronizerTests
 
         public bool HideContentLengths { get; set; }
 
+        public long ContentLengthAdjustment { get; set; }
+
         public bool StopUploadsAfterEmptyRead { get; set; }
+
+        public string? RejectMoveSource { get; set; }
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
             _innerStore.EnsureReadyAsync(cancellationToken);
@@ -1623,7 +2155,14 @@ public sealed class ArchiveSynchronizerTests
         )
         {
             if (RejectDataReads &&
-                !string.Equals(key, ArchiveChangeManifest.FileName, StringComparison.Ordinal))
+                !string.Equals(
+                    key,
+                    ArchiveChangeManifest.BrotliFileName,
+                    StringComparison.Ordinal) &&
+                !string.Equals(
+                    key,
+                    ArchiveChangeManifest.UncompressedFileName,
+                    StringComparison.Ordinal))
             {
                 throw new InvalidOperationException($"Data object '{key}' must not be opened.");
             }
@@ -1650,13 +2189,17 @@ public sealed class ArchiveSynchronizerTests
                 cancellationToken);
             await foreach (var item in items)
             {
-                if (HideContentLengths && item.Object is not null)
+                if (item.Object is not null &&
+                    (HideContentLengths || ContentLengthAdjustment != 0))
                 {
+                    long? contentLength = HideContentLengths || !item.Object.ContentLength.HasValue ?
+                        null :
+                        checked(item.Object.ContentLength.Value + ContentLengthAdjustment);
                     yield return item with
                     {
                         Object = item.Object with
                         {
-                            ContentLength = null,
+                            ContentLength = contentLength,
                         },
                     };
                     continue;
@@ -1671,7 +2214,15 @@ public sealed class ArchiveSynchronizerTests
             string source,
             string destination,
             CancellationToken cancellationToken = default
-        ) => _innerStore.MoveAsync(source, destination, cancellationToken);
+        )
+        {
+            if (string.Equals(source, RejectMoveSource, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Move from '{source}' was rejected by the test store.");
+            }
+
+            return _innerStore.MoveAsync(source, destination, cancellationToken);
+        }
 
         public Task MoveFolderAsync
         (

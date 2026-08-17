@@ -71,5 +71,13 @@ internal sealed class JsonBackupRootSerializer(JsonSerializerOptions _jsonOption
         {
             throw new YabtMetadataException("Backup root JSON has an unsupported schema version.");
         }
+
+        var changeManifestCompression = ArchiveChangeManifestCompression.GetEffective(
+            descriptor.ChangeManifestCompression);
+        if (!ArchiveChangeManifestCompression.IsSupported(changeManifestCompression))
+        {
+            throw new YabtMetadataException(
+                "Backup root JSON has an unsupported change manifest compression value.");
+        }
     }
 }

@@ -5,6 +5,7 @@
   "archiveId": "4d8e9a6a-9c08-4d51-9b27-e4dbb7b57fc2",
   "name": "Local filesystem sync test",
   "defaultStoreId": "local-target",
+  "changeManifestCompression": "brotli",
   "createdAtUtc": "2026-07-02T00:00:00Z",
   "layout": {
     "livePrefix": "",

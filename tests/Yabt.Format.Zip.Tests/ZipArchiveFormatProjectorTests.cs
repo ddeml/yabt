@@ -45,14 +45,22 @@ public sealed class ZipArchiveFormatProjectorTests
         var projectedObject = projectedObjects.Single();
         StringAssert.Matches(
             projectedObject.RelativePath,
-            new Regex("^Photos\\.xxh128-[0-9a-f]{32}\\.zip$", RegexOptions.CultureInvariant));
+            new Regex
+            (
+                "^Photos\\.xxh128-[0-9a-v]{25}[048cgkos]\\.zip$",
+                RegexOptions.CultureInvariant
+            ));
         Assert.IsNull(projectedObject.ContentHash);
         StringAssert.Matches(
             projectedObject.ChangeFingerprint,
-            new Regex("^xxh128:[0-9a-f]{32}$", RegexOptions.CultureInvariant));
+            new Regex
+            (
+                "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$",
+                RegexOptions.CultureInvariant
+            ));
         StringAssert.Contains(
             projectedObject.RelativePath,
-            projectedObject.ChangeFingerprint.Replace(':', '-'));
+            ArchiveHash.FormatFileNameToken(projectedObject.ChangeFingerprint));
 
         await using var content = await projectedObject.OpenContentAsync(default);
         using var archive = new ZipArchive(content.Content, ZipArchiveMode.Read);
@@ -86,11 +94,15 @@ public sealed class ZipArchiveFormatProjectorTests
 
         Assert.AreEqual(firstProjection.RelativePath, secondProjection.RelativePath);
         Assert.AreEqual(
-            "Photos.xxh128-3d588f692fb138a6fec2d5713302c07f.zip",
+            "Photos.xxh128-a5rquodjp7f84aj82brdp2skjk.zip",
             firstProjection.RelativePath);
         StringAssert.Matches(
             firstProjection.RelativePath,
-            new Regex("^Photos\\.xxh128-[0-9a-f]{32}\\.zip$", RegexOptions.CultureInvariant));
+            new Regex
+            (
+                "^Photos\\.xxh128-[0-9a-v]{25}[048cgkos]\\.zip$",
+                RegexOptions.CultureInvariant
+            ));
         CollectionAssert.AreEqual(
             await ReadContentBytesAsync(firstProjection),
             await ReadContentBytesAsync(secondProjection));
@@ -261,8 +273,8 @@ public sealed class ZipArchiveFormatProjectorTests
         }
 
         var contentHash = sourceObjects.Single().ContentHash ?? string.Empty;
-        StringAssert.StartsWith(contentHash, "xxh128:");
-        Assert.AreEqual(39, contentHash.Length);
+        Assert.AreEqual("xxh128:I5kS3t_MtgEZAbZJSW82sw", contentHash);
+        Assert.AreEqual(29, contentHash.Length);
     }
 
     private static ServiceCollection CreateServices(TimeProvider? timeProvider = default)

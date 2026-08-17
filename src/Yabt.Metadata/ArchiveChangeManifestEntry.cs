@@ -6,10 +6,7 @@ namespace Yabt.Metadata;
 public sealed record ArchiveChangeManifestEntry
 (
     [property: JsonRequired] string RelativePath,
-    [property: JsonRequired]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)]
-    long Length,
-    DateTimeOffset? LastModifiedUtc,
     [property: JsonRequired] string ChangeFingerprint,
+    long? ArtifactLength = default,
     string? ContentHash = default
 );

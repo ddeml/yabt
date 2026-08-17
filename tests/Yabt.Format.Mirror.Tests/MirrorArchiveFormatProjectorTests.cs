@@ -43,7 +43,7 @@ public sealed class MirrorArchiveFormatProjectorTests
         Assert.AreEqual("folder/file.txt", projectedObject.RelativePath);
         StringAssert.StartsWith(
             projectedObject.ChangeFingerprint,
-            "yabt-stat-v1-xxh128:");
+            "stat-v1:");
         await AssertProjectedTextAsync(projectedObject, "source content");
     }
 
@@ -62,6 +62,8 @@ public sealed class MirrorArchiveFormatProjectorTests
         var localFingerprint = ArchiveChangeFingerprint.Create(42, localTime);
         var utcFingerprint = ArchiveChangeFingerprint.Create(42, localTime.ToUniversalTime());
         var differentLengthFingerprint = ArchiveChangeFingerprint.Create(43, localTime);
+        _ = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ArchiveChangeFingerprint.Create(-1, localTime));
         var hasIncompleteFingerprint = ArchiveChangeFingerprint.TryCreate(
             42,
             lastModifiedUtc: null,
@@ -69,13 +71,15 @@ public sealed class MirrorArchiveFormatProjectorTests
 
         Assert.AreEqual(localFingerprint, utcFingerprint);
         Assert.AreEqual(
-            "yabt-stat-v1-xxh128:4eacc29d198498b8913eb1972d12aba7",
+            "stat-v1:2026-08-16T12:30:00.0000000Z:42",
             localFingerprint);
         Assert.AreNotEqual(localFingerprint, differentLengthFingerprint);
         StringAssert.Matches(
             localFingerprint,
             new Regex(
-                "^yabt-stat-v1-xxh128:[0-9a-f]{32}$",
+                "^stat-v1:[0-9]{4}-[0-9]{2}-[0-9]{2}T" +
+                    "[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z:" +
+                    "(0|[1-9][0-9]*)$",
                 RegexOptions.CultureInvariant));
         Assert.IsFalse(hasIncompleteFingerprint);
         Assert.IsNull(incompleteFingerprint);

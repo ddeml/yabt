@@ -562,9 +562,16 @@ internal sealed class AzureBlobObjectStore
     {
         // Azure exposes BlobItemProperties.ContentHash as Content-MD5. Keep the provider checksum
         // explicitly tagged so it is never compared as if it were YABT's xxHash128 content hash.
-        return contentHash is null || contentHash.Length == 0 ?
-            null :
-            $"md5:{Convert.ToHexString(contentHash).ToLowerInvariant()}";
+        if (contentHash is null || contentHash.Length == 0)
+        {
+            return null;
+        }
+
+        var encodedHash = Convert.ToBase64String(contentHash)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return $"md5:{encodedHash}";
     }
 
     private static BlobHttpHeaders ToBlobHttpHeaders(BlobProperties properties) =>

@@ -1,7 +1,5 @@
-using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
-using System.IO.Hashing;
-using System.Text;
+using System.Globalization;
 
 namespace Yabt.Core.Models;
 
@@ -11,24 +9,18 @@ namespace Yabt.Core.Models;
 /// </summary>
 public static class ArchiveChangeFingerprint
 {
-    private const string AlgorithmName = "yabt-stat-v1-" + ArchiveHash.AlgorithmName;
-
-    private static readonly byte[] Domain = Encoding.UTF8.GetBytes("yabt-stat-v1");
+    private const string FormatName = "stat-v1";
 
     // This is a fast change hint derived from metadata, not proof of the object's byte content.
     public static string Create(long contentLength, DateTimeOffset lastModifiedUtc)
     {
-        var hash = new XxHash128();
-        hash.Append(Domain);
+        ArgumentOutOfRangeException.ThrowIfNegative(contentLength);
 
-        Span<byte> value = stackalloc byte[sizeof(long)];
-        BinaryPrimitives.WriteInt64BigEndian(value, contentLength);
-        hash.Append(value);
-
-        BinaryPrimitives.WriteInt64BigEndian(value, lastModifiedUtc.UtcDateTime.Ticks);
-        hash.Append(value);
-
-        return $"{AlgorithmName}:{Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()}";
+        return string.Create
+        (
+            CultureInfo.InvariantCulture,
+            $"{FormatName}:{lastModifiedUtc.UtcDateTime:O}:{contentLength}"
+        );
     }
 
     public static bool TryCreate

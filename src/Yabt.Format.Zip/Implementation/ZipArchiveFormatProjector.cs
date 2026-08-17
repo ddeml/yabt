@@ -59,13 +59,13 @@ internal sealed class ZipArchiveFormatProjector
             request,
             cancellationToken);
         var compressionLevel = _options.CurrentValue.CompressionLevel ?? default;
-        var packageChangeFingerprint = ComputePackageChangeFingerprint(
+        var packageFingerprint = ComputePackageFingerprint(
             sourceObjects,
             compressionLevel);
         var packageName = CreatePackageName(
             request.SourceDisplayName,
             request.SourcePrefix,
-            packageChangeFingerprint);
+            packageFingerprint.FileNameToken);
 
         //TODO: Project the adjacent manifest as a second object once manifest canonicalization is finalized.
         var packageObject = CreatePackageObject
@@ -74,7 +74,7 @@ internal sealed class ZipArchiveFormatProjector
             request.SourceStore,
             sourceObjects,
             compressionLevel,
-            packageChangeFingerprint
+            packageFingerprint.ChangeFingerprint
         );
 
         yield return packageObject;
@@ -309,7 +309,7 @@ internal sealed class ZipArchiveFormatProjector
         return hashBufferSize;
     }
 
-    private static string ComputePackageChangeFingerprint
+    private static ZipPackageFingerprint ComputePackageFingerprint
     (
         IReadOnlyList<ZipSourceObject> sourceObjects,
         CompressionLevel compressionLevel
@@ -332,7 +332,12 @@ internal sealed class ZipArchiveFormatProjector
             AppendCanonicalString(hash, sourceObject.ChangeFingerprint);
         }
 
-        return ArchiveHash.Format(hash.GetHashAndReset());
+        var hashValue = hash.GetHashAndReset();
+        return new
+        (
+            ArchiveHash.Format(hashValue),
+            ArchiveHash.FormatFileNameToken(hashValue)
+        );
     }
 
     private static void AppendCanonicalString(XxHash128 hash, string value)
@@ -366,13 +371,12 @@ internal sealed class ZipArchiveFormatProjector
     (
         string? sourceDisplayName,
         string? sourcePrefix,
-        string manifestHash
+        string fileNameHash
     )
     {
         var sourceName = Path.GetFileName(
             ArchiveLayout.NormalizeObjectKey(sourceDisplayName ?? sourcePrefix));
         var safeSourceName = SanitizeFileName(string.IsNullOrWhiteSpace(sourceName) ? "root" : sourceName);
-        var fileNameHash = ToFileNameHash(manifestHash);
 
         return $"{safeSourceName}.{fileNameHash}.zip";
     }
@@ -390,18 +394,6 @@ internal sealed class ZipArchiveFormatProjector
         return builder.ToString();
     }
 
-    private static string ToFileNameHash(string value)
-    {
-        var separator = value.IndexOf(':', StringComparison.Ordinal);
-        if (separator <= 0 || separator == value.Length - 1)
-        {
-            throw new YabtFormatZipException(
-                "ZIP package identity hash must include an algorithm and value.");
-        }
-
-        return $"{value[..separator]}-{value[(separator + 1)..]}";
-    }
-
     private sealed record ZipSourceObject
     (
         string SourceKey,
@@ -415,5 +407,11 @@ internal sealed class ZipArchiveFormatProjector
     (
         long? Length,
         string ChangeFingerprint
+    );
+
+    private sealed record ZipPackageFingerprint
+    (
+        string ChangeFingerprint,
+        string FileNameToken
     );
 }

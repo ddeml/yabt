@@ -27,6 +27,12 @@
       "type": ["string", "null"],
       "minLength": 1
     },
+    "changeManifestCompression": {
+      "type": ["string", "null"],
+      "enum": ["brotli", "none", null],
+      "default": "brotli",
+      "description": "Compression used when writing the root live change manifest. Readers inspect both supported representations."
+    },
     "createdAtUtc": {
       "type": "string",
       "format": "date-time"

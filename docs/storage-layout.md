@@ -4,7 +4,7 @@ Archive paths are ordinary object names with a root descriptor and two logical d
 
 ```text
 /.yabt-root.json
-/.yabt-change-manifest.json
+/.yabt-change-manifest.json.br
 <livePrefix>/...
 <histPrefix>/...
 ```
@@ -27,11 +27,11 @@ livePrefix = ""
 histPrefix = ".yabt-hist"
 ```
 
-This keeps ordinary source folders rooted at their actual folder root. If a real data name would clash with `.yabt-root.json`, `.yabt-change-manifest.json`, `.yabt-policy.json`, `.yabt-tmp`, or the configured history prefix, initialize the root with different prefixes before using it.
+This keeps ordinary source folders rooted at their actual folder root. If a real data name would clash with `.yabt-root.json`, `.yabt-change-manifest.json.br`, `.yabt-change-manifest.json`, `.yabt-change-manifest.invalid`, `.yabt-policy.json`, `.yabt-tmp`, or the configured history prefix, initialize the root with different prefixes before using it.
 
 When `livePrefix` is empty, YABT metadata paths and the configured history prefix are internal to the archive root. They are not ordinary live data even though they physically sit under the same root.
 
-`.yabt-change-manifest.json` always sits at the archive root, outside an explicit `livePrefix`. Its paths are logical live-relative paths. The name is reserved when the live prefix is empty, so an ordinary root source file with that exact name is excluded from live projection.
+The logical change manifest always sits at the archive root, outside an explicit `livePrefix`. Brotli compression is the default, producing `.yabt-change-manifest.json.br`; `changeManifestCompression: "none"` produces `.yabt-change-manifest.json`. Its paths are logical live-relative paths. Both names are reserved when the live prefix is empty, so ordinary root source files with either exact name are excluded from live projection. Readers always inspect both representations. If both exist, they must validate to the same self-hash before either is trusted; the next successful mutating sync historizes the old representation or representations and leaves only the configured one live. During recovery from conflicting representations, `.yabt-change-manifest.invalid` may appear temporarily at the root. Its presence disables fast evidence until the replacement is complete; it is also reserved and moves to history last.
 
 The filesystem provider uses the reserved `.yabt-tmp` directory to stage each upload before atomically moving the completed file to its final path. Each upload uses a unique temporary file and removes that file after success or a controlled failure. The shared directory intentionally remains so concurrent YABT processes have a stable staging location without racing directory creation against deletion; an empty directory simply means no upload is currently staged. A nonempty directory may belong to an active upload or contain evidence of an interrupted run, so synchronization ignores it as provider plumbing. YABT rejects live or history prefixes that overlap `.yabt-tmp`, including case variants, to keep staging separate from archive data.
 
@@ -55,13 +55,13 @@ Documents/report.docx
 Photos/Vacation/img001.jpg
 ```
 
-An empty folder may be preserved with the reserved marker file:
+The current mirror representation preserves every empty folder with the reserved marker file:
 
 ```text
 EmptyFolder/.yabt-empty
 ```
 
-The marker exists only to make an otherwise empty folder visible in object stores that cannot represent empty directories directly.
+The object-only projection uses the marker on every target, including filesystems, so the same archive representation works across providers. It stays in live while the folder is empty and moves to history when the folder gains content or changes format. YABT hides it from its own normal traversal, but ordinary browsing tools may display it.
 
 With an archive-style `livePrefix` of `live`, the same objects would appear as:
 
@@ -73,13 +73,13 @@ live/Photos/Vacation/img001.jpg
 The intended layout for folders using the `zip` format keeps the package artifact and adjacent manifest as visible objects:
 
 ```text
-Photos/Vacation.xxh128-a91f3c2e5b7d4f8096a1c3e8d2b4f607.zip
-Photos/Vacation.xxh128-a91f3c2e5b7d4f8096a1c3e8d2b4f607.manifest.json
+Photos/Vacation.xxh128-l4fjobirfl7o15l1ofkd5d7m0s.zip
+Photos/Vacation.xxh128-l4fjobirfl7o15l1ofkd5d7m0s.manifest.json
 ```
 
 Here the source folder is `Photos/Vacation`, but its package objects are placed directly in the target `Photos` folder. No target `Photos/Vacation` folder is created. The folder policy or equivalent artifact-scoped descriptor remains outside the package, in the same parent folder, so a browser or restore tool can identify the folder representation without opening the package first.
 
-The package name is deterministic for the projected representation, including archived metadata such as entry modification times. Package creation time belongs in the planned manifest instead of the live object name, so synchronizing an unchanged projected representation again resolves to the same key. A changed representation produces a different full-hash name, and the synchronizer moves the replaced name to history.
+The package name is deterministic for the projected representation, including archived metadata such as entry modification times. Its full xxHash128 value uses lowercase unpadded Base32hex in the file name so the token is stable on case-insensitive file systems. Package creation time belongs in the planned manifest instead of the live object name, so synchronizing an unchanged projected representation again resolves to the same key. A changed representation produces a different full-hash name, and the synchronizer moves the replaced name to history.
 
 The current initial ZIP projector emits the `.zip` artifact only. The adjacent manifest and external descriptor shown above remain planned work.
 
