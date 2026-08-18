@@ -402,7 +402,9 @@ internal sealed class ArchiveSynchronizer
                         targetObject,
                         previousManifestEntry,
                         byteForByte,
+                        prepareChangedContent: writeChanges,
                         cancellationToken);
+                await using var preparedContent = comparison.PreparedContent;
                 if (comparison.Same)
                 {
                     summary.AddUnchanged();
@@ -431,7 +433,8 @@ internal sealed class ArchiveSynchronizer
                         context.TargetDescriptor.Layout,
                         projectedObject,
                         relativePath,
-                        cancellationToken);
+                        cancellationToken,
+                        preparedContent);
                     nextManifestEntries.Add(relativePath, manifestEntry);
                 }
 
@@ -813,37 +816,55 @@ internal sealed class ArchiveSynchronizer
         ArchiveLayout targetLayout,
         ArchiveProjectedObject projectedObject,
         string relativePath,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ArchiveObjectContent? preparedContent = default
     )
     {
         var targetKey = targetLayout.ToLiveObjectKey(relativePath);
+        ArchiveObjectContent? openedContent = null;
         try
         {
-            await using var content = await projectedObject.OpenContentAsync(cancellationToken);
-            using var hashingContent = new ContentHashingReadStream(content.Content);
-
-            await targetStore.UploadAsync(
-                targetKey,
-                hashingContent,
-                content.ContentType,
-                content.Metadata ?? EmptyMetadata,
-                cancellationToken);
-
-            var endProbe = new byte[1];
-            var unreadByteCount = await hashingContent.ReadAsync(
-                endProbe,
-                cancellationToken);
-            if (unreadByteCount != 0)
+            try
             {
-                throw new InvalidDataException(
-                    $"Target upload for '{targetKey}' completed before consuming all projected content.");
-            }
+                var content = preparedContent;
+                if (content is null)
+                {
+                    openedContent = await projectedObject.OpenContentAsync(cancellationToken);
+                    content = openedContent;
+                }
 
-            return CreateManifestEntry(
-                relativePath,
-                projectedObject,
-                hashingContent.BytesRead,
-                hashingContent.CompleteHash());
+                using var hashingContent = new ContentHashingReadStream(content.Content);
+
+                await targetStore.UploadAsync(
+                    targetKey,
+                    hashingContent,
+                    content.ContentType,
+                    content.Metadata ?? EmptyMetadata,
+                    cancellationToken);
+
+                var endProbe = new byte[1];
+                var unreadByteCount = await hashingContent.ReadAsync(
+                    endProbe,
+                    cancellationToken);
+                if (unreadByteCount != 0)
+                {
+                    throw new InvalidDataException(
+                        $"Target upload for '{targetKey}' completed before consuming all projected content.");
+                }
+
+                return CreateManifestEntry(
+                    relativePath,
+                    projectedObject,
+                    hashingContent.BytesRead,
+                    hashingContent.CompleteHash());
+            }
+            finally
+            {
+                if (openedContent is not null)
+                {
+                    await openedContent.DisposeAsync();
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -1128,6 +1149,7 @@ internal sealed class ArchiveSynchronizer
         ArchiveObjectInfo targetObject,
         ArchiveChangeManifestEntry? previousManifestEntry,
         bool byteForByte,
+        bool prepareChangedContent,
         CancellationToken cancellationToken
     )
     {
@@ -1137,7 +1159,7 @@ internal sealed class ArchiveSynchronizer
             targetObject.ContentLength.HasValue &&
             expectedArtifactLength.Value != targetObject.ContentLength.Value)
         {
-            return new(false, null);
+            return new(false, null, null);
         }
 
         if (!byteForByte &&
@@ -1147,36 +1169,104 @@ internal sealed class ArchiveSynchronizer
                 previousManifestEntry,
                 out var fastManifestEntry))
         {
-            return new(true, fastManifestEntry);
+            return new(true, fastManifestEntry, null);
         }
 
+        ArchiveObjectContent? sourceContent = null;
+        FileStream? replayContent = null;
         try
         {
-            await using var sourceContent = await projectedObject.OpenContentAsync(cancellationToken);
-            await using var targetContent = await targetStore.OpenReadAsync(
-                targetObject.Key,
-                cancellationToken);
-
-            var streamComparison = await CompareStreamsAsync(
-                sourceContent.Content,
-                targetContent.Content,
-                DefaultBufferSize,
-                cancellationToken);
-            if (!streamComparison.Same)
+            try
             {
-                return new(false, null);
-            }
+                sourceContent = await projectedObject.OpenContentAsync(cancellationToken);
+                if (prepareChangedContent)
+                {
+                    replayContent = CreateComparisonReplayStream();
+                }
 
-            return new
-            (
-                true,
-                CreateManifestEntry(
-                    ArchiveLayout.NormalizeObjectKey(projectedObject.RelativePath),
-                    projectedObject,
-                    streamComparison.SourceLength,
-                    streamComparison.SourceContentHash ??
-                        throw new YabtSyncException("Successful byte comparison did not produce a content hash."))
-            );
+                StreamComparison streamComparison;
+                await using (var targetContent = await targetStore.OpenReadAsync(
+                    targetObject.Key,
+                    cancellationToken))
+                {
+                    streamComparison = await CompareStreamsAsync(
+                        sourceContent.Content,
+                        targetContent.Content,
+                        DefaultBufferSize,
+                        replayContent,
+                        cancellationToken);
+                }
+
+                if (!streamComparison.Same)
+                {
+                    if (replayContent is null)
+                    {
+                        return new(false, null, null);
+                    }
+
+                    await sourceContent.Content.CopyToAsync(
+                        replayContent,
+                        DefaultBufferSize,
+                        cancellationToken);
+                    await replayContent.FlushAsync(cancellationToken);
+                    if (projectedObject.ContentLength.HasValue &&
+                        projectedObject.ContentLength.Value != replayContent.Length)
+                    {
+                        throw new YabtSyncException(
+                            $"Projected object '{projectedObject.RelativePath}' reported length " +
+                            $"{projectedObject.ContentLength.Value}, but its content contained " +
+                            $"{replayContent.Length} bytes.");
+                    }
+
+                    replayContent.Position = 0;
+
+                    var preparedContentType = sourceContent.ContentType;
+                    var preparedContentMetadata = sourceContent.Metadata;
+                    var completedSourceContent = sourceContent;
+                    sourceContent = null;
+                    await completedSourceContent.DisposeAsync();
+
+                    var preparedContent = new ArchiveObjectContent
+                    (
+                        replayContent,
+                        preparedContentType,
+                        preparedContentMetadata
+                    );
+                    replayContent = null;
+
+                    return new(false, null, preparedContent);
+                }
+
+                return new
+                (
+                    true,
+                    CreateManifestEntry(
+                        ArchiveLayout.NormalizeObjectKey(projectedObject.RelativePath),
+                        projectedObject,
+                        streamComparison.SourceLength,
+                        streamComparison.SourceContentHash ??
+                            throw new YabtSyncException(
+                                "Successful byte comparison did not produce a content hash.")),
+                    null
+                );
+            }
+            finally
+            {
+                try
+                {
+                    if (sourceContent is not null)
+                    {
+                        await sourceContent.DisposeAsync();
+                    }
+                }
+                finally
+                {
+                    if (replayContent is not null)
+                    {
+                        await replayContent.DisposeAsync();
+                    }
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -1299,6 +1389,7 @@ internal sealed class ArchiveSynchronizer
         Stream source,
         Stream target,
         int bufferSize,
+        Stream? sourceReplay,
         CancellationToken cancellationToken
     )
     {
@@ -1322,6 +1413,12 @@ internal sealed class ArchiveSynchronizer
 
                 sourceHash.Append(sourceBuffer.AsSpan(0, sourceBytesRead));
                 sourceLength += sourceBytesRead;
+                if (sourceReplay is not null && sourceBytesRead != 0)
+                {
+                    await sourceReplay.WriteAsync(
+                        sourceBuffer.AsMemory(0, sourceBytesRead),
+                        cancellationToken);
+                }
 
                 if (sourceBytesRead != targetBytesRead)
                 {
@@ -1352,6 +1449,31 @@ internal sealed class ArchiveSynchronizer
             ArrayPool<byte>.Shared.Return(sourceBuffer);
             ArrayPool<byte>.Shared.Return(targetBuffer);
         }
+    }
+
+    private static FileStream CreateComparisonReplayStream()
+    {
+        // This private local replay is operation-scoped and distinct from a target provider's
+        // .yabt-tmp upload staging. DeleteOnClose removes it on every normal disposal path.
+        var temporaryPath = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-source-replay-{Guid.NewGuid():N}.tmp");
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.ReadWrite,
+            Share = FileShare.None,
+            BufferSize = DefaultBufferSize,
+            Options = FileOptions.Asynchronous |
+                FileOptions.SequentialScan |
+                FileOptions.DeleteOnClose,
+        };
+        if (!OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        return new FileStream(temporaryPath, options);
     }
 
     private static async Task<int> FillBufferAsync
@@ -1614,7 +1736,8 @@ internal sealed class ArchiveSynchronizer
     private sealed record ProjectedObjectComparison
     (
         bool Same,
-        ArchiveChangeManifestEntry? ManifestEntry
+        ArchiveChangeManifestEntry? ManifestEntry,
+        ArchiveObjectContent? PreparedContent
     );
 
     private sealed record ChangeManifestLoad

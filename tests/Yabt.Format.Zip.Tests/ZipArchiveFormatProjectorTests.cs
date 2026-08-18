@@ -183,6 +183,53 @@ public sealed class ZipArchiveFormatProjectorTests
         StringAssert.StartsWith(
             projectedObject.ChangeFingerprint,
             "xxh128:");
+
+        var firstPackage = await ReadContentBytesAsync(projectedObject);
+        var secondPackage = await ReadContentBytesAsync(projectedObject);
+
+        Assert.AreEqual(1, countingStore.OpenReadCount);
+        Assert.AreEqual(
+            Encoding.UTF8.GetByteCount("source content"),
+            countingStore.GetBytesRead("folder/file.txt"));
+        Assert.AreEqual(firstPackage.LongLength, projectedObject.ContentLength);
+        CollectionAssert.AreEqual(firstPackage, secondPackage);
+    }
+
+    [TestMethod]
+    public async Task ProjectAsyncReadsEverySourceOnceWhenOneFingerprintNeedsContent()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var projector = serviceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var innerStore = new MemoryObjectStore(provideContentHash: false);
+        await UploadTextAsync(innerStore, "folder/incomplete.txt", "incomplete metadata");
+        await UploadTextAsync(innerStore, "folder/complete.txt", "complete metadata");
+        var countingStore = new CountingReadOnlyObjectStore(innerStore);
+        var sourceStore = new MissingLastModifiedObjectStore(
+            countingStore,
+            "folder/incomplete.txt");
+
+        var projectedObject = (await CollectProjectedObjectsAsync(projector.ProjectAsync(new
+        (
+            sourceStore,
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        )))).Single();
+
+        Assert.AreEqual(1, countingStore.GetOpenReadCount("folder/incomplete.txt"));
+        Assert.AreEqual(1, countingStore.GetOpenReadCount("folder/complete.txt"));
+
+        var firstPackage = await ReadContentBytesAsync(projectedObject);
+        var secondPackage = await ReadContentBytesAsync(projectedObject);
+
+        Assert.AreEqual(1, countingStore.GetOpenReadCount("folder/incomplete.txt"));
+        Assert.AreEqual(1, countingStore.GetOpenReadCount("folder/complete.txt"));
+        Assert.AreEqual(
+            Encoding.UTF8.GetByteCount("incomplete metadata"),
+            countingStore.GetBytesRead("folder/incomplete.txt"));
+        Assert.AreEqual(
+            Encoding.UTF8.GetByteCount("complete metadata"),
+            countingStore.GetBytesRead("folder/complete.txt"));
+        CollectionAssert.AreEqual(firstPackage, secondPackage);
     }
 
     [TestMethod]
@@ -328,7 +375,11 @@ public sealed class ZipArchiveFormatProjectorTests
         return memory.ToArray();
     }
 
-    private sealed class MissingLastModifiedObjectStore(IReadOnlyObjectStore _inner) : IReadOnlyObjectStore
+    private sealed class MissingLastModifiedObjectStore
+    (
+        IReadOnlyObjectStore _inner,
+        string? _affectedKey = default
+    ) : IReadOnlyObjectStore
     {
         public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
             _inner.EnsureReadyAsync(cancellationToken);
@@ -358,6 +409,17 @@ public sealed class ZipArchiveFormatProjectorTests
                 cancellationToken);
             await foreach (var folderItem in folderItems)
             {
+                if (folderItem.Object is not null &&
+                    _affectedKey is not null &&
+                    !string.Equals(
+                        ArchiveLayout.NormalizeObjectKey(folderItem.Object.Key),
+                        ArchiveLayout.NormalizeObjectKey(_affectedKey),
+                        StringComparison.Ordinal))
+                {
+                    yield return folderItem;
+                    continue;
+                }
+
                 yield return folderItem with
                 {
                     Object = folderItem.Object is null ? null : folderItem.Object with
@@ -412,19 +474,38 @@ public sealed class ZipArchiveFormatProjectorTests
 
     private sealed class CountingReadOnlyObjectStore(IReadOnlyObjectStore _inner) : IReadOnlyObjectStore
     {
-        public int OpenReadCount { get; private set; }
+        private readonly Dictionary<string, int> _openReadCounts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, long> _bytesRead = new(StringComparer.Ordinal);
+
+        public int OpenReadCount => _openReadCounts.Values.Sum();
+
+        public int GetOpenReadCount(string key) =>
+            _openReadCounts.GetValueOrDefault(ArchiveLayout.NormalizeObjectKey(key));
+
+        public long GetBytesRead(string key) =>
+            _bytesRead.GetValueOrDefault(ArchiveLayout.NormalizeObjectKey(key));
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
             _inner.EnsureReadyAsync(cancellationToken);
 
-        public Task<ArchiveObjectContent> OpenReadAsync
+        public async Task<ArchiveObjectContent> OpenReadAsync
         (
             string key,
             CancellationToken cancellationToken = default
         )
         {
-            OpenReadCount++;
-            return _inner.OpenReadAsync(key, cancellationToken);
+            var normalizedKey = ArchiveLayout.NormalizeObjectKey(key);
+            _openReadCounts[normalizedKey] = GetOpenReadCount(normalizedKey) + 1;
+            var content = await _inner.OpenReadAsync(key, cancellationToken);
+            return new
+            (
+                new CountingNonSeekableReadStream(
+                    content.Content,
+                    bytesRead => _bytesRead[normalizedKey] =
+                        GetBytesRead(normalizedKey) + bytesRead),
+                content.ContentType,
+                content.Metadata
+            );
         }
 
         public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) =>

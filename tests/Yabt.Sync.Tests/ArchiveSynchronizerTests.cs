@@ -1427,6 +1427,252 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
+    [DataRow(0)]
+    [DataRow(81_957)]
+    public async Task SyncAsyncReadsChangedMirrorSourceOnlyOnce(int mismatchIndex)
+    {
+        const int contentLength = (81_920 * 2) + 257;
+
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-single-read-mirror-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero));
+        var sourceBytes = Enumerable.Range(0, contentLength)
+            .Select(index => (byte)(index % 251))
+            .ToArray();
+        var targetBytes = sourceBytes.ToArray();
+        targetBytes[mismatchIndex] ^= 0xff;
+
+        var innerSourceStore = new MemoryObjectStore(timeProvider);
+        var sourceStore = new DataReadGuardObjectStore(innerSourceStore)
+        {
+            ReturnNonSeekableDataStreams = true,
+        };
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadObjectAsync(innerSourceStore, "large.bin", sourceBytes);
+        await UploadObjectAsync(targetStore, "large.bin", targetBytes);
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            timeProvider).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var result = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(result.Completed);
+        Assert.AreEqual(1, result.ChangedCount);
+        Assert.AreEqual(1, sourceStore.GetOpenReadCount("large.bin"));
+        Assert.AreEqual(contentLength, sourceStore.GetBytesRead("large.bin"));
+        Assert.IsTrue(targetStore.TryGetObject("large.bin", out var targetObject));
+        CollectionAssert.AreEqual(sourceBytes, targetObject.Content.ToArray());
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncRejectsComparedSourceLengthMismatchBeforeTargetMutation()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-compared-length-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero));
+        var sourceBytes = "actual source bytes"u8.ToArray();
+        var targetBytes = Enumerable.Repeat((byte)0x5a, sourceBytes.Length + 1).ToArray();
+        var innerSourceStore = new MemoryObjectStore(timeProvider);
+        var sourceStore = new DataReadGuardObjectStore(innerSourceStore)
+        {
+            ContentLengthAdjustment = 1,
+            ReturnNonSeekableDataStreams = true,
+        };
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadObjectAsync(innerSourceStore, "file.bin", sourceBytes);
+        await UploadObjectAsync(targetStore, "file.bin", targetBytes);
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            timeProvider).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+            () => synchronizer.SyncAsync(new SyncRunRequest(sourceRoot)));
+
+        StringAssert.Contains(exception.ToString(), "reported length");
+        Assert.AreEqual(1, sourceStore.GetOpenReadCount("file.bin"));
+        Assert.AreEqual(sourceBytes.Length, sourceStore.GetBytesRead("file.bin"));
+        var targetObjects = targetStore.Snapshot();
+        Assert.AreEqual(1, targetObjects.Count);
+        Assert.AreEqual("file.bin", targetObjects[0].Key);
+        CollectionAssert.AreEqual(targetBytes, targetObjects[0].Content.ToArray());
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
+        Assert.IsFalse(targetStore.TryGetObject(
+            ArchiveChangeManifest.InvalidationMarkerFileName,
+            out _));
+    }
+
+    [TestMethod]
+    public async Task SyncAsyncUploadsComparedSnapshotWhenBackingSourceChangesAfterComparison()
+    {
+        const string contentType = "application/x-yabt-captured";
+
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-compared-snapshot-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero));
+        var sourceBytes = Enumerable.Range(0, 100_333)
+            .Select(index => (byte)(index % 241))
+            .ToArray();
+        var replacementBytes = sourceBytes
+            .Select(value => (byte)(value ^ 0xff))
+            .ToArray();
+        var oldTargetBytes = sourceBytes.ToArray();
+        oldTargetBytes[0] ^= 0xff;
+        var sourceMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["origin"] = "captured",
+        };
+        var replacementMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["origin"] = "replacement",
+        };
+
+        var innerSourceStore = new MemoryObjectStore(timeProvider);
+        var sourceStore = new DataReadGuardObjectStore(innerSourceStore)
+        {
+            ReturnNonSeekableDataStreams = true,
+        };
+        var innerTargetStore = new MemoryObjectStore(timeProvider);
+        var sourceMutationCount = 0;
+        var targetStore = new DataReadGuardObjectStore(innerTargetStore)
+        {
+            AfterMoveAsync = async (source, _, cancellationToken) =>
+            {
+                if (!string.Equals(source, "snapshot.bin", StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                sourceMutationCount++;
+                innerSourceStore.Clear();
+                await UploadObjectAsync(
+                    innerSourceStore,
+                    "snapshot.bin",
+                    replacementBytes,
+                    "application/x-yabt-replacement",
+                    replacementMetadata,
+                    cancellationToken);
+            },
+        };
+        await UploadObjectAsync(
+            innerSourceStore,
+            "snapshot.bin",
+            sourceBytes,
+            contentType,
+            sourceMetadata);
+        await UploadObjectAsync(innerTargetStore, "snapshot.bin", oldTargetBytes);
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            timeProvider).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var result = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsTrue(result.Completed);
+        Assert.AreEqual(1, result.ChangedCount);
+        Assert.AreEqual(1, sourceMutationCount);
+        Assert.AreEqual(1, sourceStore.GetOpenReadCount("snapshot.bin"));
+        Assert.AreEqual(sourceBytes.Length, sourceStore.GetBytesRead("snapshot.bin"));
+        Assert.IsTrue(innerTargetStore.TryGetObject("snapshot.bin", out var capturedTarget));
+        CollectionAssert.AreEqual(sourceBytes, capturedTarget.Content.ToArray());
+        Assert.AreEqual(contentType, capturedTarget.ContentType);
+        Assert.AreEqual("captured", capturedTarget.Metadata["origin"]);
+        Assert.IsTrue(innerSourceStore.TryGetObject("snapshot.bin", out var changedSource));
+        CollectionAssert.AreEqual(replacementBytes, changedSource.Content.ToArray());
+    }
+
+    [TestMethod]
+    public async Task ByteForByteSyncReadsEachZipSourceOnlyOnceWhenTargetPackageChanged()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-single-read-zip-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero));
+        var firstSourceBytes = Enumerable.Range(0, 90_000)
+            .Select(index => (byte)(index % 239))
+            .ToArray();
+        var secondSourceBytes = Enumerable.Range(0, 12_345)
+            .Select(index => (byte)(index % 227))
+            .ToArray();
+        var innerSourceStore = new MemoryObjectStore(timeProvider);
+        var sourceStore = new DataReadGuardObjectStore(innerSourceStore)
+        {
+            ReturnNonSeekableDataStreams = true,
+        };
+        var targetStore = new MemoryObjectStore(timeProvider);
+        await UploadObjectAsync(innerSourceStore, "first.bin", firstSourceBytes);
+        await UploadObjectAsync(innerSourceStore, "folder/second.bin", secondSourceBytes);
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            timeProvider,
+            new FolderPolicy(ZipArchiveFormatName.Value)).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+        var initialResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+        Assert.IsTrue(initialResult.Completed);
+
+        var originalPackage = targetStore.Snapshot().Single(archiveObject =>
+            archiveObject.Key.EndsWith(".zip", StringComparison.Ordinal));
+        var changedPackageBytes = originalPackage.Content.ToArray();
+        changedPackageBytes[0] ^= 0xff;
+        await targetStore.MoveAsync(
+            originalPackage.Key,
+            $"{ArchiveInternalFolderNames.TemporaryUploads}/original-package.zip");
+        await UploadObjectAsync(
+            targetStore,
+            originalPackage.Key,
+            changedPackageBytes,
+            originalPackage.ContentType,
+            originalPackage.Metadata);
+        sourceStore.ResetCounts();
+
+        var result = await synchronizer.SyncAsync(
+            new SyncRunRequest(sourceRoot, ByteForByte: true));
+
+        Assert.IsTrue(result.Completed);
+        Assert.AreEqual(1, result.ChangedCount);
+        Assert.AreEqual(1, sourceStore.GetOpenReadCount("first.bin"));
+        Assert.AreEqual(firstSourceBytes.Length, sourceStore.GetBytesRead("first.bin"));
+        Assert.AreEqual(1, sourceStore.GetOpenReadCount("folder/second.bin"));
+        Assert.AreEqual(secondSourceBytes.Length, sourceStore.GetBytesRead("folder/second.bin"));
+        Assert.IsTrue(targetStore.TryGetObject(originalPackage.Key, out var repairedPackage));
+        CollectionAssert.AreEqual(
+            originalPackage.Content.ToArray(),
+            repairedPackage.Content.ToArray());
+    }
+
+    [TestMethod]
     public async Task ByteForByteComparisonDetectsContentChangeWithSameFingerprint()
     {
         var workspace = CreateWorkspacePath();
@@ -2086,6 +2332,25 @@ public sealed class ArchiveSynchronizerTests
             new Dictionary<string, string>(StringComparer.Ordinal));
     }
 
+    private static async Task UploadObjectAsync
+    (
+        MemoryObjectStore store,
+        string key,
+        ReadOnlyMemory<byte> content,
+        string contentType = "application/octet-stream",
+        IReadOnlyDictionary<string, string>? metadata = default,
+        CancellationToken cancellationToken = default
+    )
+    {
+        await using var stream = new MemoryStream(content.ToArray(), writable: false);
+        await store.UploadAsync(
+            key,
+            stream,
+            contentType,
+            metadata ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            cancellationToken);
+    }
+
     private static void AssertTextFile
     (
         string path,
@@ -2105,15 +2370,23 @@ public sealed class ArchiveSynchronizerTests
 
     private sealed class DataReadGuardObjectStore(IObjectStore _innerStore) : IObjectStore
     {
+        private readonly Lock _gate = new();
+        private readonly Dictionary<string, int> _openReadCounts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, long> _bytesRead = new(StringComparer.Ordinal);
+
         public bool RejectDataReads { get; set; }
 
         public bool HideContentLengths { get; set; }
+
+        public bool ReturnNonSeekableDataStreams { get; set; }
 
         public long ContentLengthAdjustment { get; set; }
 
         public bool StopUploadsAfterEmptyRead { get; set; }
 
         public string? RejectMoveSource { get; set; }
+
+        public Func<string, string, CancellationToken, Task>? AfterMoveAsync { get; set; }
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
             _innerStore.EnsureReadyAsync(cancellationToken);
@@ -2148,26 +2421,48 @@ public sealed class ArchiveSynchronizerTests
                 cancellationToken);
         }
 
-        public Task<ArchiveObjectContent> OpenReadAsync
+        public async Task<ArchiveObjectContent> OpenReadAsync
         (
             string key,
             CancellationToken cancellationToken = default
         )
         {
+            var normalizedKey = ArchiveLayout.NormalizeObjectKey(key);
             if (RejectDataReads &&
                 !string.Equals(
-                    key,
+                    normalizedKey,
                     ArchiveChangeManifest.BrotliFileName,
                     StringComparison.Ordinal) &&
                 !string.Equals(
-                    key,
+                    normalizedKey,
                     ArchiveChangeManifest.UncompressedFileName,
                     StringComparison.Ordinal))
             {
-                throw new InvalidOperationException($"Data object '{key}' must not be opened.");
+                throw new InvalidOperationException($"Data object '{normalizedKey}' must not be opened.");
             }
 
-            return _innerStore.OpenReadAsync(key, cancellationToken);
+            lock (_gate)
+            {
+                _openReadCounts.TryGetValue(normalizedKey, out var currentCount);
+                _openReadCounts[normalizedKey] = currentCount + 1;
+            }
+
+            var content = await _innerStore.OpenReadAsync(
+                normalizedKey,
+                cancellationToken);
+            if (!ReturnNonSeekableDataStreams)
+            {
+                return content;
+            }
+
+            return new
+            (
+                new CountingNonSeekableReadStream(
+                    content.Content,
+                    bytesRead => AddBytesRead(normalizedKey, bytesRead)),
+                content.ContentType,
+                content.Metadata
+            );
         }
 
         public Task<bool> ExistsAsync
@@ -2209,7 +2504,7 @@ public sealed class ArchiveSynchronizerTests
             }
         }
 
-        public Task MoveAsync
+        public async Task MoveAsync
         (
             string source,
             string destination,
@@ -2221,7 +2516,11 @@ public sealed class ArchiveSynchronizerTests
                 throw new InvalidOperationException($"Move from '{source}' was rejected by the test store.");
             }
 
-            return _innerStore.MoveAsync(source, destination, cancellationToken);
+            await _innerStore.MoveAsync(source, destination, cancellationToken);
+            if (AfterMoveAsync is not null)
+            {
+                await AfterMoveAsync(source, destination, cancellationToken);
+            }
         }
 
         public Task MoveFolderAsync
@@ -2233,6 +2532,42 @@ public sealed class ArchiveSynchronizerTests
             sourcePrefix,
             destinationPrefix,
             cancellationToken);
+
+        public int GetOpenReadCount(string key)
+        {
+            var normalizedKey = ArchiveLayout.NormalizeObjectKey(key);
+            lock (_gate)
+            {
+                return _openReadCounts.GetValueOrDefault(normalizedKey);
+            }
+        }
+
+        public long GetBytesRead(string key)
+        {
+            var normalizedKey = ArchiveLayout.NormalizeObjectKey(key);
+            lock (_gate)
+            {
+                return _bytesRead.GetValueOrDefault(normalizedKey);
+            }
+        }
+
+        public void ResetCounts()
+        {
+            lock (_gate)
+            {
+                _openReadCounts.Clear();
+                _bytesRead.Clear();
+            }
+        }
+
+        private void AddBytesRead(string normalizedKey, int bytesRead)
+        {
+            lock (_gate)
+            {
+                _bytesRead.TryGetValue(normalizedKey, out var currentCount);
+                _bytesRead[normalizedKey] = currentCount + bytesRead;
+            }
+        }
     }
 
     private sealed class FailingAfterFirstListedObjectStore : IObjectStore

@@ -59,6 +59,32 @@ internal sealed class ZipArchiveFormatProjector
             request,
             cancellationToken);
         var compressionLevel = _options.CurrentValue.CompressionLevel ?? default;
+        ArraySegment<byte>? prebuiltContent = null;
+        if (sourceObjects.Any(sourceObject => sourceObject.ChangeFingerprint is null))
+        {
+            // A deterministic package name needs the missing content fingerprints. Build the ZIP
+            // while calculating them so no source object must be opened once for naming and again
+            // for packaging.
+            var prebuiltPackage = await BuildPackageAsync
+            (
+                request.SourceStore,
+                sourceObjects,
+                compressionLevel,
+                cancellationToken
+            );
+            sourceObjects = prebuiltPackage.SourceObjects;
+            using (prebuiltPackage.Content)
+            {
+                if (!prebuiltPackage.Content.TryGetBuffer(out var packageBuffer))
+                {
+                    throw new YabtFormatZipException(
+                        "The prebuilt ZIP package did not expose its in-memory buffer.");
+                }
+
+                prebuiltContent = packageBuffer;
+            }
+        }
+
         var packageFingerprint = ComputePackageFingerprint(
             sourceObjects,
             compressionLevel);
@@ -74,7 +100,8 @@ internal sealed class ZipArchiveFormatProjector
             request.SourceStore,
             sourceObjects,
             compressionLevel,
-            packageFingerprint.ChangeFingerprint
+            packageFingerprint.ChangeFingerprint,
+            prebuiltContent
         );
 
         yield return packageObject;
@@ -143,11 +170,7 @@ internal sealed class ZipArchiveFormatProjector
                 continue;
             }
 
-            var fingerprintResult = await GetSourceObjectFingerprintAsync(
-                sourceStore,
-                sourceItem.Object,
-                sourceKey,
-                cancellationToken);
+            var fingerprintResult = GetSourceObjectFingerprint(sourceItem.Object);
 
             sourceObjects.Add(new
             (
@@ -160,12 +183,9 @@ internal sealed class ZipArchiveFormatProjector
         }
     }
 
-    private async Task<ZipSourceObjectFingerprintResult> GetSourceObjectFingerprintAsync
+    private static ZipSourceObjectFingerprintResult GetSourceObjectFingerprint
     (
-        IReadOnlyObjectStore sourceStore,
-        ArchiveObjectInfo sourceObject,
-        string sourceKey,
-        CancellationToken cancellationToken
+        ArchiveObjectInfo sourceObject
     )
     {
         if (!string.IsNullOrWhiteSpace(sourceObject.ChangeFingerprint))
@@ -198,13 +218,14 @@ internal sealed class ZipArchiveFormatProjector
             );
         }
 
-        return await ComputeSourceObjectHashAsync(
-            sourceStore,
-            sourceKey,
-            cancellationToken);
+        return new
+        (
+            sourceObject.ContentLength,
+            ChangeFingerprint: null
+        );
     }
 
-    private async Task<ArchiveObjectContent> BuildPackageAsync
+    private async Task<ZipPackageBuildResult> BuildPackageAsync
     (
         IReadOnlyObjectStore sourceStore,
         IReadOnlyList<ZipSourceObject> sourceObjects,
@@ -213,34 +234,71 @@ internal sealed class ZipArchiveFormatProjector
     )
     {
         var package = new MemoryStream();
-        using (var archive = new ZipArchive(package, ZipArchiveMode.Create, leaveOpen: true))
+        var completedSourceObjects = new List<ZipSourceObject>(sourceObjects.Count);
+        byte[]? hashBuffer = null;
+        try
         {
-            foreach (var sourceObject in sourceObjects)
+            using (var archive = new ZipArchive(package, ZipArchiveMode.Create, leaveOpen: true))
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                foreach (var sourceObject in sourceObjects)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                var entry = archive.CreateEntry
-                (
-                    sourceObject.RelativePath,
-                    compressionLevel
-                );
-                entry.LastWriteTime = sourceObject.LastModifiedUtc.ToUniversalTime();
+                    var entry = archive.CreateEntry
+                    (
+                        sourceObject.RelativePath,
+                        compressionLevel
+                    );
+                    entry.LastWriteTime = sourceObject.LastModifiedUtc.ToUniversalTime();
 
-                await using var sourceContent = await sourceStore.OpenReadAsync(
-                    sourceObject.SourceKey,
-                    cancellationToken);
-                await using var entryContent = entry.Open();
-                await sourceContent.Content.CopyToAsync(entryContent, cancellationToken);
+                    await using var sourceContent = await sourceStore.OpenReadAsync(
+                        sourceObject.SourceKey,
+                        cancellationToken);
+                    await using var entryContent = entry.Open();
+                    if (sourceObject.ChangeFingerprint is not null)
+                    {
+                        await sourceContent.Content.CopyToAsync(entryContent, cancellationToken);
+                        completedSourceObjects.Add(sourceObject);
+                        continue;
+                    }
+
+                    var hash = new XxHash128();
+                    hashBuffer ??= new byte[GetEffectiveHashBufferSize()];
+                    long length = 0;
+                    while (true)
+                    {
+                        var bytesRead = await sourceContent.Content.ReadAsync(
+                            hashBuffer,
+                            cancellationToken);
+                        if (bytesRead == 0) { break; }
+
+                        hash.Append(hashBuffer.AsSpan(0, bytesRead));
+                        length += bytesRead;
+                        await entryContent.WriteAsync(
+                            hashBuffer.AsMemory(0, bytesRead),
+                            cancellationToken);
+                    }
+
+                    completedSourceObjects.Add(sourceObject with
+                    {
+                        Length = length,
+                        ChangeFingerprint = ArchiveHash.Format(hash.GetHashAndReset()),
+                    });
+                }
             }
-        }
 
-        package.Position = 0;
-        return new
-        (
-            package,
-            "application/zip",
-            EmptyMetadata
-        );
+            package.Position = 0;
+            return new
+            (
+                package,
+                completedSourceObjects
+            );
+        }
+        catch (Exception)
+        {
+            await package.DisposeAsync();
+            throw;
+        }
     }
 
     private ArchiveProjectedObject CreatePackageObject
@@ -249,52 +307,55 @@ internal sealed class ZipArchiveFormatProjector
         IReadOnlyObjectStore sourceStore,
         IReadOnlyList<ZipSourceObject> sourceObjects,
         CompressionLevel compressionLevel,
-        string packageChangeFingerprint
-    ) => new
-    (
-        packageName,
-        cancellationToken => BuildPackageAsync
-        (
-            sourceStore,
-            sourceObjects,
-            compressionLevel,
-            cancellationToken
-        ),
-        // The change fingerprint identifies logical inputs, not the finished ZIP bytes.
-        // Leave ContentHash unset so full verification can compare the actual package streams.
-        ContentHash: null,
-        ChangeFingerprint: packageChangeFingerprint
-    );
-
-    private async Task<ZipSourceObjectFingerprintResult> ComputeSourceObjectHashAsync
-    (
-        IReadOnlyObjectStore sourceStore,
-        string sourceKey,
-        CancellationToken cancellationToken
+        string packageChangeFingerprint,
+        ArraySegment<byte>? prebuiltContent
     )
     {
-        await using var sourceContent = await sourceStore.OpenReadAsync(
-            sourceKey,
-            cancellationToken);
-        var hash = new XxHash128();
-        var buffer = new byte[GetEffectiveHashBufferSize()];
-        long length = 0;
-
-        while (true)
+        async Task<ArchiveObjectContent> OpenPackageAsync(CancellationToken cancellationToken)
         {
-            var bytesRead = await sourceContent.Content.ReadAsync(
-                buffer,
-                cancellationToken);
-            if (bytesRead == 0) { break; }
+            if (prebuiltContent is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var content = prebuiltContent.Value;
+                return new
+                (
+                    new MemoryStream(
+                        content.Array ??
+                            throw new YabtFormatZipException(
+                                "The prebuilt ZIP package buffer is unavailable."),
+                        content.Offset,
+                        content.Count,
+                        writable: false,
+                        publiclyVisible: false),
+                    "application/zip",
+                    EmptyMetadata
+                );
+            }
 
-            length += bytesRead;
-            hash.Append(buffer.AsSpan(0, bytesRead));
+            var package = await BuildPackageAsync
+            (
+                sourceStore,
+                sourceObjects,
+                compressionLevel,
+                cancellationToken
+            );
+            return new
+            (
+                package.Content,
+                "application/zip",
+                EmptyMetadata
+            );
         }
 
         return new
         (
-            length,
-            ArchiveHash.Format(hash.GetHashAndReset())
+            packageName,
+            OpenPackageAsync,
+            // The change fingerprint identifies logical inputs, not the finished ZIP bytes.
+            // Leave ContentHash unset so full verification can compare the actual package streams.
+            ContentLength: prebuiltContent?.Count,
+            ContentHash: null,
+            ChangeFingerprint: packageChangeFingerprint
         );
     }
 
@@ -329,7 +390,11 @@ internal sealed class ZipArchiveFormatProjector
             AppendCanonicalString(hash, sourceObject.RelativePath);
             AppendCanonicalNullableInt64(hash, sourceObject.Length);
             AppendCanonicalInt64(hash, sourceObject.LastModifiedUtc.UtcDateTime.Ticks);
-            AppendCanonicalString(hash, sourceObject.ChangeFingerprint);
+            AppendCanonicalString(
+                hash,
+                sourceObject.ChangeFingerprint ??
+                    throw new InvalidOperationException(
+                        $"ZIP source object '{sourceObject.SourceKey}' has no change fingerprint."));
         }
 
         var hashValue = hash.GetHashAndReset();
@@ -400,18 +465,24 @@ internal sealed class ZipArchiveFormatProjector
         string RelativePath,
         long? Length,
         DateTimeOffset LastModifiedUtc,
-        string ChangeFingerprint
+        string? ChangeFingerprint
     );
 
     private sealed record ZipSourceObjectFingerprintResult
     (
         long? Length,
-        string ChangeFingerprint
+        string? ChangeFingerprint
     );
 
     private sealed record ZipPackageFingerprint
     (
         string ChangeFingerprint,
         string FileNameToken
+    );
+
+    private sealed record ZipPackageBuildResult
+    (
+        MemoryStream Content,
+        IReadOnlyList<ZipSourceObject> SourceObjects
     );
 }
