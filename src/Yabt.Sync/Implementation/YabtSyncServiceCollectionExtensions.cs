@@ -18,6 +18,7 @@ public static class YabtSyncServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IArchiveSynchronizer, ArchiveSynchronizer>();
+        services.AddSingleton<IHistoryDeduplicator, HistoryDeduplicator>();
         return services;
     }
 }

@@ -637,6 +637,85 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
+    public async Task SyncAsyncTreatsDeduplicationReferenceAsOccupiedHistoryPath()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WriteTextFileAsync(
+                Path.Combine(sourceRoot, "docs", "file.bin"),
+                "new live content");
+            await WriteTextFileAsync(
+                Path.Combine(targetRoot, "docs", "file.bin"),
+                "old live content");
+
+            const string timestampSegment = "20260819T120000Z";
+            const string logicalHistoryPath = $"{timestampSegment}/docs/file.bin";
+            var backingContent = Encoding.UTF8.GetBytes("canonical historical content");
+            var backingPath = Path.Combine(
+                targetRoot,
+                ".yabt-hist",
+                "20260818T120000Z",
+                "docs",
+                "file.bin");
+            Directory.CreateDirectory(Path.GetDirectoryName(backingPath)!);
+            await File.WriteAllBytesAsync(backingPath, backingContent);
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 8, 19, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var referenceSerializer = serviceProvider.GetRequiredService<IHistoryReferenceSerializer>();
+            var referenceEntry = new ArchiveHistoryManifestEntry
+            (
+                logicalHistoryPath,
+                ArchiveHistoryFileNames.CreateReferencePath(logicalHistoryPath),
+                ArchiveHistoryEntryRepresentation.Reference,
+                backingContent.LongLength,
+                ArchiveHash.Compute(backingContent)
+            );
+            var reference = referenceSerializer.Create(referenceEntry);
+            var referencePath = Path.Combine(
+                targetRoot,
+                ".yabt-hist",
+                referenceEntry.StoredRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(referencePath)!);
+            await using (var referenceStream = File.Create(referencePath))
+            {
+                await referenceSerializer.WriteAsync(reference, referenceStream);
+            }
+
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var result = await synchronizer.SyncAsync(
+                new SyncRunRequest(sourceRoot, ByteForByte: true));
+
+            Assert.IsTrue(result.Completed);
+            AssertTextFile(Path.Combine(targetRoot, "docs", "file.bin"), "new live content");
+            AssertTextFile(
+                Path.Combine(
+                    targetRoot,
+                    ".yabt-hist",
+                    $"{timestampSegment}-1",
+                    "docs",
+                    "file.bin"),
+                "old live content");
+            Assert.IsFalse(File.Exists(Path.Combine(
+                targetRoot,
+                ".yabt-hist",
+                timestampSegment,
+                "docs",
+                "file.bin")));
+            Assert.IsTrue(File.Exists(referencePath));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
     public async Task SyncAsyncRejectsZipPackageNameCollisionWithSourceObject()
     {
         await AssertZipPackageNameCollisionRejectedAsync(
@@ -938,6 +1017,10 @@ public sealed class ArchiveSynchronizerTests
         var nextFileName = GetChangeManifestFileName(nextCompression);
         Assert.IsTrue(targetStore.TryGetObject(initialFileName, out _));
         Assert.IsFalse(targetStore.TryGetObject(nextFileName, out _));
+        await UploadTextObjectAsync(
+            targetStore,
+            $".yabt-hist/{ArchiveHistoryFileNames.Manifest}",
+            "existing history catalog");
 
         var nextDescriptor = CreateRootDescriptor(
             [storeConfiguration],
@@ -964,8 +1047,17 @@ public sealed class ArchiveSynchronizerTests
         Assert.AreEqual(1, conversionResult.UnchangedCount);
         Assert.IsFalse(targetStore.TryGetObject(initialFileName, out _));
         Assert.IsTrue(targetStore.TryGetObject(nextFileName, out var convertedManifestObject));
-        Assert.IsTrue(targetStore.TryGetObject(
+        Assert.IsFalse(targetStore.TryGetObject(
             $".yabt-hist/20260816T120000Z/{initialFileName}",
+            out _));
+        Assert.IsTrue(targetStore.TryGetObject(
+            $".yabt-hist/{ArchiveHistoryFileNames.Manifest}",
+            out var historyManifestObject));
+        Assert.AreEqual(
+            "existing history catalog",
+            Encoding.UTF8.GetString(historyManifestObject.Content.Span));
+        Assert.IsFalse(targetStore.TryGetObject(
+            $".yabt-hist/{ArchiveHistoryManifest.InvalidationMarkerFileName}",
             out _));
 
         var serializer = nextServiceProvider.GetRequiredService<IChangeManifestSerializer>();
@@ -1029,10 +1121,10 @@ public sealed class ArchiveSynchronizerTests
         Assert.AreEqual(1, convergenceResult.UnchangedCount);
         Assert.IsTrue(targetStore.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
         Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.UncompressedFileName, out _));
-        Assert.IsTrue(targetStore.TryGetObject(
+        Assert.IsFalse(targetStore.TryGetObject(
             $".yabt-hist/20260816T120000Z/{ArchiveChangeManifest.BrotliFileName}",
             out _));
-        Assert.IsTrue(targetStore.TryGetObject(
+        Assert.IsFalse(targetStore.TryGetObject(
             $".yabt-hist/20260816T120000Z/{ArchiveChangeManifest.UncompressedFileName}",
             out _));
     }
@@ -1081,10 +1173,10 @@ public sealed class ArchiveSynchronizerTests
         Assert.AreEqual(1, recoveryResult.UnchangedCount);
         Assert.IsTrue(targetStore.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
         Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.UncompressedFileName, out _));
-        Assert.IsTrue(targetStore.TryGetObject(
+        Assert.IsFalse(targetStore.TryGetObject(
             $".yabt-hist/20260816T120000Z/{ArchiveChangeManifest.BrotliFileName}",
             out _));
-        Assert.IsTrue(targetStore.TryGetObject(
+        Assert.IsFalse(targetStore.TryGetObject(
             $".yabt-hist/20260816T120000Z/{ArchiveChangeManifest.UncompressedFileName}",
             out _));
     }
@@ -1120,7 +1212,8 @@ public sealed class ArchiveSynchronizerTests
             serializer,
             serializer.Create([]),
             ArchiveChangeManifestCompression.None);
-        guardedTargetStore.RejectMoveSource = ArchiveChangeManifest.UncompressedFileName;
+        guardedTargetStore.RejectConditionalDeleteKey =
+            ArchiveChangeManifest.UncompressedFileName;
 
         await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.SyncAsync(
             new SyncRunRequest(sourceRoot)));
@@ -1136,7 +1229,7 @@ public sealed class ArchiveSynchronizerTests
             new SyncRunRequest(sourceRoot, ByteForByte: true));
         Assert.IsTrue(byteForByteResult.Completed);
 
-        guardedTargetStore.RejectMoveSource = null;
+        guardedTargetStore.RejectConditionalDeleteKey = null;
         var recoveryResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
 
         Assert.IsTrue(recoveryResult.Completed);
@@ -1146,6 +1239,72 @@ public sealed class ArchiveSynchronizerTests
         Assert.IsFalse(targetStore.TryGetObject(
             ArchiveChangeManifest.InvalidationMarkerFileName,
             out _));
+    }
+
+    [TestMethod]
+    public async Task InterruptedHistoryMetadataCleanupLeavesMarkerUntilRecovery()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-interrupted-history-cleanup-test-{Guid.NewGuid():N}");
+        var timeProvider = new FixedTimeProvider(
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero));
+        var sourceStore = new MemoryObjectStore(timeProvider);
+        var targetStore = new MemoryObjectStore(timeProvider);
+        var guardedTargetStore = new DataReadGuardObjectStore(targetStore);
+        const string initialContent = "initial content";
+        await UploadTextObjectAsync(sourceStore, "file.txt", initialContent);
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            guardedTargetStore,
+            timeProvider).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var initialResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
+        Assert.IsTrue(initialResult.Completed);
+        var historyManifestKey =
+            $".yabt-hist/{ArchiveHistoryFileNames.Manifest}";
+        var historyInvalidationMarkerKey =
+            $".yabt-hist/{ArchiveHistoryManifest.InvalidationMarkerFileName}";
+        await UploadTextObjectAsync(
+            targetStore,
+            historyManifestKey,
+            "stale history catalog");
+
+        await using (var replacementContent = new MemoryStream(
+            Encoding.UTF8.GetBytes("replacement content"),
+            writable: false))
+        {
+            var replaced = await sourceStore.TryReplaceIfContentHashMatchesAsync(
+                "file.txt",
+                ArchiveHash.Compute(Encoding.UTF8.GetBytes(initialContent)),
+                replacementContent,
+                "text/plain",
+                new Dictionary<string, string>(StringComparer.Ordinal));
+            Assert.IsTrue(replaced);
+        }
+
+        guardedTargetStore.RejectConditionalDeleteKey = historyInvalidationMarkerKey;
+
+        await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.SyncAsync(
+            new SyncRunRequest(sourceRoot, ByteForByte: true)));
+
+        Assert.IsFalse(targetStore.TryGetObject(historyManifestKey, out _));
+        Assert.IsTrue(targetStore.TryGetObject(historyInvalidationMarkerKey, out _));
+
+        guardedTargetStore.RejectConditionalDeleteKey = null;
+        var deduplicationResult = await serviceProvider
+            .GetRequiredService<IHistoryDeduplicator>()
+            .DeduplicateAsync(new HistoryDeduplicationRequest(sourceRoot));
+
+        Assert.IsTrue(deduplicationResult.Completed);
+        Assert.IsTrue(targetStore.TryGetObject(historyManifestKey, out _));
+        Assert.IsFalse(targetStore.TryGetObject(historyInvalidationMarkerKey, out _));
     }
 
     [TestMethod]
@@ -1774,11 +1933,13 @@ public sealed class ArchiveSynchronizerTests
                 Assert.AreEqual(1, rebuiltManifest.Entries.Count());
             }
 
-            var historicalManifestPath = Directory.GetFiles(
-                Path.Combine(targetRoot, ".yabt-hist"),
-                ArchiveChangeManifest.BrotliFileName,
-                SearchOption.AllDirectories).Single();
-            Assert.AreEqual("{ invalid manifest", await File.ReadAllTextAsync(historicalManifestPath));
+            var historyRoot = Path.Combine(targetRoot, ".yabt-hist");
+            Assert.IsFalse(
+                Directory.Exists(historyRoot) &&
+                Directory.GetFiles(
+                    historyRoot,
+                    ArchiveChangeManifest.BrotliFileName,
+                    SearchOption.AllDirectories).Any());
         }
         finally
         {
@@ -2368,7 +2529,8 @@ public sealed class ArchiveSynchronizerTests
         }
     }
 
-    private sealed class DataReadGuardObjectStore(IObjectStore _innerStore) : IObjectStore
+    private sealed class DataReadGuardObjectStore(IObjectStore _innerStore) :
+        IArchiveMutableObjectStore
     {
         private readonly Lock _gate = new();
         private readonly Dictionary<string, int> _openReadCounts = new(StringComparer.Ordinal);
@@ -2385,6 +2547,8 @@ public sealed class ArchiveSynchronizerTests
         public bool StopUploadsAfterEmptyRead { get; set; }
 
         public string? RejectMoveSource { get; set; }
+
+        public string? RejectConditionalDeleteKey { get; set; }
 
         public Func<string, string, CancellationToken, Task>? AfterMoveAsync { get; set; }
 
@@ -2436,6 +2600,10 @@ public sealed class ArchiveSynchronizerTests
                 !string.Equals(
                     normalizedKey,
                     ArchiveChangeManifest.UncompressedFileName,
+                    StringComparison.Ordinal) &&
+                !string.Equals(
+                    normalizedKey,
+                    ArchiveChangeManifest.InvalidationMarkerFileName,
                     StringComparison.Ordinal))
             {
                 throw new InvalidOperationException($"Data object '{normalizedKey}' must not be opened.");
@@ -2470,6 +2638,56 @@ public sealed class ArchiveSynchronizerTests
             string key,
             CancellationToken cancellationToken = default
         ) => _innerStore.ExistsAsync(key, cancellationToken);
+
+        public Task<bool> TryReplaceIfContentHashMatchesAsync
+        (
+            string key,
+            string expectedContentHash,
+            Stream replacementContent,
+            string contentType,
+            IReadOnlyDictionary<string, string> metadata,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (_innerStore is not IArchiveMutableObjectStore mutableStore)
+            {
+                throw new InvalidOperationException(
+                    "The wrapped test store does not support guarded archive mutations.");
+            }
+
+            return mutableStore.TryReplaceIfContentHashMatchesAsync(
+                key,
+                expectedContentHash,
+                replacementContent,
+                contentType,
+                metadata,
+                cancellationToken);
+        }
+
+        public Task<bool> TryDeleteIfContentHashMatchesAsync
+        (
+            string key,
+            string expectedContentHash,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (string.Equals(key, RejectConditionalDeleteKey, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Conditional deletion of '{key}' was rejected by the test store.");
+            }
+
+            if (_innerStore is not IArchiveMutableObjectStore mutableStore)
+            {
+                throw new InvalidOperationException(
+                    "The wrapped test store does not support guarded archive mutations.");
+            }
+
+            return mutableStore.TryDeleteIfContentHashMatchesAsync(
+                key,
+                expectedContentHash,
+                cancellationToken);
+        }
 
         public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
         (
@@ -2532,6 +2750,20 @@ public sealed class ArchiveSynchronizerTests
             sourcePrefix,
             destinationPrefix,
             cancellationToken);
+
+        public Task<IArchiveMutationLock> AcquireArchiveMutationLockAsync
+        (
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (_innerStore is not IArchiveMutationLockProvider lockProvider)
+            {
+                throw new InvalidOperationException(
+                    "The wrapped test store does not provide archive mutation locking.");
+            }
+
+            return lockProvider.AcquireArchiveMutationLockAsync(cancellationToken);
+        }
 
         public int GetOpenReadCount(string key)
         {

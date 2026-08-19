@@ -21,6 +21,7 @@ The root descriptor records:
 - Known object stores.
 - Optional default object store id.
 - Optional change manifest compression.
+- Optional history tiny-file threshold for deduplication.
 - Non-secret store configuration.
 - Credential references.
 
@@ -93,6 +94,12 @@ The optional root-level `changeManifestCompression` property controls how YABT w
 
 When the property is omitted, YABT uses `brotli`. Readers inspect both supported file names regardless of the configured write format so that changing this option does not make an existing manifest unreadable. Values are case-sensitive, and no other compression names are accepted during MVP development.
 
+## History Deduplication
+
+The optional root-level `historyDeduplicationTinyFileMaximumBytes` property sets the largest historical object that the `deduplicate` command treats as tiny. Objects whose original content length is less than or equal to the effective threshold remain materialized instead of being replaced by a JSON reference. The value is a non-negative whole number of bytes and defaults to `4096` when omitted.
+
+This option does not change synchronization behavior. History scanning and mandatory byte-for-byte duplicate confirmation occur only when the separate `deduplicate` command runs.
+
 ## Secrets
 
 Secrets must not be stored in `.yabt-root.json`.
@@ -110,6 +117,7 @@ Store declarations may include a `credentialRef` value. Runtime configuration re
   "name": "Personal archive",
   "defaultStoreId": "local-archive",
   "changeManifestCompression": "brotli",
+  "historyDeduplicationTinyFileMaximumBytes": 4096,
   "createdAtUtc": "2026-05-28T18:30:00Z",
   "layout": {
     "livePrefix": "",

@@ -1,6 +1,7 @@
 using System.Globalization;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
+using Yabt.Metadata;
 
 namespace Yabt.Sync.Implementation;
 
@@ -85,7 +86,10 @@ internal sealed class ArchiveHistoryKeyAllocator
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (string.Equals(historyFolderItem.Name, objectName, StringComparison.Ordinal) &&
+                if ((string.Equals(historyFolderItem.Name, objectName, StringComparison.Ordinal) ||
+                        ArchiveHistoryFileNames.IsReferencePathFor(
+                            objectName,
+                            historyFolderItem.Name)) &&
                     sequence > highestSequence)
                 {
                     highestSequence = sequence;

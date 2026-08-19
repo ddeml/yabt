@@ -10,6 +10,7 @@ internal static class YabtCliCommandNames
     public const string Verify = "verify";
     public const string Pack = "pack";
     public const string Reconcile = "reconcile";
+    public const string Deduplicate = "deduplicate";
 
     public static readonly FrozenSet<string> Known = new[]
     {
@@ -19,5 +20,6 @@ internal static class YabtCliCommandNames
         Verify,
         Pack,
         Reconcile,
+        Deduplicate,
     }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 }

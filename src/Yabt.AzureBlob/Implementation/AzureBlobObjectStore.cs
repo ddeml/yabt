@@ -15,7 +15,7 @@ internal sealed class AzureBlobObjectStore
     IOptionsMonitor<AzureBlobObjectStoreOptions> _options,
     ILogger<AzureBlobObjectStore> _logger,
     TimeProvider _timeProvider
-) : IObjectStore
+) : IArchiveMutableObjectStore
 {
     public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
@@ -106,6 +106,119 @@ internal sealed class AzureBlobObjectStore
         {
             throw new YabtAzureBlobException(
                 $"Open read failed for Azure Blob object '{normalizedKey}'.",
+                ex);
+        }
+    }
+
+    public async Task<bool> TryReplaceIfContentHashMatchesAsync
+    (
+        string key,
+        string expectedContentHash,
+        Stream replacementContent,
+        string contentType,
+        IReadOnlyDictionary<string, string> metadata,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(TryReplaceIfContentHashMatchesAsync));
+
+        ArgumentNullException.ThrowIfNull(replacementContent);
+        ArgumentNullException.ThrowIfNull(metadata);
+        ValidateExpectedContentHash(expectedContentHash);
+
+        var normalizedKey = NormalizeObjectKey(key);
+        try
+        {
+            var blob = GetBlobClient(normalizedKey);
+            var current = await ReadCurrentHashAndETagAsync(blob, cancellationToken);
+            if (!string.Equals(
+                    current.ContentHash,
+                    expectedContentHash,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            await blob.UploadAsync
+            (
+                replacementContent,
+                new BlobUploadOptions
+                {
+                    Conditions = new BlobRequestConditions
+                    {
+                        IfMatch = current.ETag,
+                    },
+                    HttpHeaders = new BlobHttpHeaders
+                    {
+                        ContentType = string.IsNullOrWhiteSpace(contentType) ?
+                            null :
+                            contentType,
+                    },
+                    Metadata = metadata.Count == 0 ?
+                        null :
+                        new Dictionary<string, string>(metadata, StringComparer.Ordinal),
+                },
+                cancellationToken
+            );
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (IsMissingOrConditionFailed(ex))
+            {
+                return false;
+            }
+
+            throw new YabtAzureBlobException(
+                $"Conditional replacement failed for Azure Blob object '{normalizedKey}'.",
+                ex);
+        }
+    }
+
+    public async Task<bool> TryDeleteIfContentHashMatchesAsync
+    (
+        string key,
+        string expectedContentHash,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(TryDeleteIfContentHashMatchesAsync));
+
+        ValidateExpectedContentHash(expectedContentHash);
+
+        var normalizedKey = NormalizeObjectKey(key);
+        try
+        {
+            var blob = GetBlobClient(normalizedKey);
+            var current = await ReadCurrentHashAndETagAsync(blob, cancellationToken);
+            if (!string.Equals(
+                    current.ContentHash,
+                    expectedContentHash,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            await blob.DeleteAsync
+            (
+                DeleteSnapshotsOption.IncludeSnapshots,
+                new BlobRequestConditions
+                {
+                    IfMatch = current.ETag,
+                },
+                cancellationToken
+            );
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (IsMissingOrConditionFailed(ex))
+            {
+                return false;
+            }
+
+            throw new YabtAzureBlobException(
+                $"Conditional deletion failed for Azure Blob object '{normalizedKey}'.",
                 ex);
         }
     }
@@ -395,6 +508,22 @@ internal sealed class AzureBlobObjectStore
         return true;
     }
 
+    private static async Task<(string ContentHash, ETag ETag)> ReadCurrentHashAndETagAsync
+    (
+        BlobClient blob,
+        CancellationToken cancellationToken
+    )
+    {
+        var download = await blob.DownloadStreamingAsync(cancellationToken: cancellationToken);
+        await using (download.Value.Content)
+        {
+            var contentHash = await ArchiveHash.ComputeAsync(
+                download.Value.Content,
+                cancellationToken);
+            return (contentHash, download.Value.Details.ETag);
+        }
+    }
+
     private static async Task MoveByDownloadUploadDeleteAsync
     (
         BlobClient sourceBlob,
@@ -525,6 +654,24 @@ internal sealed class AzureBlobObjectStore
     private static string NormalizeObjectPrefix(string? value)
     {
         return ArchiveLayout.NormalizeObjectKey(value);
+    }
+
+    private static void ValidateExpectedContentHash(string expectedContentHash)
+    {
+        if (!ArchiveHash.IsValid(expectedContentHash))
+        {
+            throw new ArgumentException
+            (
+                "The expected content hash must be a canonical YABT xxHash128 hash.",
+                nameof(expectedContentHash)
+            );
+        }
+    }
+
+    private static bool IsMissingOrConditionFailed(Exception exception)
+    {
+        return exception is RequestFailedException requestException &&
+            requestException.Status is 404 or 412;
     }
 
     private static string ToObjectStoreKey

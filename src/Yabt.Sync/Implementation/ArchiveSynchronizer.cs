@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Frozen;
 using System.IO.Compression;
 using System.IO.Hashing;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
@@ -41,6 +42,11 @@ internal sealed class ArchiveSynchronizer
 
     private static readonly IReadOnlyDictionary<string, string> EmptyMetadata =
         new Dictionary<string, string>(StringComparer.Ordinal).ToFrozenDictionary(StringComparer.Ordinal);
+
+    private static readonly byte[] HistoryManifestInvalidationMarkerContent = Encoding.UTF8.GetBytes
+    (
+        "{\"documentType\":\"yabt.historyManifestInvalidation\",\"schemaVersion\":1}\n"
+    );
 
     public async Task<SyncRunResult> SyncAsync
     (
@@ -313,6 +319,29 @@ internal sealed class ArchiveSynchronizer
         await context.SourceStore.EnsureReadyAsync(cancellationToken);
         await context.TargetStore.EnsureReadyAsync(cancellationToken);
 
+        if (writeChanges && context.TargetStore is not IArchiveMutableObjectStore)
+        {
+            throw new YabtSyncException(
+                "The selected target store does not provide the guarded mutations required " +
+                "for synchronization.");
+        }
+
+        var mutableTargetStore = writeChanges ?
+            (IArchiveMutableObjectStore)context.TargetStore :
+            null;
+        await using var mutationLock = mutableTargetStore is not null ?
+            await mutableTargetStore.AcquireArchiveMutationLockAsync(cancellationToken) :
+            null;
+        using var operationCancellation = mutationLock is null ?
+            null :
+            CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                mutationLock.LockLostToken);
+        if (operationCancellation is not null)
+        {
+            cancellationToken = operationCancellation.Token;
+        }
+
         var changeManifestFileName = GetChangeManifestFileName(
             context.TargetDescriptor.ChangeManifestCompression);
         var changeManifestLoad = await ReadChangeManifestAsync(
@@ -346,6 +375,48 @@ internal sealed class ArchiveSynchronizer
         var changeManifestInvalidated = false;
         var changeManifestInvalidationMarkerActive =
             changeManifestLoad.InvalidationMarkerExists;
+        var historyInvalidationMarkerKey = context.TargetDescriptor.Layout.ToHistoryObjectKey(
+            ArchiveHistoryManifest.InvalidationMarkerFileName);
+        var historyManifestCleanupNeeded = writeChanges &&
+            await context.TargetStore.ExistsAsync(
+                historyInvalidationMarkerKey,
+                cancellationToken);
+        var historyManifestInvalidated = historyManifestCleanupNeeded;
+
+        async Task EnsureHistoryManifestInvalidatedAsync(CancellationToken currentCancellationToken)
+        {
+            if (historyManifestInvalidated)
+            {
+                return;
+            }
+
+            var historyManifestKey = context.TargetDescriptor.Layout.ToHistoryObjectKey(
+                ArchiveHistoryFileNames.Manifest);
+            var historyManifestExists = await context.TargetStore.ExistsAsync(
+                historyManifestKey,
+                currentCancellationToken);
+            var invalidationMarkerExists = await context.TargetStore.ExistsAsync(
+                historyInvalidationMarkerKey,
+                currentCancellationToken);
+            if (!historyManifestExists && !invalidationMarkerExists)
+            {
+                historyManifestInvalidated = true;
+                return;
+            }
+
+            if (historyManifestExists && !invalidationMarkerExists)
+            {
+                await context.TargetStore.UploadAsync(
+                    historyInvalidationMarkerKey,
+                    new MemoryStream(HistoryManifestInvalidationMarkerContent, writable: false),
+                    "application/json",
+                    EmptyMetadata,
+                    currentCancellationToken);
+            }
+
+            historyManifestCleanupNeeded = true;
+            historyManifestInvalidated = true;
+        }
 
         async Task EnsureChangeManifestInvalidatedAsync(CancellationToken currentCancellationToken)
         {
@@ -354,8 +425,7 @@ internal sealed class ArchiveSynchronizer
                 return;
             }
 
-            if (changeManifestLoad.RequiresInvalidationMarker &&
-                !changeManifestInvalidationMarkerActive)
+            if (!changeManifestInvalidationMarkerActive)
             {
                 await UploadChangeManifestInvalidationMarkerAsync(
                     context.TargetStore,
@@ -363,9 +433,9 @@ internal sealed class ArchiveSynchronizer
                 changeManifestInvalidationMarkerActive = true;
             }
 
-            await MoveChangeManifestsToHistoryAsync(
-                context.TargetStore,
-                historyKeyAllocator,
+            await DeleteChangeManifestsAsync(
+                mutableTargetStore ??
+                    throw new YabtSyncException("A mutating sync requires a mutable target store."),
                 changeManifestLoad.ExistingFileNames,
                 currentCancellationToken);
             changeManifestInvalidated = true;
@@ -420,6 +490,7 @@ internal sealed class ArchiveSynchronizer
                 if (writeChanges)
                 {
                     await EnsureChangeManifestInvalidatedAsync(cancellationToken);
+                    await EnsureHistoryManifestInvalidatedAsync(cancellationToken);
 
                     await MoveTargetObjectToHistoryAsync(
                         context.TargetStore,
@@ -470,7 +541,11 @@ internal sealed class ArchiveSynchronizer
             targetFolders,
             summary,
             writeChanges,
-            EnsureChangeManifestInvalidatedAsync,
+            async currentCancellationToken =>
+            {
+                await EnsureChangeManifestInvalidatedAsync(currentCancellationToken);
+                await EnsureHistoryManifestInvalidatedAsync(currentCancellationToken);
+            },
             cancellationToken);
 
         if (writeChanges)
@@ -493,12 +568,24 @@ internal sealed class ArchiveSynchronizer
                     cancellationToken);
                 if (changeManifestInvalidationMarkerActive)
                 {
-                    await MoveChangeManifestInvalidationMarkerToHistoryAsync(
-                        context.TargetStore,
-                        historyKeyAllocator,
+                    await DeleteInternalObjectAsync(
+                        mutableTargetStore ??
+                            throw new YabtSyncException(
+                                "A mutating sync requires a mutable target store."),
+                        ArchiveChangeManifest.InvalidationMarkerFileName,
+                        "Change manifest invalidation marker",
                         cancellationToken);
                     changeManifestInvalidationMarkerActive = false;
                 }
+            }
+
+            if (historyManifestCleanupNeeded)
+            {
+                await DeleteStaleHistoryManifestStateAsync(
+                    mutableTargetStore ??
+                        throw new YabtSyncException("A mutating sync requires a mutable target store."),
+                    context.TargetDescriptor.Layout,
+                    cancellationToken);
             }
         }
 
@@ -1059,61 +1146,93 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task MoveChangeManifestsToHistoryAsync
+    private static async Task DeleteChangeManifestsAsync
     (
-        IObjectStore targetStore,
-        ArchiveHistoryKeyAllocator historyKeyAllocator,
+        IArchiveMutableObjectStore targetStore,
         IEnumerable<string> fileNames,
         CancellationToken cancellationToken
     )
     {
         foreach (var fileName in fileNames)
         {
-            var destinationKey = await historyKeyAllocator.CreateHistoricalKeyAsync(
+            await DeleteInternalObjectAsync(
+                targetStore,
                 fileName,
+                $"Obsolete change manifest '{fileName}'",
                 cancellationToken);
-
-            try
-            {
-                await targetStore.MoveAsync(
-                    fileName,
-                    destinationKey,
-                    cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                throw new YabtSyncException(
-                    $"Change manifest history move failed from '{fileName}' " +
-                        $"to '{destinationKey}'.",
-                    ex);
-            }
         }
     }
 
-    private static async Task MoveChangeManifestInvalidationMarkerToHistoryAsync
+    private static async Task DeleteStaleHistoryManifestStateAsync
     (
-        IObjectStore targetStore,
-        ArchiveHistoryKeyAllocator historyKeyAllocator,
+        IArchiveMutableObjectStore targetStore,
+        ArchiveLayout layout,
         CancellationToken cancellationToken
     )
     {
-        var destinationKey = await historyKeyAllocator.CreateHistoricalKeyAsync(
-            ArchiveChangeManifest.InvalidationMarkerFileName,
+        var manifestKey = layout.ToHistoryObjectKey(ArchiveHistoryFileNames.Manifest);
+        var markerKey = layout.ToHistoryObjectKey(
+            ArchiveHistoryManifest.InvalidationMarkerFileName);
+        await DeleteInternalObjectAsync(
+            targetStore,
+            manifestKey,
+            "Stale history manifest",
             cancellationToken);
+        await DeleteInternalObjectAsync(
+            targetStore,
+            markerKey,
+            "History manifest invalidation marker",
+            cancellationToken);
+    }
+
+    private static async Task DeleteInternalObjectAsync
+    (
+        IArchiveMutableObjectStore targetStore,
+        string key,
+        string description,
+        CancellationToken cancellationToken
+    )
+    {
         try
         {
-            await targetStore.MoveAsync(
-                ArchiveChangeManifest.InvalidationMarkerFileName,
-                destinationKey,
+            if (!await targetStore.ExistsAsync(key, cancellationToken))
+            {
+                return;
+            }
+
+            var expectedContentHash = await ComputeStoredObjectHashAsync(
+                targetStore,
+                key,
                 cancellationToken);
+            var deleted = await targetStore.TryDeleteIfContentHashMatchesAsync(
+                key,
+                expectedContentHash,
+                cancellationToken);
+            if (!deleted)
+            {
+                throw new YabtSyncException(
+                    $"{description} changed before it could be deleted.");
+            }
         }
         catch (Exception ex)
         {
             throw new YabtSyncException(
-                $"Change manifest invalidation marker history move failed from " +
-                    $"'{ArchiveChangeManifest.InvalidationMarkerFileName}' to '{destinationKey}'.",
+                $"{description} at '{key}' could not be deleted.",
                 ex);
         }
+    }
+
+    private static async Task<string> ComputeStoredObjectHashAsync
+    (
+        IObjectStore targetStore,
+        string key,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var content = await targetStore.OpenReadAsync(key, cancellationToken);
+        using var hashingContent = new ContentHashingReadStream(content.Content);
+        await hashingContent.CopyToAsync(Stream.Null, cancellationToken);
+        return hashingContent.CompleteHash();
     }
 
     private static async Task MoveTargetObjectToHistoryAsync

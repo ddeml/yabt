@@ -20,7 +20,11 @@ public static class YabtWebDavServiceCollectionExtensions
             optionsBuilder.BindConfiguration(configSectionPath);
         }
 
-        services.AddSingleton<IObjectStore, WebDavObjectStore>();
+        services.AddSingleton<WebDavObjectStore>();
+        services.AddSingleton<IObjectStore>(provider =>
+            provider.GetRequiredService<WebDavObjectStore>());
+        services.AddSingleton<IArchiveMutableObjectStore>(provider =>
+            provider.GetRequiredService<WebDavObjectStore>());
         return services;
     }
 }

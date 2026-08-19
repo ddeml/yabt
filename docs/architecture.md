@@ -66,6 +66,16 @@ This makes an ordinary source folder usable as the logical live branch without f
 
 The synchronizer owns historization. Before replacing or removing logical live objects, it should preserve the old representation under the configured history prefix. When a complete live folder becomes obsolete, the synchronizer moves that folder representation to history as a unit instead of moving its visible objects and then deleting the leftover container. This preserves `.yabt-empty`, native empty descendants, and unexpected contents if a run was interrupted. The exact historical sublayout may evolve, but it should remain inspectable.
 
+History deduplication is intentionally separate from synchronization. The `deduplicate` maintenance command scans only the history branch, finds content-hash candidates above the configured tiny-file threshold, and confirms every replacement with a complete byte comparison. This keeps the ordinary sync path independent of history size.
+
+The history manifest is a durable, rebuildable catalog separate from the live change manifest. It describes every historical occurrence and records whether its bytes are materialized or replaced by an explicit JSON reference. It is not authoritative by itself: materialized entries use only information observable by scanning or opening their actual objects, and self-contained references repeat their exact entries. Rebuilding may require reading and hashing materialized content, but losing the catalog does not lose exclusive metadata.
+
+Each duplicate group keeps one stable materialized copy in history. A reference identifies that content by its xxHash128 content hash instead of naming another reference, so references never form chains. The current command does not scan live objects; future resolution may consider them as optional extra candidates, but they are neither modified nor required to remain available for historical restoration.
+
+Deduplication is ordered for recoverability. YABT verifies the materialized backing copy, writes and commits the complete reference metadata, and only then removes redundant bytes. A failure may leave extra materializations, but it must not leave an unresolvable reference. Archive-mutating commands require coordination so sync and deduplication cannot concurrently change the same history.
+
+The history catalog has its own invalidation marker. Synchronization writes the marker before making the catalog stale. If sync changes history successfully, it deletes the stale catalog and then the marker, so neither remains after the command. Deduplication uses the marker while rebuilding and removes it only after safely publishing the catalog and completing guarded deletions. A marker that remains after either command indicates interruption. Archive locks coordinate YABT writers; external tools must not modify an archive during a mutating command.
+
 ## Archive Format Projectors
 
 Folder representation is selected by a string `format` value in folder metadata. The format value is owned by the provider that implements it.
@@ -83,6 +93,8 @@ When a subfolder uses a packaging format such as `zip`, its projected package ar
 
 Projectors stream projected objects from `ProjectAsync`. Formats that can emit objects incrementally, such as `mirror`, should do so. Formats that need complete folder knowledge, such as `zip`, may collect their source folder first and then yield the finished package object.
 
+Filesystem traversal does not descend into directory reparse points or symbolic-link directories below the configured store root. This prevents a destructive history operation from following a link outside the archive. Configure the linked destination itself as the store root when that location is intentional.
+
 The `mirror` projector maps source files one-to-one. The current initial `zip` projector maps a source folder to a package artifact; the adjacent manifest and external descriptor remain planned parts of the durable format. Package artifact names use a deterministic, algorithm-tagged full xxHash128 logical-representation hash and exclude per-run creation time, so an unchanged projection retains the same live key. The hash token is lowercase unpadded Base32hex in file names so it remains stable on case-insensitive file systems; JSON uses the shorter unpadded Base64URL form. ZIP identity includes ordered relative paths, archived lengths and modification times, per-object change fingerprints, and output-affecting compression settings. The synchronizer then compares the projected representation to the target layout and applies writes, replacements, deletes, and history moves.
 
 ## Project Boundaries
@@ -97,7 +109,7 @@ Format projector projects implement source-to-archive projection behavior such a
 
 Object-store provider projects adapt storage systems such as the filesystem, Azure Blob Storage, and WebDAV.
 
-`Yabt.Sync` coordinates root metadata loading, policy evaluation, format projector resolution, layout mapping, historization, backup, restore, verification, and reconciliation.
+`Yabt.Sync` coordinates root metadata loading, policy evaluation, format projector resolution, layout mapping, historization, backup, restore, verification, reconciliation, and explicit history deduplication.
 
 `Yabt.Cli` provides the command entry point.
 
@@ -111,11 +123,11 @@ Normal `sync` and `verify` use matching fingerprints plus the prior manifest to 
 
 When a mutating sync must compare streams, it copies the source bytes it is already comparing into a private delete-on-close local replay file. If the comparison finds a change, YABT finishes that one source read and uploads the captured snapshot instead of reopening the source. This both avoids duplicate source I/O and prevents a file changed between comparison and upload from producing a different archived version. Objects are currently processed sequentially, so local temporary storage must hold at most the largest projected object being compared. Verify and dry-run operations do not create replay files because they never upload. ZIP follows the same one-read rule: when an entry lacks enough metadata or a provider hash, its bytes are hashed while that same read is written into the package. The initial ZIP builder remains memory-backed; an eagerly built fallback package retains one backing buffer for replay, so nested incomplete-metadata packages can temporarily retain multiple buffers until their projection graph is released. A future large-package implementation needs an explicitly owned, spillable content lifetime.
 
-The configured compression controls only what a mutating sync writes. Readers always inspect both supported filenames. If both exist, they are trusted only when both validate and have the same logical self-hash; a corrupt or conflicting pair forces full comparison. Before moving multiple untrusted representations, sync creates `.yabt-change-manifest.invalid`. Its presence prevents a partially completed quarantine from leaving one stale manifest that appears trustworthy. The marker remains until the replacement manifest is safely written, then moves to history last. A successful mutating sync leaves exactly the configured representation live.
+The configured compression controls only what a mutating sync writes. Readers always inspect both supported filenames. If both exist, they are trusted only when both validate and have the same logical self-hash; a corrupt or conflicting pair forces full comparison. Before discarding multiple untrusted representations, sync creates `.yabt-change-manifest.invalid`. Its presence prevents a partially completed cleanup from leaving one stale manifest that appears trustworthy. The marker remains until the replacement manifest is safely written, then is deleted last. A successful mutating sync leaves exactly the configured representation live. Obsolete root change manifests and the root invalidation marker are deleted, never historized.
 
 Target-native modification times are not compared with source times because uploads and remote servers assign different target times. The manifest preserves the source-derived fingerprint instead. Missing source timestamps do not receive a fake quick fingerprint; formats may use a separate deterministic timestamp only where an encoding such as ZIP requires one.
 
-The old manifest is moved aside before the first live mutation and the replacement is written last. An interrupted run therefore leaves no trusted live manifest and the next sync performs full comparisons. A mutating sync can quarantine and rebuild an invalid manifest; byte-for-byte mode can proceed without trusting it.
+The old manifest is deleted before the first live mutation and the replacement is written last. An interrupted run therefore leaves no trusted live manifest and the next sync performs full comparisons. A mutating sync can discard and rebuild an invalid manifest; byte-for-byte mode can proceed without trusting it. Current MVP behavior does not search history for manifest metadata left there by older builds.
 
 The current manifest is root-wide. It removes repeated byte scanning but still requires metadata enumeration and rewrites the JSON document when it changes. Folder-local or sharded manifests, filesystem event monitoring, Synology btrfs snapshot diffs, and other scalable delta sources remain future improvements behind change-detection abstractions.
 

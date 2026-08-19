@@ -6,7 +6,8 @@ namespace Yabt.Cli.Implementation;
 
 internal sealed class CommandRunner
 (
-    IArchiveSynchronizer _archiveSynchronizer
+    IArchiveSynchronizer _archiveSynchronizer,
+    IHistoryDeduplicator _historyDeduplicator
 )
 {
     private static readonly FrozenSet<string> HelpArguments = new[]
@@ -52,7 +53,10 @@ internal sealed class CommandRunner
 
         foreach (var command in YabtCliCommandNames.Known.Order(StringComparer.OrdinalIgnoreCase))
         {
-            rootCommand.Subcommands.Add(CreateArchiveCommand(command));
+            var archiveCommand = command == YabtCliCommandNames.Deduplicate ?
+                CreateDeduplicateCommand() :
+                CreateArchiveCommand(command);
+            rootCommand.Subcommands.Add(archiveCommand);
         }
 
         return rootCommand;
@@ -110,6 +114,47 @@ internal sealed class CommandRunner
         return command;
     }
 
+    private Command CreateDeduplicateCommand()
+    {
+        var archiveRootArgument = new Argument<string>("archive-root")
+        {
+            Description = "Archive root whose history should be deduplicated.",
+            DefaultValueFactory = _ => Directory.GetCurrentDirectory(),
+        };
+        var dryRunOption = new Option<bool>("--dry-run")
+        {
+            Description = "Report deduplication changes without writing them.",
+        };
+        var targetStoreIdOption = new Option<string?>("--target-store-id")
+        {
+            Description = "Target store id from the root descriptor.",
+        };
+
+        var command = new Command
+        (
+            YabtCliCommandNames.Deduplicate,
+            GetCommandDescription(YabtCliCommandNames.Deduplicate)
+        )
+        {
+            Arguments = { archiveRootArgument },
+            Options = { dryRunOption, targetStoreIdOption },
+        };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var archiveRoot = parseResult.GetValue(archiveRootArgument) ?? Directory.GetCurrentDirectory();
+            var dryRun = parseResult.GetValue(dryRunOption);
+            var targetStoreId = parseResult.GetValue(targetStoreIdOption);
+            var request = new HistoryDeduplicationRequest(archiveRoot, dryRun, targetStoreId);
+            var result = await _historyDeduplicator.DeduplicateAsync(request, cancellationToken);
+
+            Console.WriteLine(result.Message);
+            return result.Completed ? 0 : 1;
+        });
+
+        return command;
+    }
+
     private async Task<int> RunArchiveCommandAsync
     (
         string commandName,
@@ -147,6 +192,8 @@ internal sealed class CommandRunner
                 "Quickly verify a folder from metadata fingerprints; use --byte-for-byte for full comparison.",
             YabtCliCommandNames.Pack => "Project a folder into a package representation.",
             YabtCliCommandNames.Reconcile => "Reconcile two archive roots.",
+            YabtCliCommandNames.Deduplicate =>
+                "Deduplicate history after mandatory byte-for-byte confirmation.",
             _ => "Run a YABT command.",
         };
     }

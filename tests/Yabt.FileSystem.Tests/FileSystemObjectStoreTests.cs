@@ -117,6 +117,53 @@ public sealed class FileSystemObjectStoreTests
     }
 
     [TestMethod]
+    public async Task GetFolderItemsAsyncDoesNotTraverseDirectoryReparsePoints()
+    {
+        var rootPath = CreateTemporaryRoot();
+        var outsidePath = CreateTemporaryRoot();
+        var linkPath = Path.Combine(rootPath, "linked-history");
+        try
+        {
+            await WriteFileAsync(outsidePath, "outside.txt");
+            try
+            {
+                Directory.CreateSymbolicLink(linkPath, outsidePath);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or
+                PlatformNotSupportedException or IOException)
+            {
+                Assert.Inconclusive($"Directory symbolic links are unavailable: {ex.Message}");
+            }
+
+            using var serviceProvider = CreateServices(rootPath, listChunkSize: 10).BuildServiceProvider();
+            var store = serviceProvider.GetRequiredService<IObjectStore>();
+            var keys = new List<string>();
+            var folderItems = store.GetFolderItemsAsync(null, recursive: true);
+
+            await foreach (var folderItem in folderItems)
+            {
+                if (folderItem.Object is not null)
+                {
+                    keys.Add(folderItem.Object.Key);
+                }
+            }
+
+            Assert.AreEqual(0, keys.Count);
+            Assert.IsTrue(File.Exists(Path.Combine(outsidePath, "outside.txt")));
+        }
+        finally
+        {
+            if (Directory.Exists(linkPath))
+            {
+                Directory.Delete(linkPath);
+            }
+
+            Directory.Delete(rootPath, recursive: true);
+            Directory.Delete(outsidePath, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task MoveFolderAsyncMovesCompleteDirectoryTree()
     {
         var rootPath = CreateTemporaryRoot();
@@ -205,6 +252,128 @@ public sealed class FileSystemObjectStoreTests
 
             Assert.IsTrue(File.Exists(Path.Combine(rootPath, "source", "file.txt")));
             Assert.IsFalse(Directory.Exists(Path.Combine(rootPath, "source", "history")));
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ConditionalReplacementRequiresMatchingCompleteContentHash()
+    {
+        var rootPath = CreateTemporaryRoot();
+        try
+        {
+            var path = Path.Combine(rootPath, "file.txt");
+            await File.WriteAllTextAsync(path, "original");
+            using var serviceProvider = CreateServices(rootPath, listChunkSize: 10).BuildServiceProvider();
+            var store = serviceProvider.GetRequiredService<IObjectStore>();
+            var mutableStore = (IArchiveMutableObjectStore)store;
+            await using var wrongReplacement = new MemoryStream("wrong"u8.ToArray());
+
+            var wrongHashReplaced = await mutableStore.TryReplaceIfContentHashMatchesAsync
+            (
+                "file.txt",
+                ArchiveHash.Compute("different"u8),
+                wrongReplacement,
+                "text/plain",
+                new Dictionary<string, string>(StringComparer.Ordinal)
+            );
+
+            Assert.IsFalse(wrongHashReplaced);
+            Assert.AreEqual("original", await File.ReadAllTextAsync(path));
+
+            await using var replacement = new MemoryStream("replacement"u8.ToArray());
+            var replaced = await mutableStore.TryReplaceIfContentHashMatchesAsync
+            (
+                "file.txt",
+                ArchiveHash.Compute("original"u8),
+                replacement,
+                "text/plain",
+                new Dictionary<string, string>(StringComparer.Ordinal)
+            );
+
+            Assert.IsTrue(replaced);
+            Assert.AreEqual("replacement", await File.ReadAllTextAsync(path));
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ConditionalDeletionRequiresMatchingCompleteContentHash()
+    {
+        var rootPath = CreateTemporaryRoot();
+        try
+        {
+            var path = Path.Combine(rootPath, "file.txt");
+            await File.WriteAllTextAsync(path, "content");
+            using var serviceProvider = CreateServices(rootPath, listChunkSize: 10).BuildServiceProvider();
+            var store = serviceProvider.GetRequiredService<IObjectStore>();
+            var mutableStore = (IArchiveMutableObjectStore)store;
+
+            var wrongHashDeleted = await mutableStore.TryDeleteIfContentHashMatchesAsync
+            (
+                "file.txt",
+                ArchiveHash.Compute("different"u8)
+            );
+
+            Assert.IsFalse(wrongHashDeleted);
+            Assert.IsTrue(File.Exists(path));
+
+            var deleted = await mutableStore.TryDeleteIfContentHashMatchesAsync
+            (
+                "file.txt",
+                ArchiveHash.Compute("content"u8)
+            );
+
+            Assert.IsTrue(deleted);
+            Assert.IsFalse(File.Exists(path));
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ArchiveMutationLockIsExclusiveAndRemovedOnRelease()
+    {
+        var rootPath = CreateTemporaryRoot();
+        try
+        {
+            using var serviceProvider = CreateServices(rootPath, listChunkSize: 10).BuildServiceProvider();
+            var store = serviceProvider.GetRequiredService<IObjectStore>();
+            var mutableStore = (IArchiveMutableObjectStore)store;
+            var mutationLock = await mutableStore.AcquireArchiveMutationLockAsync();
+
+            try
+            {
+                Assert.IsTrue(File.Exists(Path.Combine
+                (
+                    rootPath,
+                    ArchiveInternalObjectKeys.MutationLock.Replace('/', Path.DirectorySeparatorChar)
+                )));
+
+                using var cancellationSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+                await Assert.ThrowsAsync<OperationCanceledException>
+                (
+                    () => mutableStore.AcquireArchiveMutationLockAsync(cancellationSource.Token)
+                );
+            }
+            finally
+            {
+                await mutationLock.DisposeAsync();
+            }
+
+            Assert.IsFalse(File.Exists(Path.Combine
+            (
+                rootPath,
+                ArchiveInternalObjectKeys.MutationLock.Replace('/', Path.DirectorySeparatorChar)
+            )));
         }
         finally
         {

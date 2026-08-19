@@ -23,6 +23,40 @@ public static class ArchiveHash
         return Format(hash.GetHashAndReset());
     }
 
+    public static string Compute
+    (
+        Stream content,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(content);
+
+        var hash = new XxHash128();
+        var buffer = new byte[81_920];
+        int bytesRead;
+        while ((bytesRead = content.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            hash.Append(buffer.AsSpan(0, bytesRead));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return Format(hash.GetHashAndReset());
+    }
+
+    public static async Task<string> ComputeAsync
+    (
+        Stream content,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(content);
+
+        var hash = new XxHash128();
+        await hash.AppendAsync(content, cancellationToken);
+        return Format(hash.GetHashAndReset());
+    }
+
     public static string Format(ReadOnlySpan<byte> hash)
     {
         if (hash.Length != ValueLengthInBytes)

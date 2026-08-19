@@ -26,6 +26,8 @@ public static class YabtTestsServiceCollectionExtensions
             provideContentHash
         ));
         services.AddSingleton<IObjectStore>(provider => provider.GetRequiredService<MemoryObjectStore>());
+        services.AddSingleton<IArchiveMutableObjectStore>(provider =>
+            provider.GetRequiredService<MemoryObjectStore>());
 
         return services;
     }
@@ -41,6 +43,8 @@ public static class YabtTestsServiceCollectionExtensions
 
         services.AddSingleton(objectStore);
         services.AddSingleton<IObjectStore>(provider => provider.GetRequiredService<MemoryObjectStore>());
+        services.AddSingleton<IArchiveMutableObjectStore>(provider =>
+            provider.GetRequiredService<MemoryObjectStore>());
 
         return services;
     }

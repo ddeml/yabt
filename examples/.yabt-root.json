@@ -6,6 +6,7 @@
   "name": "Personal archive",
   "defaultStoreId": "local-archive",
   "changeManifestCompression": "brotli",
+  "historyDeduplicationTinyFileMaximumBytes": 4096,
   "createdAtUtc": "2026-05-28T18:30:00Z",
   "layout": {
     "livePrefix": "",

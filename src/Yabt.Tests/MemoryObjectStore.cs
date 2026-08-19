@@ -14,7 +14,7 @@ public sealed class MemoryObjectStore
     TimeProvider timeProvider,
     ILogger<MemoryObjectStore> logger,
     bool _provideContentHash = default
-) : IObjectStore
+) : IArchiveMutableObjectStore
 {
     private readonly Lock _gate = new();
     private readonly Dictionary<string, StoredInMemoryArchiveObject> _objects = new(StringComparer.Ordinal);
@@ -112,6 +112,80 @@ public sealed class MemoryObjectStore
             new MemoryStream(archiveObject.Content.ToArray(), writable: false),
             archiveObject.ContentType,
             archiveObject.Metadata));
+    }
+
+    public async Task<bool> TryReplaceIfContentHashMatchesAsync
+    (
+        string key,
+        string expectedContentHash,
+        Stream replacementContent,
+        string contentType,
+        IReadOnlyDictionary<string, string> metadata,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(TryReplaceIfContentHashMatchesAsync));
+
+        ArgumentNullException.ThrowIfNull(replacementContent);
+        ArgumentNullException.ThrowIfNull(metadata);
+        ValidateExpectedContentHash(expectedContentHash);
+
+        var normalizedKey = NormalizeObjectKey(key);
+        using var memory = new MemoryStream();
+        await replacementContent.CopyToAsync(memory, cancellationToken);
+        var replacement = new StoredInMemoryArchiveObject
+        (
+            memory.ToArray(),
+            contentType,
+            CopyMetadata(metadata),
+            _timeProvider.GetUtcNow()
+        );
+
+        lock (_gate)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!_objects.TryGetValue(normalizedKey, out var current) ||
+                !string.Equals(
+                    ComputeContentHash(current.Content),
+                    expectedContentHash,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            _objects[normalizedKey] = replacement;
+            return true;
+        }
+    }
+
+    public Task<bool> TryDeleteIfContentHashMatchesAsync
+    (
+        string key,
+        string expectedContentHash,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(TryDeleteIfContentHashMatchesAsync));
+
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateExpectedContentHash(expectedContentHash);
+
+        var normalizedKey = NormalizeObjectKey(key);
+        lock (_gate)
+        {
+            if (!_objects.TryGetValue(normalizedKey, out var current) ||
+                !string.Equals(
+                    ComputeContentHash(current.Content),
+                    expectedContentHash,
+                    StringComparison.Ordinal))
+            {
+                return Task.FromResult(false);
+            }
+
+            _objects.Remove(normalizedKey);
+            return Task.FromResult(true);
+        }
     }
 
     public Task<bool> ExistsAsync
@@ -474,6 +548,18 @@ public sealed class MemoryObjectStore
 
     private static string ComputeContentHash(ReadOnlyMemory<byte> content)
         => ArchiveHash.Compute(content.Span);
+
+    private static void ValidateExpectedContentHash(string expectedContentHash)
+    {
+        if (!ArchiveHash.IsValid(expectedContentHash))
+        {
+            throw new ArgumentException
+            (
+                "The expected content hash must be a canonical YABT xxHash128 hash.",
+                nameof(expectedContentHash)
+            );
+        }
+    }
 
     private static InMemoryArchiveObject ToPublicObject
     (

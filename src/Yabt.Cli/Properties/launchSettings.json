@@ -4,6 +4,11 @@
       "commandName": "Project",
       "commandLineArgs": "sync",
       "workingDirectory": "..\\..\\test-fs\\source"
+    },
+    "deduplicate": {
+      "commandName": "Project",
+      "commandLineArgs": "deduplicate",
+      "workingDirectory": "..\\..\\test-fs\\source"
     }
   }
 }

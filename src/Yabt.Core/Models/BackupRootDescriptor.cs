@@ -14,7 +14,8 @@ public sealed record BackupRootDescriptor
     string? RootRole = default,
     string? Name = default,
     string? DefaultStoreId = default,
-    string? ChangeManifestCompression = default
+    string? ChangeManifestCompression = default,
+    long? HistoryDeduplicationTinyFileMaximumBytes = default
 )
 {
     public const string ExpectedDocumentType = "yabt.backupRoot";

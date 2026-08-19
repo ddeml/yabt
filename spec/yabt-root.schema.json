@@ -33,6 +33,13 @@
       "default": "brotli",
       "description": "Compression used when writing the root live change manifest. Readers inspect both supported representations."
     },
+    "historyDeduplicationTinyFileMaximumBytes": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 9223372036854775807,
+      "default": 4096,
+      "description": "Largest historical object considered too small to deduplicate. A missing or null value uses 4096 bytes."
+    },
     "createdAtUtc": {
       "type": "string",
       "format": "date-time"

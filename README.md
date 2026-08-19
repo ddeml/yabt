@@ -9,6 +9,7 @@ The initial target runtime is .NET 10 on Windows. The architecture keeps platfor
 - Mirror the original folder hierarchy into directly browsable object stores.
 - Keep a configurable logical live branch for current state and a configurable history branch for preserved historical state.
 - Prefer append-mostly behavior for replaced or deleted content.
+- Reclaim repeated history content through explicit, self-describing JSON references without deduplicating the live branch.
 - Store intent and metadata in human-readable JSON files.
 - Use standard archive formats such as zip when packaging folders.
 - Keep archive targets directly browsable with ordinary tools such as the filesystem, Azure Storage Explorer, or WebDAV clients.
@@ -20,7 +21,7 @@ The initial target runtime is .NET 10 on Windows. The architecture keeps platfor
 - No proprietary repository format.
 - No hidden mandatory catalog database.
 - No opaque block store for the logical live branch.
-- No initial deduplication implementation.
+- No deduplication of the logical live branch.
 - No initial metadata cache.
 
 ## Why This Differs From Traditional Backup Tools
@@ -37,7 +38,7 @@ The filesystem plus metadata files are the source of truth. Object stores such a
 - `src/Yabt.Packaging` defines package building contracts and naming rules.
 - Format projector projects own representations such as `mirror` and `zip`.
 - Object-store provider projects adapt stores such as the filesystem, Azure Blob Storage, and WebDAV.
-- `src/Yabt.Sync` holds synchronization orchestration and change-manifest comparison.
+- `src/Yabt.Sync` holds synchronization orchestration, change-manifest comparison, and history deduplication.
 - `src/Yabt.Cli` exposes the command surface.
 - `docs` contains architecture and format notes.
 - `spec` contains draft JSON schemas.
@@ -45,14 +46,20 @@ The filesystem plus metadata files are the source of truth. Object stores such a
 
 ## CLI
 
-`sync` and `verify` are implemented. Their default comparison uses the durable change manifest and metadata fingerprints to avoid reading unchanged file contents. Use `--byte-for-byte` when a full content comparison is required:
+`sync`, `verify`, and history-only `deduplicate` are implemented. The default sync and verify comparison uses the durable change manifest and metadata fingerprints to avoid reading unchanged file contents. Use `--byte-for-byte` when a full content comparison is required:
 
 ```console
 yabt sync <source-root>
 yabt sync <source-root> --byte-for-byte
 yabt verify <source-root>
 yabt verify <source-root> --byte-for-byte
+yabt deduplicate [archive-root]
+yabt deduplicate [archive-root] --dry-run
 ```
+
+`deduplicate` is a separate history maintenance operation so synchronization does not pay the cost of scanning history. It always confirms candidate duplicates byte-for-byte before replacing a historical materialization with a self-describing JSON reference.
+
+Change manifests are rebuildable metadata, not historical file versions. A successful sync deletes obsolete root change-manifest files and the root invalidation marker instead of moving them into history. If that sync changed history, it also deletes the stale history catalog and then its invalidation marker; the next `deduplicate` run rebuilds the catalog. An invalidation marker should remain only when a sync or deduplication transaction was interrupted. MVP builds do not search history for metadata left there by older builds.
 
 Additional commands remain scaffolded while their semantics are designed:
 

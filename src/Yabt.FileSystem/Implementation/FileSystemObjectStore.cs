@@ -11,7 +11,7 @@ internal sealed class FileSystemObjectStore
 (
     IOptionsMonitor<FileSystemObjectStoreOptions> _options,
     ILogger<FileSystemObjectStore> _logger
-) : IObjectStore
+) : IArchiveMutableObjectStore
 {
     private const int DefaultBufferSize = 81_920;
     private const int DefaultListChunkSize = 1_000;
@@ -178,6 +178,123 @@ internal sealed class FileSystemObjectStore
         }
     }
 
+    public async Task<bool> TryReplaceIfContentHashMatchesAsync
+    (
+        string key,
+        string expectedContentHash,
+        Stream replacementContent,
+        string contentType,
+        IReadOnlyDictionary<string, string> metadata,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(TryReplaceIfContentHashMatchesAsync));
+
+        ArgumentNullException.ThrowIfNull(replacementContent);
+        ArgumentNullException.ThrowIfNull(metadata);
+        ValidateExpectedContentHash(expectedContentHash);
+        _ = contentType;
+
+        var normalizedKey = NormalizeObjectKey(key);
+        var rootPath = GetRootPath();
+        var destinationPath = GetObjectPath(rootPath, normalizedKey);
+        var temporaryDirectory = GetTemporaryDirectory(rootPath);
+        var temporaryPath = Path.Combine(
+            temporaryDirectory,
+            $"{Guid.NewGuid():N}.tmp");
+        var bufferSize = GetEffectiveBufferSize();
+
+        try
+        {
+            Directory.CreateDirectory(temporaryDirectory);
+            await using (var temporaryContent = new FileStream
+            (
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan
+            ))
+            {
+                await replacementContent.CopyToAsync(temporaryContent, cancellationToken);
+            }
+
+            return await RunConditionalMutationAsync
+            (
+                rootPath,
+                destinationPath,
+                expectedContentHash,
+                () => File.Move(temporaryPath, destinationPath, overwrite: true),
+                "Conditionally replace object",
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            throw new YabtFileSystemException
+            (
+                $"Conditional replacement failed for filesystem object '{normalizedKey}'.",
+                normalizedKey,
+                destinationPath,
+                ex
+            );
+        }
+        finally
+        {
+            await YabtTask.Run(() => TryDeleteFile(temporaryPath), cancellationToken: default);
+        }
+    }
+
+    public async Task<bool> TryDeleteIfContentHashMatchesAsync
+    (
+        string key,
+        string expectedContentHash,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(TryDeleteIfContentHashMatchesAsync));
+
+        ValidateExpectedContentHash(expectedContentHash);
+
+        var normalizedKey = NormalizeObjectKey(key);
+        var rootPath = GetRootPath();
+        var path = GetObjectPath(rootPath, normalizedKey);
+        try
+        {
+            return await RunConditionalMutationAsync
+            (
+                rootPath,
+                path,
+                expectedContentHash,
+                () => File.Delete(path),
+                "Conditionally delete object",
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            throw new YabtFileSystemException
+            (
+                $"Conditional deletion failed for filesystem object '{normalizedKey}'.",
+                normalizedKey,
+                path,
+                ex
+            );
+        }
+    }
+
+    public Task<IArchiveMutationLock> AcquireArchiveMutationLockAsync
+    (
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(AcquireArchiveMutationLockAsync));
+
+        var lockPath = GetObjectPath(GetRootPath(), ArchiveInternalObjectKeys.MutationLock);
+        return FileSystemArchiveMutationLock.AcquireAsync(lockPath, cancellationToken);
+    }
+
     public Task<bool> ExistsAsync
     (
         string key,
@@ -209,7 +326,7 @@ internal sealed class FileSystemObjectStore
         void ReadChunk()
         {
             items.Clear();
-            while(items.Count < chunkSize && enumerator!.MoveNext())
+            while (items.Count < chunkSize && enumerator!.MoveNext())
             {
                 items.Add(enumerator.Current);
             }
@@ -221,6 +338,16 @@ internal sealed class FileSystemObjectStore
                 () =>
                 {
                     if (!Directory.Exists(listRootPath)) { return; }
+                    if (!string.IsNullOrEmpty(normalizedPrefix) &&
+                        IsDirectoryReparsePoint(listRootPath))
+                    {
+                        throw new YabtFileSystemException(
+                            $"Filesystem folder prefix '{normalizedPrefix}' is a reparse point " +
+                            "and cannot be traversed safely.",
+                            normalizedPrefix,
+                            listRootPath);
+                    }
+
                     var folderItems = EnumerateFolderItems(
                         rootPath,
                         listRootPath,
@@ -236,7 +363,7 @@ internal sealed class FileSystemObjectStore
                 ),
                 cancellationToken
             );
-            while(items.Count>0)
+            while (items.Count > 0)
             {
                 foreach (var item in items) { yield return item; }
                 await YabtTask.Run
@@ -407,6 +534,127 @@ internal sealed class FileSystemObjectStore
         }
     }
 
+    private Task<bool> RunConditionalMutationAsync
+    (
+        string rootPath,
+        string path,
+        string expectedContentHash,
+        Action mutation,
+        string operation,
+        CancellationToken cancellationToken
+    )
+    {
+        return YabtTask.Run
+        (
+            () => RunWithMutationGuard
+            (
+                rootPath,
+                () =>
+                {
+                    if (!CurrentContentHashMatches
+                        (
+                            path,
+                            expectedContentHash,
+                            cancellationToken
+                        ))
+                    {
+                        return false;
+                    }
+
+                    mutation();
+                    return true;
+                },
+                cancellationToken
+            ),
+            abandonedExceptionHandler: ex => _logger.LogAbandonedFileSystemOperationFailed
+            (
+                ex,
+                operation,
+                path
+            ),
+            cancellationToken: cancellationToken
+        );
+    }
+
+    private bool CurrentContentHashMatches
+    (
+        string path,
+        string expectedContentHash,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            using var content = new FileStream
+            (
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                GetEffectiveBufferSize(),
+                FileOptions.SequentialScan
+            );
+            var contentHash = ArchiveHash.Compute(content, cancellationToken);
+            return string.Equals(
+                contentHash,
+                expectedContentHash,
+                StringComparison.Ordinal);
+        }
+        catch (Exception ex)
+        {
+            if (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return false;
+            }
+
+            throw;
+        }
+    }
+
+    private static T RunWithMutationGuard<T>
+    (
+        string rootPath,
+        Func<T> action,
+        CancellationToken cancellationToken
+    )
+    {
+        var guardPath = GetObjectPath(rootPath, ArchiveInternalObjectKeys.ConditionalMutationLock);
+        Directory.CreateDirectory(Path.GetDirectoryName(guardPath)!);
+        using var guard = AcquireConditionalMutationGuard(guardPath, cancellationToken);
+        return action();
+    }
+
+    private static FileStream AcquireConditionalMutationGuard
+    (
+        string guardPath,
+        CancellationToken cancellationToken
+    )
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return new FileStream
+                (
+                    guardPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.None
+                );
+            }
+            catch (IOException) when (File.Exists(guardPath))
+            {
+                if (cancellationToken.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(50)))
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+            }
+        }
+    }
+
     private static string GetTemporaryDirectory(string rootPath) => ResolveObjectPath
     (
         rootPath,
@@ -439,6 +687,7 @@ internal sealed class FileSystemObjectStore
     )
     {
         var childDirectoryPaths = Directory.EnumerateDirectories(directoryPath).
+            Where(childDirectoryPath => !IsDirectoryReparsePoint(childDirectoryPath)).
             OrderBy(childDirectoryPath => childDirectoryPath, StringComparer.Ordinal);
         foreach (var childDirectoryPath in childDirectoryPaths)
         {
@@ -480,6 +729,7 @@ internal sealed class FileSystemObjectStore
     )
     {
         var childDirectoryPaths = Directory.EnumerateDirectories(directoryPath).
+            Where(childDirectoryPath => !IsDirectoryReparsePoint(childDirectoryPath)).
             OrderBy(childDirectoryPath => childDirectoryPath, StringComparer.Ordinal);
         foreach (var childDirectoryPath in childDirectoryPaths)
         {
@@ -548,6 +798,9 @@ internal sealed class FileSystemObjectStore
         return fullPath;
     }
 
+    private static bool IsDirectoryReparsePoint(string directoryPath) =>
+        (File.GetAttributes(directoryPath) & FileAttributes.ReparsePoint) != 0;
+
     private static string NormalizeRelativeObjectPath(string value)
     {
         var normalized = NormalizeObjectKey(value);
@@ -580,6 +833,18 @@ internal sealed class FileSystemObjectStore
     }
 
     private static string NormalizeObjectPrefix(string? value) => ArchiveLayout.NormalizeObjectKey(value);
+
+    private static void ValidateExpectedContentHash(string expectedContentHash)
+    {
+        if (!ArchiveHash.IsValid(expectedContentHash))
+        {
+            throw new ArgumentException
+            (
+                "The expected content hash must be a canonical YABT xxHash128 hash.",
+                nameof(expectedContentHash)
+            );
+        }
+    }
 
     private static string ToArchiveRelativePath(string relativePath) => relativePath.
         Replace(Path.DirectorySeparatorChar, '/').

@@ -9,6 +9,77 @@ namespace Yabt.Metadata.Tests;
 public sealed class JsonBackupRootSerializerTests
 {
     [TestMethod]
+    public async Task ReadAsyncDefaultsMissingHistoryDeduplicationTinyFileMaximumBytes()
+    {
+        const string json =
+            "{\"documentType\":\"yabt.backupRoot\",\"schemaVersion\":1," +
+                "\"archiveId\":\"test-archive\",\"createdAtUtc\":\"2026-08-16T12:00:00Z\"," +
+                "\"layout\":{\"livePrefix\":\"\",\"histPrefix\":\".yabt-hist\"}," +
+                "\"stores\":[{\"id\":\"target\",\"kind\":\"fileSystem\"}]}";
+        var serializer = CreateSerializer();
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var descriptor = await serializer.ReadAsync(source);
+
+        Assert.IsNull(descriptor.HistoryDeduplicationTinyFileMaximumBytes);
+        Assert.AreEqual
+        (
+            ArchiveHistoryDeduplication.DefaultTinyFileMaximumBytes,
+            ArchiveHistoryDeduplication.GetEffectiveTinyFileMaximumBytes(
+                descriptor.HistoryDeduplicationTinyFileMaximumBytes)
+        );
+    }
+
+    [TestMethod]
+    public async Task WriteAndReadAsyncRoundTripsHistoryDeduplicationTinyFileMaximumBytes()
+    {
+        var descriptor = CreateDescriptor(
+            BackupRootDescriptor.ExpectedSchemaVersion,
+            historyDeduplicationTinyFileMaximumBytes: 8192);
+        var serializer = CreateSerializer();
+        await using var document = new MemoryStream();
+
+        await serializer.WriteAsync(descriptor, document);
+        document.Position = 0;
+        var restored = await serializer.ReadAsync(document);
+
+        Assert.AreEqual(8192, restored.HistoryDeduplicationTinyFileMaximumBytes);
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsNegativeHistoryDeduplicationTinyFileMaximumBytes()
+    {
+        const string json =
+            "{\"documentType\":\"yabt.backupRoot\",\"schemaVersion\":1," +
+                "\"archiveId\":\"test-archive\",\"createdAtUtc\":\"2026-08-16T12:00:00Z\"," +
+                "\"historyDeduplicationTinyFileMaximumBytes\":-1," +
+                "\"layout\":{\"livePrefix\":\"\",\"histPrefix\":\".yabt-hist\"}," +
+                "\"stores\":[{\"id\":\"target\",\"kind\":\"fileSystem\"}]}";
+        var serializer = CreateSerializer();
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var exception = await Assert.ThrowsAsync<YabtMetadataException>(
+            () => serializer.ReadAsync(source));
+
+        StringAssert.Contains(exception.Message, "tiny-file maximum size");
+    }
+
+    [TestMethod]
+    public async Task WriteAsyncRejectsNegativeHistoryDeduplicationTinyFileMaximumBytes()
+    {
+        var descriptor = CreateDescriptor(
+            BackupRootDescriptor.ExpectedSchemaVersion,
+            historyDeduplicationTinyFileMaximumBytes: -1);
+        var serializer = CreateSerializer();
+        await using var destination = new MemoryStream();
+
+        var exception = await Assert.ThrowsAsync<YabtMetadataException>(
+            () => serializer.WriteAsync(descriptor, destination));
+
+        StringAssert.Contains(exception.Message, "tiny-file maximum size");
+    }
+
+    [TestMethod]
     public async Task ReadAsyncDefaultsMissingChangeManifestCompressionToBrotli()
     {
         const string json =
@@ -136,7 +207,8 @@ public sealed class JsonBackupRootSerializerTests
     private static BackupRootDescriptor CreateDescriptor
     (
         int schemaVersion,
-        string? changeManifestCompression = default
+        string? changeManifestCompression = default,
+        long? historyDeduplicationTinyFileMaximumBytes = default
     ) => new
     (
         BackupRootDescriptor.ExpectedDocumentType,
@@ -145,7 +217,8 @@ public sealed class JsonBackupRootSerializerTests
         new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero),
         ArchiveLayout.Default,
         [new BackupRootStore("target", "fileSystem")],
-        ChangeManifestCompression: changeManifestCompression
+        ChangeManifestCompression: changeManifestCompression,
+        HistoryDeduplicationTinyFileMaximumBytes: historyDeduplicationTinyFileMaximumBytes
     );
 
     private static IBackupRootSerializer CreateSerializer()

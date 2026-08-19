@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/yabt/history-reference.schema.json",
+  "title": "YABT history content reference",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "documentType",
+    "schemaVersion",
+    "message",
+    "entry",
+    "referenceHash"
+  ],
+  "properties": {
+    "documentType": {
+      "const": "yabt.historyContentReference"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "message": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "entry": {
+      "$ref": "#/$defs/referenceEntry"
+    },
+    "referenceHash": {
+      "$ref": "#/$defs/contentHash"
+    }
+  },
+  "$defs": {
+    "canonicalHistoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*//)(?!.*\\\\)(?!.*(?:^|/)(?:\\.|\\.\\.)(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))[^/]+(?:/[^/]+)*$",
+      "not": {
+        "enum": [
+          ".yabt-history-manifest.json",
+          ".yabt-history-manifest.invalid"
+        ]
+      }
+    },
+    "contentHash": {
+      "type": "string",
+      "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
+    },
+    "referenceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relativePath",
+        "storedRelativePath",
+        "representation",
+        "contentLength",
+        "contentHash"
+      ],
+      "properties": {
+        "relativePath": {
+          "$ref": "#/$defs/canonicalHistoryPath"
+        },
+        "storedRelativePath": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/canonicalHistoryPath"
+            },
+            {
+              "pattern": "\\.yabt-ref\\.json$"
+            }
+          ]
+        },
+        "representation": {
+          "const": "reference"
+        },
+        "contentLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "contentHash": {
+          "$ref": "#/$defs/contentHash"
+        },
+        "lastModifiedUtc": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "pattern": "(?:Z|\\+00:00)$"
+        },
+        "contentType": {
+          "type": ["string", "null"],
+          "pattern": "\\S"
+        },
+        "metadata": {
+          "type": ["object", "null"],
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "\\S"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

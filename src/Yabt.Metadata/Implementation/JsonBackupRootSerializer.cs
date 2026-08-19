@@ -79,5 +79,13 @@ internal sealed class JsonBackupRootSerializer(JsonSerializerOptions _jsonOption
             throw new YabtMetadataException(
                 "Backup root JSON has an unsupported change manifest compression value.");
         }
+
+        var tinyFileMaximumBytes = ArchiveHistoryDeduplication.GetEffectiveTinyFileMaximumBytes(
+            descriptor.HistoryDeduplicationTinyFileMaximumBytes);
+        if (!ArchiveHistoryDeduplication.IsSupportedTinyFileMaximumBytes(tinyFileMaximumBytes))
+        {
+            throw new YabtMetadataException(
+                "Backup root JSON has a negative history deduplication tiny-file maximum size.");
+        }
     }
 }

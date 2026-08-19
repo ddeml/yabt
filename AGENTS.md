@@ -52,11 +52,25 @@ Archive-style roots may still configure explicit prefixes such as `livePrefix = 
 
 When `livePrefix` is empty, YABT metadata paths and the configured history prefix are internal to the archive root and are not ordinary live data.
 
-The filesystem provider reserves `.yabt-tmp` at the archive root for same-filesystem upload staging. Each upload should use a uniquely named temporary file, remove that file after the completed file is atomically moved into place or after a controlled failure, and leave the shared staging directory in place. Deleting and recreating the shared directory can race concurrent YABT processes. An empty directory means no upload is currently staged; nonempty contents may belong to a concurrent upload or an interrupted run. Reject live or history prefixes that overlap `.yabt-tmp`, including case variants, so staging can never mix with archive data.
+YABT reserves `.yabt-tmp` at the archive root for provider/runtime plumbing. The filesystem provider uses it for same-filesystem upload staging, and archive-mutating commands use `.yabt-tmp/archive-mutation-lock.json` to coordinate access. Filesystem conditional mutations also serialize through an empty `conditional-mutation.lock`, which may remain while no command is active. Each filesystem upload should use a uniquely named temporary file, remove that file after the completed file is atomically moved into place or after a controlled failure, and leave the shared staging directory in place. Deleting and recreating the shared directory can race concurrent YABT processes. Other nonempty contents may belong to an active upload or an interrupted run. Reject live or history prefixes that overlap `.yabt-tmp`, including case variants, so plumbing can never mix with archive data.
 
 Do not deduplicate the logical live branch.
 
-Future deduplication may occur only under the logical history branch, and only through explicit reference placeholder JSON files. Do not implement deduplication until requested.
+History deduplication is an explicit maintenance operation performed by the `deduplicate` command. `sync` must not scan or compare history for duplicates. The command accepts an archive root, optional target store id, and optional dry-run flag; byte-for-byte confirmation is mandatory and is not an optional comparison mode.
+
+The history branch has its own durable `.yabt-history-manifest.json`, separate from the live change manifest. It records every historical occurrence and whether that occurrence is materialized or represented by a deduplication reference. The history manifest is a rebuildable index and must never contain exclusive information. Materialized entries contain only information that can be recovered by scanning or opening their actual objects, while each reference repeats its complete occurrence entry.
+
+Deduplication may replace only historical objects. Leave one stable materialized historical copy for every deduplicated content hash. The current command scans only history and does not use or modify matching live objects; a future resolver may treat live objects as optional extra candidates, but never as the sole backing copy for historical references. References identify content by hash rather than by another reference path, so reference chains are impossible and a backing object's path can change without rewriting every reference.
+
+Name a reference by appending `.yabt-ref.json` to the complete original filename, including its extension, for example `report.pdf.yabt-ref.json`. The reference must be human-readable, versioned JSON with document type `yabt.historyContentReference`, include the exact complete occurrence entry recorded in the history manifest, and protect that entry with a self-hash. History entries record the logical relative path, stored relative path, representation, content hash, content length, and optional observable last-modified time, content type, and provider metadata. Do not put a source-only change fingerprint or other unrebuildable information in the history manifest.
+
+If that stored reference name is already occupied, append a deterministic numeric sequence before `.yabt-ref.json`, for example `report.pdf.1.yabt-ref.json`. Never overwrite an existing historical object to obtain the preferred reference name.
+
+Treat an equal length and xxHash128 value as a duplicate candidate only. Compare complete byte streams before removing a redundant materialization. Establish and verify the stable materialized copy and durably write its reference metadata before deleting the redundant bytes. An interrupted command may leave an unnecessary full copy but must never leave a reference without a materialized backing object. Deduplication and other archive-mutating commands must not mutate the same archive concurrently.
+
+The history catalog uses `.yabt-history-manifest.invalid` only while its current contents must not be trusted. When a successful `sync` adds or changes history, it deletes the now-stale `.yabt-history-manifest.json` and then deletes the invalidation marker before completing. A successful `deduplicate` removes the marker only after references, the replacement catalog, and guarded deletions complete. The marker may remain after an interrupted `sync` or `deduplicate`, but it must not remain after either command succeeds. Do not add legacy cleanup that searches history for manifests or markers historized by earlier MVP builds unless Leo explicitly requests it. YABT's archive lock coordinates YABT writers; users and other programs must not modify the archive while an archive-mutating command is active.
+
+The optional root setting `historyDeduplicationTinyFileMaximumBytes` defaults to 4096. Objects at or below the effective threshold are not eligible for deduplication. Also retain a materialized object when its reference and index overhead would not produce a net storage saving. Exclude YABT metadata, `.yabt-empty`, reference files, manifests, and provider plumbing from deduplication.
 
 ## Archive Root Metadata
 
@@ -87,6 +101,8 @@ Initial object store providers:
 `IObjectStore` should expose folder-local traversal rather than recursive flat listing. The object store contract should answer "what files and immediate child folders are inside this folder prefix?" so sync can compare source and target incrementally and future traversal can parallelize child folders.
 
 Providers that do not have real directories, such as Azure Blob Storage, should emulate immediate child folders from object key prefixes. Do not rely on global ordering of recursive object listings for sync correctness.
+
+The filesystem provider must not traverse directory reparse points or symbolic-link directories below an object-store root. Following one during destructive history maintenance could escape the configured archive root. A linked directory that is intentionally an archive root should be configured as the root itself instead.
 
 Empty folders may be represented with the reserved marker file:
 
@@ -179,7 +195,7 @@ Metadata fingerprints are not content proof. Same-length data whose timestamp wa
 
 A mutating sync that falls back to stream comparison must load each projected source object only once. Retain the exact compared materialization in private delete-on-close local staging and upload that snapshot if it differs; do not reopen the source after comparison. This staging is ephemeral operation state, not archive metadata or a durable cache, and it must not use the target provider's `.yabt-tmp` namespace. Processed objects are staged individually, so the current sequential synchronizer needs local temporary space for at most one compared projected object at a time. Verification and dry runs do not need a replay copy because they never upload. When ZIP input metadata is too incomplete to identify an entry without reading its bytes, calculate that entry fingerprint while copying the same read into the ZIP instead of scanning and reopening the source file. The current ZIP projector is memory-backed; an eagerly built fallback package retains one backing buffer so it can be replayed without rereading its source files. Do not add another full-package copy. A future large-package implementation should introduce an explicitly owned, spillable projected-content lifetime.
 
-Store the live change manifest at the archive root, outside an explicit `livePrefix`, with logical live-relative entry paths. `changeManifestCompression` in `.yabt-root.json` accepts `brotli` or `none` and defaults to `brotli`. Writers leave exactly one configured live representation, but readers always inspect both `.yabt-change-manifest.json.br` and `.yabt-change-manifest.json`. When both exist, trust them only if both validate and have the same logical self-hash; otherwise require full comparison. Treat both names and `.yabt-change-manifest.invalid` as reserved internal metadata when `livePrefix` is empty. The invalidation marker protects recovery if moving multiple untrusted representations is interrupted; readers must not trust manifest evidence while it exists. Move every prior live representation aside before the first live mutation and write the replacement last, then move the marker aside last. A mutating sync should quarantine and rebuild invalid or conflicting manifests; byte-for-byte comparison must remain usable without trusting them.
+Store the live change manifest at the archive root, outside an explicit `livePrefix`, with logical live-relative entry paths. `changeManifestCompression` in `.yabt-root.json` accepts `brotli` or `none` and defaults to `brotli`. Writers leave exactly one configured live representation, but readers always inspect both `.yabt-change-manifest.json.br` and `.yabt-change-manifest.json`. When both exist, trust them only if both validate and have the same logical self-hash; otherwise require full comparison. Treat both names and `.yabt-change-manifest.invalid` as reserved internal metadata when `livePrefix` is empty. The invalidation marker protects recovery while untrusted representations are being discarded; readers must not trust manifest evidence while it exists. Delete every obsolete root change-manifest representation instead of moving it to history, write the replacement last, and delete the root invalidation marker last. A successful mutating sync must never historize a root change manifest or its invalidation marker. Do not add legacy cleanup that scans history for such metadata left by earlier MVP builds unless Leo explicitly requests it. A mutating sync should discard and rebuild invalid or conflicting manifests; byte-for-byte comparison must remain usable without trusting them.
 
 The current root-wide manifest avoids repeated byte scans but still performs metadata traversal and O(total objects) manifest work. Architecture should allow future folder-local or sharded manifests, Synology btrfs snapshot diffing, filesystem event monitoring, and incremental reconciliation for millions of files. Any cache remains disposable and non-authoritative.
 
@@ -236,7 +252,7 @@ Use `Yabt.Tests` for shared test helpers such as in-memory object stores and oth
 
 ## CLI
 
-Future command surface:
+Command surface:
 
 - `sync`
 - `restore`
@@ -244,8 +260,9 @@ Future command surface:
 - `verify`
 - `pack`
 - `reconcile`
+- `deduplicate`
 
-`sync` and `verify` are implemented. Keep restore, scan, pack, and reconcile behavior scaffolded until their semantics are designed.
+`sync`, `verify`, and history-only `deduplicate` are implemented. Keep restore, scan, pack, and reconcile behavior scaffolded until their semantics are designed.
 
 ## Coding Style
 

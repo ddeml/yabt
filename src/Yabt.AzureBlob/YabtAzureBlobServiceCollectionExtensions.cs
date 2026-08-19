@@ -22,7 +22,11 @@ public static class YabtAzureBlobServiceCollectionExtensions
         }
 
         services.TryAddSingleton(TimeProvider.System);
-        services.AddSingleton<IObjectStore, AzureBlobObjectStore>();
+        services.AddSingleton<AzureBlobObjectStore>();
+        services.AddSingleton<IObjectStore>(provider =>
+            provider.GetRequiredService<AzureBlobObjectStore>());
+        services.AddSingleton<IArchiveMutableObjectStore>(provider =>
+            provider.GetRequiredService<AzureBlobObjectStore>());
         return services;
     }
 }

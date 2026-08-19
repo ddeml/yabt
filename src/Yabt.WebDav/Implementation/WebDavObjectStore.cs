@@ -16,7 +16,7 @@ internal sealed class WebDavObjectStore
 (
     IOptionsMonitor<WebDavObjectStoreOptions> _options,
     ILogger<WebDavObjectStore> _logger
-) : IObjectStore
+) : IArchiveMutableObjectStore
 {
     private const string DepthHeaderName = "Depth";
     private const string DestinationHeaderName = "Destination";
@@ -146,6 +146,128 @@ internal sealed class WebDavObjectStore
             response?.Dispose();
             throw new YabtWebDavException(
                 $"Open read failed for WebDAV object '{normalizedKey}'.",
+                ex);
+        }
+    }
+
+    public async Task<bool> TryReplaceIfContentHashMatchesAsync
+    (
+        string key,
+        string expectedContentHash,
+        Stream replacementContent,
+        string contentType,
+        IReadOnlyDictionary<string, string> metadata,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(TryReplaceIfContentHashMatchesAsync));
+
+        ArgumentNullException.ThrowIfNull(replacementContent);
+        ArgumentNullException.ThrowIfNull(metadata);
+        ValidateExpectedContentHash(expectedContentHash);
+        _ = metadata;
+
+        var normalizedKey = NormalizeObjectKey(key);
+        try
+        {
+            var objectUri = GetObjectUri(normalizedKey);
+            var current = await TryReadCurrentHashAndEntityTagAsync(
+                objectUri,
+                cancellationToken);
+            if (current is null ||
+                !string.Equals(
+                    current.ContentHash,
+                    expectedContentHash,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            using var request = CreateRequest(HttpMethod.Put, objectUri);
+            request.Headers.IfMatch.Add(current.EntityTag);
+            request.Content = new StreamContent(new WebDavNonDisposingStream(replacementContent));
+            SetContentType(request.Content, contentType);
+
+            using var response = await HttpClient.SendAsync
+            (
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken
+            );
+            if (IsMissingOrConditionFailed(response.StatusCode))
+            {
+                return false;
+            }
+
+            await EnsureSuccessAsync
+            (
+                response,
+                $"conditional PUT {objectUri.AbsoluteUri}",
+                cancellationToken
+            );
+            return true;
+        }
+        catch (Exception ex)
+        {
+            throw new YabtWebDavException(
+                $"Conditional replacement failed for WebDAV object '{normalizedKey}'.",
+                ex);
+        }
+    }
+
+    public async Task<bool> TryDeleteIfContentHashMatchesAsync
+    (
+        string key,
+        string expectedContentHash,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(TryDeleteIfContentHashMatchesAsync));
+
+        ValidateExpectedContentHash(expectedContentHash);
+
+        var normalizedKey = NormalizeObjectKey(key);
+        try
+        {
+            var objectUri = GetObjectUri(normalizedKey);
+            var current = await TryReadCurrentHashAndEntityTagAsync(
+                objectUri,
+                cancellationToken);
+            if (current is null ||
+                !string.Equals(
+                    current.ContentHash,
+                    expectedContentHash,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            using var request = CreateRequest(HttpMethod.Delete, objectUri);
+            request.Headers.IfMatch.Add(current.EntityTag);
+
+            using var response = await HttpClient.SendAsync
+            (
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken
+            );
+            if (IsMissingOrConditionFailed(response.StatusCode))
+            {
+                return false;
+            }
+
+            await EnsureSuccessAsync
+            (
+                response,
+                $"conditional DELETE {objectUri.AbsoluteUri}",
+                cancellationToken
+            );
+            return true;
+        }
+        catch (Exception ex)
+        {
+            throw new YabtWebDavException(
+                $"Conditional deletion failed for WebDAV object '{normalizedKey}'.",
                 ex);
         }
     }
@@ -417,6 +539,44 @@ internal sealed class WebDavObjectStore
         return true;
     }
 
+    private async Task<CurrentObjectIdentity?> TryReadCurrentHashAndEntityTagAsync
+    (
+        Uri objectUri,
+        CancellationToken cancellationToken
+    )
+    {
+        using var request = CreateRequest(HttpMethod.Get, objectUri);
+        using var response = await HttpClient.SendAsync
+        (
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken
+        );
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await EnsureSuccessAsync
+        (
+            response,
+            $"GET {objectUri.AbsoluteUri} for conditional mutation",
+            cancellationToken
+        );
+
+        var entityTag = response.Headers.ETag;
+        if (entityTag is null || entityTag.IsWeak)
+        {
+            throw new YabtWebDavException(
+                $"WebDAV object '{objectUri.AbsoluteUri}' did not provide the strong ETag " +
+                "required for a safe conditional mutation.");
+        }
+
+        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var contentHash = await ArchiveHash.ComputeAsync(content, cancellationToken);
+        return new(contentHash, entityTag);
+    }
+
     private async Task EnsureConfiguredRootExistsAsync
     (
         WebDavPathContext pathContext,
@@ -620,6 +780,40 @@ internal sealed class WebDavObjectStore
     private static string[] NormalizePathSegments(string? value)
     {
         return SplitPathSegments(NormalizeObjectPrefix(value));
+    }
+
+    private static void ValidateExpectedContentHash(string expectedContentHash)
+    {
+        if (!ArchiveHash.IsValid(expectedContentHash))
+        {
+            throw new ArgumentException
+            (
+                "The expected content hash must be a canonical YABT xxHash128 hash.",
+                nameof(expectedContentHash)
+            );
+        }
+    }
+
+    private static bool IsMissingOrConditionFailed(HttpStatusCode statusCode)
+    {
+        return statusCode is HttpStatusCode.NotFound or HttpStatusCode.PreconditionFailed;
+    }
+
+    private static void SetContentType(HttpContent content, string contentType)
+    {
+        if (string.IsNullOrWhiteSpace(contentType))
+        {
+            return;
+        }
+
+        if (MediaTypeHeaderValue.TryParse(contentType, out var mediaType))
+        {
+            content.Headers.ContentType = mediaType;
+        }
+        else
+        {
+            content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+        }
     }
 
     private static string[] SplitPathSegments(string? value)
@@ -883,4 +1077,10 @@ internal sealed class WebDavObjectStore
 
         return $" Response body: {preview}";
     }
+
+    private sealed record CurrentObjectIdentity
+    (
+        string ContentHash,
+        EntityTagHeaderValue EntityTag
+    );
 }

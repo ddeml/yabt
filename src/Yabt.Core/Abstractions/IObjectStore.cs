@@ -4,6 +4,11 @@ namespace Yabt.Core.Abstractions;
 
 public interface IObjectStore : IReadOnlyObjectStore
 {
+    /// <summary>
+    /// Creates one complete object at <paramref name="key"/>. Implementations must fail without
+    /// overwriting when that key already exists, and must not expose a partially uploaded final
+    /// object. YABT uses this create-if-absent contract for immutable archive objects and locks.
+    /// </summary>
     Task UploadAsync
     (
         string key,

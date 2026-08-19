@@ -20,7 +20,11 @@ public static class YabtFileSystemServiceCollectionExtensions
             optionsBuilder.BindConfiguration(configSectionPath);
         }
 
-        services.AddSingleton<IObjectStore, FileSystemObjectStore>();
+        services.AddSingleton<FileSystemObjectStore>();
+        services.AddSingleton<IObjectStore>(provider =>
+            provider.GetRequiredService<FileSystemObjectStore>());
+        services.AddSingleton<IArchiveMutableObjectStore>(provider =>
+            provider.GetRequiredService<FileSystemObjectStore>());
         services.AddSingleton<FileSystemBackupRootStoreResolver>();
         services.AddSingleton<IBackupRootStoreResolver>(provider =>
             provider.GetRequiredService<FileSystemBackupRootStoreResolver>());
