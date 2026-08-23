@@ -1,7 +1,6 @@
 using System.Globalization;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
-using Yabt.Metadata;
 
 namespace Yabt.Sync.Implementation;
 
@@ -13,7 +12,9 @@ internal sealed class ArchiveHistoryKeyAllocator
 )
 {
     private readonly string _historicalTimestampSegment = ToHistoricalTimestampSegment(_historicalTimestamp);
-    private readonly Dictionary<string, int> _highestHistoricalSequencesByRelativePath = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _allocationLock = new(1, 1);
+    private readonly List<(string RootName, SortedSet<string> RelativePaths)> _commandRoots = [];
+    private long? _nextHistoricalSequence;
 
     public async Task<string> CreateHistoricalKeyAsync
     (
@@ -22,83 +23,112 @@ internal sealed class ArchiveHistoryKeyAllocator
     )
     {
         var normalizedRelativePath = ArchiveLayout.NormalizeObjectKey(relativePath);
-        var highestSequence = await GetHighestHistoricalSequenceAsync(
-            normalizedRelativePath,
-            cancellationToken);
-        var sequence = highestSequence >= 0 ?
-            highestSequence + 1 :
-            0;
-        var historicalPath = BuildHistoricalRelativePath(
-            normalizedRelativePath,
-            _historicalTimestampSegment,
-            sequence);
+        await _allocationLock.WaitAsync(cancellationToken);
+        try
+        {
+            await EnsureNextHistoricalSequenceAsync(cancellationToken);
 
-        _highestHistoricalSequencesByRelativePath[normalizedRelativePath] = sequence;
+            foreach (var commandRoot in _commandRoots)
+            {
+                if (!HasPathConflict(commandRoot.RelativePaths, normalizedRelativePath))
+                {
+                    commandRoot.RelativePaths.Add(normalizedRelativePath);
+                    return ToHistoricalObjectKey(
+                        commandRoot.RootName,
+                        normalizedRelativePath);
+                }
+            }
 
-        return _targetLayout.ToHistoryObjectKey(historicalPath);
+            var sequence = _nextHistoricalSequence ??
+                throw new YabtSyncException("A history timestamp sequence was not initialized.");
+            if (sequence > int.MaxValue)
+            {
+                throw new YabtSyncException(
+                    $"History timestamp '{_historicalTimestampSegment}' has no remaining sequence values.");
+            }
+
+            var historicalRootName = BuildHistoricalRootName(sequence);
+            _nextHistoricalSequence = sequence + 1;
+            _commandRoots.Add
+            ((
+                historicalRootName,
+                new SortedSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    normalizedRelativePath,
+                }
+            ));
+            return ToHistoricalObjectKey(historicalRootName, normalizedRelativePath);
+        }
+        finally
+        {
+            _allocationLock.Release();
+        }
     }
 
-    private async Task<int> GetHighestHistoricalSequenceAsync
-    (
-        string relativePath,
-        CancellationToken cancellationToken
-    )
+    private async Task EnsureNextHistoricalSequenceAsync(CancellationToken cancellationToken)
     {
-        if (_highestHistoricalSequencesByRelativePath.TryGetValue(relativePath, out var cachedHighestSequence))
-        {
-            return cachedHighestSequence;
-        }
+        if (_nextHistoricalSequence.HasValue) { return; }
 
-        var objectName = GetObjectName(relativePath);
-        var objectParentPrefix = GetParentPrefix(relativePath);
         var histPrefix = ArchiveLayout.NormalizeObjectPrefix(_targetLayout.HistPrefix);
         var historyRoots = _targetStore.GetFolderItemsAsync(
             histPrefix,
             recursive: false,
             cancellationToken);
         var highestSequence = -1;
-
         await foreach (var historyRoot in historyRoots)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!TryParseHistoricalTimestampSegment(historyRoot.Name, out var sequence))
-            {
-                continue;
-            }
-
-            if (!historyRoot.IsFolder)
+            if (TryParseHistoricalTimestampSegment(historyRoot.Name, out var sequence))
             {
                 highestSequence = Math.Max(highestSequence, sequence);
-                continue;
-            }
-
-            var historyParentPrefix = _targetLayout.ToHistoryObjectKey(
-                ArchiveLayout.CombinePrefixAndRelativePath(
-                    historyRoot.Name,
-                    objectParentPrefix));
-            var historyFolderItems = _targetStore.GetFolderItemsAsync(
-                historyParentPrefix,
-                recursive: false,
-                cancellationToken);
-
-            await foreach (var historyFolderItem in historyFolderItems)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if ((string.Equals(historyFolderItem.Name, objectName, StringComparison.Ordinal) ||
-                        ArchiveHistoryFileNames.IsReferencePathFor(
-                            objectName,
-                            historyFolderItem.Name)) &&
-                    sequence > highestSequence)
-                {
-                    highestSequence = sequence;
-                }
             }
         }
 
-        _highestHistoricalSequencesByRelativePath[relativePath] = highestSequence;
-        return highestSequence;
+        if (highestSequence == int.MaxValue)
+        {
+            throw new YabtSyncException(
+                $"History timestamp '{_historicalTimestampSegment}' has no remaining sequence values.");
+        }
+
+        _nextHistoricalSequence = highestSequence + 1;
+    }
+
+    private string ToHistoricalObjectKey(string rootName, string relativePath) =>
+        _targetLayout.ToHistoryObjectKey(
+            ArchiveLayout.CombinePrefixAndRelativePath(rootName, relativePath));
+
+    private static bool HasPathConflict
+    (
+        SortedSet<string> existingPaths,
+        string relativePath
+    )
+    {
+        if (existingPaths.Contains(relativePath)) { return true; }
+
+        var ancestorPath = GetParentPrefix(relativePath);
+        while (!string.IsNullOrEmpty(ancestorPath))
+        {
+            if (existingPaths.Contains(ancestorPath)) { return true; }
+
+            ancestorPath = GetParentPrefix(ancestorPath);
+        }
+
+        var descendantPrefix = $"{relativePath}/";
+        var possibleDescendants = existingPaths.GetViewBetween(
+            descendantPrefix,
+            $"{relativePath}0");
+        using var enumerator = possibleDescendants.GetEnumerator();
+        return enumerator.MoveNext() &&
+            enumerator.Current.StartsWith(
+                descendantPrefix,
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetParentPrefix(string relativePath)
+    {
+        var separator = relativePath.LastIndexOf('/');
+        return separator < 0 ? string.Empty : relativePath[..separator];
     }
 
     private bool TryParseHistoricalTimestampSegment
@@ -107,14 +137,17 @@ internal sealed class ArchiveHistoryKeyAllocator
         out int sequence
     )
     {
-        if (string.Equals(timestampSegment, _historicalTimestampSegment, StringComparison.Ordinal))
+        if (string.Equals(
+                timestampSegment,
+                _historicalTimestampSegment,
+                StringComparison.OrdinalIgnoreCase))
         {
             sequence = 0;
             return true;
         }
 
         var numberedPrefix = $"{_historicalTimestampSegment}-";
-        if (!timestampSegment.StartsWith(numberedPrefix, StringComparison.Ordinal))
+        if (!timestampSegment.StartsWith(numberedPrefix, StringComparison.OrdinalIgnoreCase))
         {
             sequence = default;
             return false;
@@ -135,35 +168,15 @@ internal sealed class ArchiveHistoryKeyAllocator
         return true;
     }
 
-    private static string GetParentPrefix(string relativePath)
+    private string BuildHistoricalRootName(long sequence)
     {
-        var normalizedRelativePath = ArchiveLayout.NormalizeObjectKey(relativePath);
-        var separator = normalizedRelativePath.LastIndexOf('/');
-
-        return separator < 0 ? string.Empty : normalizedRelativePath[..separator];
-    }
-
-    private static string GetObjectName(string relativePath)
-    {
-        var normalizedRelativePath = ArchiveLayout.NormalizeObjectKey(relativePath);
-        var separator = normalizedRelativePath.LastIndexOf('/');
-
-        return separator < 0 ? normalizedRelativePath : normalizedRelativePath[(separator + 1)..];
-    }
-
-    private static string BuildHistoricalRelativePath
-    (
-        string relativePath,
-        string historicalTimestampSegment,
-        int sequence
-    )
-    {
+        var historicalRootName = _historicalTimestampSegment;
         if (sequence > 0)
         {
-            historicalTimestampSegment += $"-{sequence.ToString(CultureInfo.InvariantCulture)}";
+            historicalRootName += $"-{sequence.ToString(CultureInfo.InvariantCulture)}";
         }
 
-        return $"{historicalTimestampSegment}/{relativePath}";
+        return historicalRootName;
     }
 
     private static string ToHistoricalTimestampSegment(DateTimeOffset historicalTimestamp)

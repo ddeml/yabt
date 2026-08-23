@@ -68,6 +68,14 @@ public sealed class MirrorArchiveFormatProjectorTests
             42,
             lastModifiedUtc: null,
             out var incompleteFingerprint);
+        var parsed = ArchiveChangeFingerprint.TryParse(
+            localFingerprint,
+            out var parsedLength,
+            out var parsedLastModifiedUtc);
+        var malformedParsed = ArchiveChangeFingerprint.TryParse(
+            "stat-v1:not-a-time:42",
+            out _,
+            out _);
 
         Assert.AreEqual(localFingerprint, utcFingerprint);
         Assert.AreEqual(
@@ -83,6 +91,10 @@ public sealed class MirrorArchiveFormatProjectorTests
                 RegexOptions.CultureInvariant));
         Assert.IsFalse(hasIncompleteFingerprint);
         Assert.IsNull(incompleteFingerprint);
+        Assert.IsTrue(parsed);
+        Assert.AreEqual(42, parsedLength);
+        Assert.AreEqual(localTime.ToUniversalTime(), parsedLastModifiedUtc);
+        Assert.IsFalse(malformedParsed);
     }
 
     [TestMethod]

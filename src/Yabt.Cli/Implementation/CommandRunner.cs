@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.CommandLine;
+using Yabt.Common;
 using Yabt.Sync;
 
 namespace Yabt.Cli.Implementation;
@@ -33,7 +34,15 @@ internal sealed class CommandRunner
             return await InvokeAsync(rootCommand, ["--help"], cancellationToken);
         }
 
-        return await InvokeAsync(rootCommand, args, cancellationToken);
+        try
+        {
+            return await InvokeAsync(rootCommand, args, cancellationToken);
+        }
+        catch (YabtException ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            return 1;
+        }
     }
 
     private static Task<int> InvokeAsync
@@ -43,7 +52,10 @@ internal sealed class CommandRunner
         CancellationToken cancellationToken
     ) => rootCommand.Parse(args).InvokeAsync
     (
-        new InvocationConfiguration(),
+        new InvocationConfiguration
+        {
+            EnableDefaultExceptionHandler = false,
+        },
         cancellationToken
     );
 
@@ -75,11 +87,17 @@ internal sealed class CommandRunner
         };
         var targetStoreIdOption = new Option<string?>("--target-store-id")
         {
-            Description = "Target store id from the root descriptor.",
+            Description = "Archive store id from the root descriptor.",
         };
         var byteForByteOption = new Option<bool>("--byte-for-byte")
         {
             Description = "Compare full file contents instead of using metadata fingerprints.",
+        };
+        var destinationRootOption = new Option<string?>("--destination-root")
+        {
+            Description = "Filesystem folder to reconcile to the restored live state; " +
+                "relative paths use the current working directory.",
+            Required = true,
         };
 
         var command = new Command(commandName, GetCommandDescription(commandName))
@@ -87,11 +105,20 @@ internal sealed class CommandRunner
             Arguments = { sourceRootArgument },
             Options = { dryRunOption, targetStoreIdOption },
         };
+        if (commandName == YabtCliCommandNames.Backup)
+        {
+            command.Aliases.Add(YabtCliCommandNames.SyncAlias);
+        }
+
         var supportsByteForByte =
-            commandName is YabtCliCommandNames.Sync or YabtCliCommandNames.Verify;
+            commandName is YabtCliCommandNames.Backup or YabtCliCommandNames.Verify;
         if (supportsByteForByte)
         {
             command.Options.Add(byteForByteOption);
+        }
+        if (commandName == YabtCliCommandNames.Restore)
+        {
+            command.Options.Add(destinationRootOption);
         }
 
         command.SetAction(async (parseResult, cancellationToken) =>
@@ -100,6 +127,9 @@ internal sealed class CommandRunner
             var dryRun = parseResult.GetValue(dryRunOption);
             var targetStoreId = parseResult.GetValue(targetStoreIdOption);
             var byteForByte = supportsByteForByte && parseResult.GetValue(byteForByteOption);
+            var destinationRoot = commandName == YabtCliCommandNames.Restore ?
+                parseResult.GetValue(destinationRootOption) :
+                null;
             return await RunArchiveCommandAsync
             (
                 commandName,
@@ -107,6 +137,7 @@ internal sealed class CommandRunner
                 dryRun,
                 targetStoreId,
                 byteForByte,
+                destinationRoot,
                 cancellationToken
             );
         });
@@ -162,13 +193,21 @@ internal sealed class CommandRunner
         bool dryRun,
         string? targetStoreId,
         bool byteForByte,
+        string? destinationRoot,
         CancellationToken cancellationToken
     )
     {
-        var request = new SyncRunRequest(sourceRoot, dryRun, targetStoreId, byteForByte);
+        var request = new SyncRunRequest
+        (
+            sourceRoot,
+            dryRun,
+            targetStoreId,
+            byteForByte,
+            destinationRoot
+        );
         var result = commandName switch
         {
-            YabtCliCommandNames.Sync => await _archiveSynchronizer.SyncAsync(request, cancellationToken),
+            YabtCliCommandNames.Backup => await _archiveSynchronizer.BackupAsync(request, cancellationToken),
             YabtCliCommandNames.Restore => await _archiveSynchronizer.RestoreAsync(request, cancellationToken),
             YabtCliCommandNames.Scan => await _archiveSynchronizer.ScanAsync(request, cancellationToken),
             YabtCliCommandNames.Verify => await _archiveSynchronizer.VerifyAsync(request, cancellationToken),
@@ -185,7 +224,7 @@ internal sealed class CommandRunner
     {
         return commandName switch
         {
-            YabtCliCommandNames.Sync => "Synchronize a folder to the archive.",
+            YabtCliCommandNames.Backup => "Back up a folder to the archive.",
             YabtCliCommandNames.Restore => "Restore from an archive.",
             YabtCliCommandNames.Scan => "Scan a folder for future synchronization planning.",
             YabtCliCommandNames.Verify =>

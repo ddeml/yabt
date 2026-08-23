@@ -72,6 +72,76 @@ public sealed class ZipArchiveFormatProjectorTests
     }
 
     [TestMethod]
+    public async Task ProjectAsyncStoresNativeEmptyFolderAsMarker()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var projector = serviceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var innerStore = new MemoryObjectStore(provideContentHash: true);
+        await UploadTextAsync(innerStore, "folder/file.txt", "source content");
+        var sourceStore = new EmptyFolderReadOnlyObjectStore(
+            innerStore,
+            "folder/empty");
+
+        var projectedObject = (await CollectProjectedObjectsAsync(projector.ProjectAsync(new
+        (
+            sourceStore,
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        )))).Single();
+
+        await using var content = await projectedObject.OpenContentAsync(default);
+        using var archive = new ZipArchive(content.Content, ZipArchiveMode.Read);
+        var markerEntry = archive.GetEntry("folder/empty/.yabt-empty");
+
+        Assert.IsNotNull(markerEntry);
+        Assert.AreEqual(0, markerEntry.Length);
+        await using var markerContent = markerEntry.Open();
+        Assert.AreEqual(-1, markerContent.ReadByte());
+    }
+
+    [TestMethod]
+    public async Task ProjectAsyncIncludesNativeEmptyFolderInPackageIdentity()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var projector = serviceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var innerStore = new MemoryObjectStore(provideContentHash: true);
+        await UploadTextAsync(innerStore, "folder/file.txt", "source content");
+        var sourceStoreWithEmptyFolder = new EmptyFolderReadOnlyObjectStore(
+            innerStore,
+            "folder/empty");
+        var requestWithoutEmptyFolder = new ArchiveProjectionRequest
+        (
+            innerStore,
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Photos"
+        );
+        var requestWithEmptyFolder = requestWithoutEmptyFolder with
+        {
+            SourceStore = sourceStoreWithEmptyFolder,
+        };
+
+        var projectionWithoutEmptyFolder = (await CollectProjectedObjectsAsync(
+            projector.ProjectAsync(requestWithoutEmptyFolder))).Single();
+        var firstProjectionWithEmptyFolder = (await CollectProjectedObjectsAsync(
+            projector.ProjectAsync(requestWithEmptyFolder))).Single();
+        var secondProjectionWithEmptyFolder = (await CollectProjectedObjectsAsync(
+            projector.ProjectAsync(requestWithEmptyFolder))).Single();
+
+        Assert.AreNotEqual(
+            projectionWithoutEmptyFolder.RelativePath,
+            firstProjectionWithEmptyFolder.RelativePath);
+        Assert.AreNotEqual(
+            projectionWithoutEmptyFolder.ChangeFingerprint,
+            firstProjectionWithEmptyFolder.ChangeFingerprint);
+        Assert.AreEqual(
+            firstProjectionWithEmptyFolder.RelativePath,
+            secondProjectionWithEmptyFolder.RelativePath);
+        CollectionAssert.AreEqual(
+            await ReadContentBytesAsync(firstProjectionWithEmptyFolder),
+            await ReadContentBytesAsync(secondProjectionWithEmptyFolder));
+    }
+
+    [TestMethod]
     public async Task ProjectAsyncUsesStableFullHashNameForUnchangedSource()
     {
         using var serviceProvider = CreateServices().BuildServiceProvider();
@@ -373,6 +443,80 @@ public sealed class ZipArchiveFormatProjectorTests
         using var memory = new MemoryStream();
         await content.Content.CopyToAsync(memory);
         return memory.ToArray();
+    }
+
+    private sealed class EmptyFolderReadOnlyObjectStore
+    (
+        IReadOnlyObjectStore _inner,
+        string _emptyFolderPath
+    ) : IReadOnlyObjectStore
+    {
+        private readonly string _normalizedEmptyFolderPath =
+            ArchiveLayout.NormalizeObjectKey(_emptyFolderPath);
+
+        public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
+            _inner.EnsureReadyAsync(cancellationToken);
+
+        public Task<ArchiveObjectContent> OpenReadAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => _inner.OpenReadAsync(key, cancellationToken);
+
+        public Task<bool> ExistsAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => _inner.ExistsAsync(key, cancellationToken);
+
+        public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
+        (
+            string? folderPrefix,
+            bool recursive = false,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default
+        )
+        {
+            var emptyFolderWasListed = false;
+            var folderItems = _inner.GetFolderItemsAsync(
+                folderPrefix,
+                recursive,
+                cancellationToken);
+            await foreach (var folderItem in folderItems)
+            {
+                if (folderItem.IsFolder &&
+                    string.Equals(
+                        ArchiveLayout.NormalizeObjectKey(folderItem.Key),
+                        _normalizedEmptyFolderPath,
+                        StringComparison.Ordinal))
+                {
+                    emptyFolderWasListed = true;
+                }
+
+                yield return folderItem;
+            }
+
+            if (recursive || emptyFolderWasListed) { yield break; }
+
+            var separator = _normalizedEmptyFolderPath.LastIndexOf('/');
+            var emptyFolderParent = separator < 0 ?
+                string.Empty :
+                _normalizedEmptyFolderPath[..separator];
+            if (!string.Equals(
+                    ArchiveLayout.NormalizeObjectKey(folderPrefix),
+                    emptyFolderParent,
+                    StringComparison.Ordinal))
+            {
+                yield break;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var emptyFolderName = separator < 0 ?
+                _normalizedEmptyFolderPath :
+                _normalizedEmptyFolderPath[(separator + 1)..];
+            yield return ArchiveFolderItem.CreateFolder(
+                emptyFolderName,
+                _normalizedEmptyFolderPath);
+        }
     }
 
     private sealed class MissingLastModifiedObjectStore

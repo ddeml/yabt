@@ -7,10 +7,10 @@ namespace Microsoft.Extensions.Logging;
 internal static partial class ArchiveSynchronizerLogMessages
 {
     [LoggerMessage(
-        EventId = YabtEventIds.SyncRequested,
+        EventId = YabtEventIds.BackupRequested,
         Level = LogLevel.Information,
-        Message = "Sync requested for {SourceRoot}. DryRun={DryRun}")]
-    public static partial void LogSyncRequested(
+        Message = "Backup requested for {SourceRoot}. DryRun={DryRun}")]
+    public static partial void LogBackupRequested(
         this ILogger logger,
         string sourceRoot,
         bool dryRun);
@@ -43,11 +43,22 @@ internal static partial class ArchiveSynchronizerLogMessages
     [LoggerMessage(
         EventId = YabtEventIds.InvalidChangeManifestIgnored,
         Level = LogLevel.Warning,
-        Message = "Change manifest {ManifestKey} is invalid and will not be trusted. A mutating sync will replace it after a full comparison.")]
+        Message = "Change manifest {ManifestKey} is invalid and will not be trusted. A mutating backup will replace it after a full comparison.")]
     public static partial void LogInvalidChangeManifestIgnored
     (
         this ILogger logger,
         string manifestKey,
         Exception exception
+    );
+
+    [LoggerMessage(
+        EventId = YabtEventIds.IgnoringRestoreTemporaryPathDeleteException,
+        Level = LogLevel.Debug,
+        Message = "Could not remove restore temporary path {TemporaryPath}.")]
+    public static partial void LogIgnoringRestoreTemporaryPathDeleteException
+    (
+        this ILogger logger,
+        Exception exception,
+        string temporaryPath
     );
 }

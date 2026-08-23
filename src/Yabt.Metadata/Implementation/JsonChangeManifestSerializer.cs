@@ -11,9 +11,14 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
     {
     }
 
-    public ArchiveChangeManifest Create(IEnumerable<ArchiveChangeManifestEntry> entries)
+    public ArchiveChangeManifest Create
+    (
+        IEnumerable<ArchiveChangeManifestEntry> entries,
+        string rootFormat
+    )
     {
         ArgumentNullException.ThrowIfNull(entries);
+        ValidateRequiredRootFormat(rootFormat);
 
         var canonicalEntries = CreateCanonicalEntries(entries);
         var manifest = new ArchiveChangeManifest
@@ -21,7 +26,8 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             ArchiveChangeManifest.ExpectedDocumentType,
             ArchiveChangeManifest.ExpectedSchemaVersion,
             canonicalEntries,
-            string.Empty
+            string.Empty,
+            rootFormat
         );
 
         return manifest with
@@ -44,7 +50,11 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(destination);
 
-        var validatedManifest = ValidateManifest(manifest);
+        var validatedManifest = ValidateManifest
+        (
+            manifest,
+            allowLegacySchema: false
+        );
         try
         {
             await JsonSerializer.SerializeAsync(
@@ -85,10 +95,18 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             throw new YabtMetadataException("Change manifest JSON did not contain a manifest object.");
         }
 
-        return ValidateManifest(manifest);
+        return ValidateManifest
+        (
+            manifest,
+            allowLegacySchema: true
+        );
     }
 
-    private static ArchiveChangeManifest ValidateManifest(ArchiveChangeManifest manifest)
+    private static ArchiveChangeManifest ValidateManifest
+    (
+        ArchiveChangeManifest manifest,
+        bool allowLegacySchema
+    )
     {
         if (!string.Equals(
                 manifest.DocumentType,
@@ -98,10 +116,7 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             throw new YabtMetadataException("Change manifest JSON has an unexpected document type.");
         }
 
-        if (manifest.SchemaVersion != ArchiveChangeManifest.ExpectedSchemaVersion)
-        {
-            throw new YabtMetadataException("Change manifest JSON has an unsupported schema version.");
-        }
+        ValidateSchemaVersionAndRootFormat(manifest, allowLegacySchema);
 
         if (manifest.Entries is null)
         {
@@ -252,6 +267,46 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         }
     }
 
+    private static void ValidateSchemaVersionAndRootFormat
+    (
+        ArchiveChangeManifest manifest,
+        bool allowLegacySchema
+    )
+    {
+        if (manifest.SchemaVersion == ArchiveChangeManifest.LegacySchemaVersion)
+        {
+            if (!allowLegacySchema)
+            {
+                throw new YabtMetadataException(
+                    "Legacy schema version 1 change manifests can be read but cannot be written.");
+            }
+
+            if (manifest.RootFormat is not null)
+            {
+                throw new YabtMetadataException(
+                    "Legacy schema version 1 change manifests must not contain a root format.");
+            }
+
+            return;
+        }
+
+        if (manifest.SchemaVersion != ArchiveChangeManifest.ExpectedSchemaVersion)
+        {
+            throw new YabtMetadataException("Change manifest JSON has an unsupported schema version.");
+        }
+
+        ValidateRequiredRootFormat(manifest.RootFormat);
+    }
+
+    private static void ValidateRequiredRootFormat(string? rootFormat)
+    {
+        if (string.IsNullOrWhiteSpace(rootFormat))
+        {
+            throw new YabtMetadataException(
+                "Change manifest root format is required and must be nonempty.");
+        }
+    }
+
     private static bool IsValidQualifier(ReadOnlySpan<char> qualifier)
     {
         foreach (var character in qualifier)
@@ -297,6 +352,10 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             writer.WriteStartObject();
             writer.WriteString("documentType", manifest.DocumentType);
             writer.WriteNumber("schemaVersion", manifest.SchemaVersion);
+            if (manifest.RootFormat is not null)
+            {
+                writer.WriteString("rootFormat", manifest.RootFormat);
+            }
             writer.WriteStartArray("entries");
 
             foreach (var entry in entries)

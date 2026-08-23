@@ -77,9 +77,37 @@
           },
           "credentialRef": {
             "type": ["string", "null"]
+          },
+          "configSectionPath": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "Runtime configuration section used to resolve provider settings. Azure Blob defaults to ObjectStores:AzureBlob when omitted."
           }
         },
-        "required": ["id", "kind"]
+        "required": ["id", "kind"],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "azureBlob"
+                }
+              },
+              "required": ["kind"]
+            },
+            "then": {
+              "propertyNames": {
+                "enum": ["id", "kind", "configSectionPath"]
+              }
+            },
+            "else": {
+              "not": {
+                "required": ["configSectionPath"]
+              }
+            }
+          }
+        ]
       }
     }
   },

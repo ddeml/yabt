@@ -3,6 +3,7 @@ using System.Collections.Frozen;
 using System.IO.Compression;
 using System.IO.Hashing;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
@@ -43,20 +44,28 @@ internal sealed class ArchiveSynchronizer
     private static readonly IReadOnlyDictionary<string, string> EmptyMetadata =
         new Dictionary<string, string>(StringComparer.Ordinal).ToFrozenDictionary(StringComparer.Ordinal);
 
+    private static readonly FrozenSet<string> ReservedRootObjectKeys = new[]
+    {
+        BackupRootFileNames.Primary,
+        ArchiveChangeManifest.UncompressedFileName,
+        ArchiveChangeManifest.BrotliFileName,
+        ArchiveChangeManifest.InvalidationMarkerFileName,
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
     private static readonly byte[] HistoryManifestInvalidationMarkerContent = Encoding.UTF8.GetBytes
     (
         "{\"documentType\":\"yabt.historyManifestInvalidation\",\"schemaVersion\":1}\n"
     );
 
-    public async Task<SyncRunResult> SyncAsync
+    public async Task<SyncRunResult> BackupAsync
     (
         SyncRunRequest request,
         CancellationToken cancellationToken = default
     )
     {
-        _logger.LogTrace(nameof(SyncAsync));
+        _logger.LogTrace(nameof(BackupAsync));
 
-        _logger.LogSyncRequested(
+        _logger.LogBackupRequested(
             request.SourceRoot,
             request.DryRun);
 
@@ -67,11 +76,22 @@ internal sealed class ArchiveSynchronizer
             writeChanges: !request.DryRun,
             verifyOnly: false,
             byteForByte: request.ByteForByte,
-            operationName: request.DryRun ? "sync dry run" : "sync",
+            operationName: request.DryRun ? "backup dry run" : "backup",
             cancellationToken);
     }
 
-    public Task<SyncRunResult> RestoreAsync
+    public Task<SyncRunResult> SyncAsync
+    (
+        SyncRunRequest request,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(SyncAsync));
+
+        return BackupAsync(request, cancellationToken);
+    }
+
+    public async Task<SyncRunResult> RestoreAsync
     (
         SyncRunRequest request,
         CancellationToken cancellationToken = default
@@ -79,15 +99,1538 @@ internal sealed class ArchiveSynchronizer
     {
         _logger.LogTrace(nameof(RestoreAsync));
 
-        _ = request;
-        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.DestinationRoot))
+        {
+            throw new YabtSyncException(
+                "Restore requires a filesystem destination selected with --destination-root.");
+        }
 
-        //TODO: Define restore source selection, especially how a user chooses live versus a historical version.
-        return Task.FromResult(new SyncRunResult
+        var context = await CreateRestoreContextAsync(request, cancellationToken);
+        var restoreTarget = new FileSystemRestoreTarget(
+            request.DestinationRoot,
+            _logger);
+        ValidateRestoreLocations(
+            context.DescriptorRootPath,
+            restoreTarget.RootPath,
+            context.LocalArchiveRootPath);
+        var destinationLayout = await GetRestoreDestinationLayoutAsync
         (
-            Completed: false,
-            Message: "Restore command wiring is implemented, but restore semantics are still intentionally open."
-        ));
+            restoreTarget.RootPath,
+            context.Descriptor.Layout.HistPrefix,
+            cancellationToken
+        );
+        ValidateInternalLayoutPrefixes(destinationLayout);
+        ValidateRestoreLayoutPaths(destinationLayout, restoreTarget);
+        await restoreTarget.EnsureSafeAsync(
+            destinationLayout.LivePrefix,
+            destinationLayout.HistPrefix,
+            cancellationToken);
+
+        var changeManifestLoad = await ReadChangeManifestAsync(
+            context.ArchiveStore,
+            recoverInvalidManifest: false,
+            cancellationToken);
+        var changeManifest = changeManifestLoad.Manifest ??
+            throw new YabtSyncException(
+                "Restore requires a valid live change manifest created by a successful backup.");
+        var restoreObjects = await LoadRestoreObjectsAsync(
+            context,
+            changeManifest,
+            cancellationToken);
+        context = context with
+        {
+            RootIsPackaged = ResolveRestoreRootIsPackaged(
+                changeManifest,
+                restoreObjects),
+        };
+
+        await using var plan = await CreateRestorePlanAsync
+        (
+            context,
+            restoreObjects,
+            restoreTarget,
+            cancellationToken
+        );
+        ValidateRestorePlanInternalPaths(
+            plan,
+            destinationLayout,
+            restoreTarget);
+
+        var destinationStore = _sourceRootObjectStoreResolver.ResolveSourceRoot(
+            restoreTarget.RootPath);
+        if (destinationStore is not IArchiveMutableObjectStore mutableDestinationStore)
+        {
+            throw new YabtSyncException(
+                "Restore destination does not provide the guarded filesystem mutations required " +
+                    "for historization.");
+        }
+
+        await using var mutationLock = request.DryRun ?
+            null :
+            await mutableDestinationStore.AcquireArchiveMutationLockAsync(cancellationToken);
+        using var operationCancellation = mutationLock is null ?
+            null :
+            CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                mutationLock.LockLostToken);
+        if (operationCancellation is not null)
+        {
+            cancellationToken = operationCancellation.Token;
+        }
+
+        var reconciliation = await CreateRestoreReconciliationAsync
+        (
+            destinationStore,
+            destinationLayout,
+            plan,
+            cancellationToken
+        );
+
+        if (!request.DryRun)
+        {
+            await ApplyRestorePlanAsync(
+                context.ArchiveStore,
+                mutableDestinationStore,
+                destinationLayout,
+                plan,
+                reconciliation,
+                restoreTarget,
+                cancellationToken);
+        }
+
+        var operationName = request.DryRun ? "Restore dry run" : "Restore";
+        return new SyncRunResult
+        (
+            Completed: true,
+            Message: $"{operationName} completed; {reconciliation.NewCount} new item(s), " +
+                $"{reconciliation.ChangedCount} changed item(s), " +
+                $"{reconciliation.ExtraCount} extra item(s), and " +
+                $"{reconciliation.UnchangedCount} unchanged item(s). " +
+                $"{reconciliation.HistoryMoves.Count} existing item(s) " +
+                $"{(request.DryRun ? "would be moved" : "were moved")} to history.",
+            NewCount: reconciliation.NewCount,
+            ChangedCount: reconciliation.ChangedCount,
+            ExtraCount: reconciliation.ExtraCount,
+            UnchangedCount: reconciliation.UnchangedCount
+        );
+    }
+
+    private async Task<ArchiveLayout> GetRestoreDestinationLayoutAsync
+    (
+        string destinationRootPath,
+        string defaultHistoryPrefix,
+        CancellationToken cancellationToken
+    )
+    {
+        var descriptorPath = Path.Combine(
+            destinationRootPath,
+            BackupRootFileNames.Primary);
+        if (Directory.Exists(descriptorPath))
+        {
+            throw new YabtSyncException(
+                $"Restore destination metadata path '{descriptorPath}' must be a file, not a folder.");
+        }
+
+        if (!File.Exists(descriptorPath))
+        {
+            return new ArchiveLayout(HistPrefix: defaultHistoryPrefix);
+        }
+
+        var destinationLocation = await _backupRootLocator.LocateRootAsync(
+            destinationRootPath,
+            cancellationToken);
+        if (!string.Equals(
+                ResolvePhysicalPath(destinationLocation.RootPath),
+                ResolvePhysicalPath(destinationRootPath),
+                GetFileSystemPathComparison()))
+        {
+            throw new YabtSyncException(
+                $"Restore destination descriptor '{descriptorPath}' did not resolve to its own folder.");
+        }
+
+        return destinationLocation.Descriptor.Layout;
+    }
+
+    private async Task<RestoreContext> CreateRestoreContextAsync
+    (
+        SyncRunRequest request,
+        CancellationToken cancellationToken
+    )
+    {
+        var descriptorRootPath = Path.GetFullPath(request.SourceRoot);
+        var sourceLocation = await _backupRootLocator.LocateRootAsync(
+            descriptorRootPath,
+            cancellationToken);
+        if (!string.Equals(
+                descriptorRootPath,
+                Path.GetFullPath(sourceLocation.RootPath),
+                GetFileSystemPathComparison()))
+        {
+            throw new YabtSyncException(
+                "Restore currently requires the source-root argument to be the folder containing .yabt-root.json.");
+        }
+
+        ValidateInternalLayoutPrefixes(sourceLocation.Descriptor.Layout);
+        var archiveStoreConfiguration = GetTargetStoreConfiguration(
+            sourceLocation.Descriptor,
+            request.TargetStoreId);
+        if (!_storeResolvers.TryGetValue(archiveStoreConfiguration.Kind, out var archiveStoreResolver))
+        {
+            throw new YabtSyncException(
+                $"No object store resolver is registered for store kind '{archiveStoreConfiguration.Kind}'.");
+        }
+
+        return new
+        (
+            descriptorRootPath,
+            archiveStoreResolver.ResolveStore(
+                archiveStoreConfiguration,
+                sourceLocation.RootPath),
+            sourceLocation.Descriptor,
+            RootIsPackaged: false,
+            TryResolveConfiguredLocalArchiveRootPath(
+                archiveStoreConfiguration,
+                sourceLocation.RootPath)
+        );
+    }
+
+    private bool ResolveRestoreRootIsPackaged
+    (
+        ArchiveChangeManifest changeManifest,
+        IReadOnlyList<RestoreArchiveObject> restoreObjects
+    )
+    {
+        if (changeManifest.RootFormat is not null)
+        {
+            if (!_projectors.TryGetValue(changeManifest.RootFormat, out var rootProjector))
+            {
+                throw new YabtSyncException(
+                    "No archive format projector is registered for durable root format " +
+                        $"'{changeManifest.RootFormat}'.");
+            }
+
+            return rootProjector.ProjectsBesideSourceFolder;
+        }
+
+        var packageCount = 0;
+        foreach (var restoreObject in restoreObjects)
+        {
+            if (ArchiveHash.IsValid(restoreObject.ManifestEntry.ChangeFingerprint) &&
+                TryParsePackagePath(restoreObject.RelativePath, out _))
+            {
+                packageCount++;
+            }
+        }
+
+        if (packageCount == 0 || restoreObjects.Count > 1)
+        {
+            return false;
+        }
+
+        throw new YabtSyncException(
+            "This archive change manifest predates durable root-format evidence, so YABT " +
+                "cannot safely distinguish a packaged root from a sole packaged child folder. " +
+                "Run backup once with the current YABT version before restoring it.");
+    }
+
+    private static void ValidateRestoreLocations
+    (
+        string descriptorRootPath,
+        string destinationRootPath,
+        string? localArchiveRootPath
+    )
+    {
+        var descriptorRoot = EnsureTrailingDirectorySeparator(
+            ResolvePhysicalPath(descriptorRootPath));
+        var destinationRoot = EnsureTrailingDirectorySeparator(
+            ResolvePhysicalPath(destinationRootPath));
+        var comparison = GetFileSystemPathComparison();
+        if (!string.Equals(descriptorRoot, destinationRoot, comparison) &&
+            (descriptorRoot.StartsWith(destinationRoot, comparison) ||
+                destinationRoot.StartsWith(descriptorRoot, comparison)))
+        {
+            throw new YabtSyncException(
+                "Restore destination may be the configured source root itself, but it must not be " +
+                    "one of that root's ancestors or descendants. " +
+                    $"The source root resolves to '{descriptorRoot}', and the destination " +
+                    $"resolves to '{destinationRoot}'. Use a separate sibling folder instead.");
+        }
+
+        if (localArchiveRootPath is null) { return; }
+
+        var localArchiveRoot = EnsureTrailingDirectorySeparator(
+            ResolvePhysicalPath(localArchiveRootPath));
+        if (localArchiveRoot.StartsWith(destinationRoot, comparison) ||
+            destinationRoot.StartsWith(localArchiveRoot, comparison))
+        {
+            throw new YabtSyncException(
+                "Restore destination must not be the selected filesystem archive or one of its " +
+                    "ancestors or descendants.");
+        }
+    }
+
+    private static string? TryResolveConfiguredLocalArchiveRootPath
+    (
+        BackupRootStore store,
+        string descriptorRootPath
+    )
+    {
+        if (store.ProviderProperties is null) { return null; }
+
+        foreach (var providerProperty in store.ProviderProperties)
+        {
+            if (!string.Equals(
+                    providerProperty.Key,
+                    "rootPath",
+                    StringComparison.OrdinalIgnoreCase) ||
+                providerProperty.Value.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var configuredPath = providerProperty.Value.GetString();
+            if (string.IsNullOrWhiteSpace(configuredPath)) { return null; }
+
+            return Path.IsPathRooted(configuredPath) ?
+                Path.GetFullPath(configuredPath) :
+                Path.GetFullPath(configuredPath, descriptorRootPath);
+        }
+
+        return null;
+    }
+
+    private async Task<IReadOnlyList<RestoreArchiveObject>> LoadRestoreObjectsAsync
+    (
+        RestoreContext context,
+        ArchiveChangeManifest changeManifest,
+        CancellationToken cancellationToken
+    )
+    {
+        var listedObjects = new Dictionary<string, ArchiveObjectInfo>(StringComparer.Ordinal);
+        var livePrefix = ArchiveLayout.NormalizeObjectPrefix(context.Descriptor.Layout.LivePrefix);
+        var liveItems = context.ArchiveStore.GetFolderItemsAsync(
+            livePrefix,
+            recursive: true,
+            cancellationToken);
+        await foreach (var item in liveItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (item.Object is null) { continue; }
+
+            var archiveKey = ArchiveLayout.NormalizeObjectKey(item.Object.Key);
+            if (IsInternalObject(archiveKey, context.Descriptor.Layout)) { continue; }
+
+            var relativePath = ArchiveLayout.RemovePrefix(archiveKey, livePrefix);
+            if (!listedObjects.TryAdd(relativePath, item.Object))
+            {
+                throw new YabtSyncException(
+                    $"Archive live object '{relativePath}' was listed more than once.");
+            }
+        }
+
+        var manifestEntries = new Dictionary<string, ArchiveChangeManifestEntry>(StringComparer.Ordinal);
+        foreach (var entry in changeManifest.Entries)
+        {
+            var relativePath = ArchiveLayout.NormalizeObjectKey(entry.RelativePath);
+            if (string.IsNullOrEmpty(relativePath) ||
+                !ArchiveHash.IsValid(entry.ContentHash))
+            {
+                throw new YabtSyncException(
+                    $"Change manifest entry '{entry.RelativePath}' does not contain safe restore evidence.");
+            }
+
+            if (!manifestEntries.TryAdd(relativePath, entry))
+            {
+                throw new YabtSyncException(
+                    $"Change manifest contains duplicate restore path '{relativePath}'.");
+            }
+        }
+
+        var unexpectedObjects = listedObjects.Keys
+            .Where(relativePath => !manifestEntries.ContainsKey(relativePath))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (unexpectedObjects.Length != 0)
+        {
+            throw new YabtSyncException(
+                $"Archive contains live object '{unexpectedObjects[0]}' that is not covered by the change manifest.");
+        }
+
+        var restoreObjects = new List<RestoreArchiveObject>(manifestEntries.Count);
+        foreach (var pair in manifestEntries.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            var archiveKey = context.Descriptor.Layout.ToLiveObjectKey(pair.Key);
+            listedObjects.TryGetValue(pair.Key, out var archiveObjectInfo);
+            if (archiveObjectInfo is null &&
+                !await context.ArchiveStore.ExistsAsync(archiveKey, cancellationToken))
+            {
+                throw new YabtSyncException(
+                    $"Change manifest restore object '{pair.Key}' is missing from the archive.");
+            }
+
+            var lastModifiedUtc = archiveObjectInfo?.LastModifiedUtc;
+            if (ArchiveChangeFingerprint.TryParse(
+                    pair.Value.ChangeFingerprint,
+                    out _,
+                    out var sourceLastModifiedUtc))
+            {
+                lastModifiedUtc = sourceLastModifiedUtc;
+            }
+
+            restoreObjects.Add(new
+            (
+                archiveKey,
+                pair.Key,
+                pair.Value,
+                archiveObjectInfo?.ContentLength ?? pair.Value.ArtifactLength,
+                lastModifiedUtc
+            ));
+        }
+
+        return restoreObjects;
+    }
+
+    private async Task<RestorePlan> CreateRestorePlanAsync
+    (
+        RestoreContext context,
+        IReadOnlyList<RestoreArchiveObject> restoreObjects,
+        FileSystemRestoreTarget restoreTarget,
+        CancellationToken cancellationToken
+    )
+    {
+        var pathComparer = OperatingSystem.IsWindows() ?
+            StringComparer.OrdinalIgnoreCase :
+            StringComparer.Ordinal;
+        var filePaths = new HashSet<string>(pathComparer);
+        var directoryPaths = new Dictionary<string, string>(pathComparer);
+        var files = new List<RestoreFile>();
+        var packages = new List<StagedRestorePackage>();
+
+        var packageCandidates = restoreObjects
+            .Where(restoreObject =>
+                ArchiveHash.IsValid(restoreObject.ManifestEntry.ChangeFingerprint) &&
+                TryParsePackagePath(restoreObject.RelativePath, out _))
+            .ToArray();
+        if (context.RootIsPackaged &&
+            (restoreObjects.Count != 1 ||
+                packageCandidates.Length != 1 ||
+                !string.IsNullOrEmpty(GetParentPrefix(packageCandidates[0].RelativePath))))
+        {
+            throw new YabtSyncException(
+                "The current root policy describes a packaged root, but the live archive does not contain " +
+                    "exactly one root package. Back up the source before restoring it.");
+        }
+
+        try
+        {
+            foreach (var restoreObject in restoreObjects)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ArchiveHash.IsValid(restoreObject.ManifestEntry.ChangeFingerprint) &&
+                    TryParsePackagePath(restoreObject.RelativePath, out var packageFolderName))
+                {
+                    var packageOutputPrefix = context.RootIsPackaged ?
+                        string.Empty :
+                        ArchiveLayout.CombinePrefixAndRelativePath(
+                            GetParentPrefix(restoreObject.RelativePath),
+                            packageFolderName);
+                    var package = await StageRestorePackageAsync
+                    (
+                        context.ArchiveStore,
+                        restoreObject,
+                        packageOutputPrefix,
+                        restoreTarget,
+                        filePaths,
+                        directoryPaths,
+                        cancellationToken
+                    );
+                    packages.Add(package);
+                    files.AddRange(package.Files);
+                    continue;
+                }
+
+                if (IsEmptyFolderMarker(restoreObject.RelativePath))
+                {
+                    var directoryPath = GetParentPrefix(restoreObject.RelativePath);
+                    AddRestoreDirectory(
+                        directoryPath,
+                        restoreTarget,
+                        filePaths,
+                        directoryPaths);
+                    continue;
+                }
+
+                AddRestoreFilePath(
+                    restoreObject.RelativePath,
+                    restoreTarget,
+                    filePaths,
+                    directoryPaths);
+                files.Add(new
+                (
+                    restoreObject.RelativePath,
+                    restoreObject,
+                    PackageEntry: null,
+                    restoreObject.ManifestEntry.ContentHash ??
+                        throw new YabtSyncException(
+                            $"Restore object '{restoreObject.RelativePath}' has no content hash."),
+                    restoreObject.ContentLength,
+                    restoreObject.LastModifiedUtc
+                ));
+            }
+
+            var directories = directoryPaths.Values
+                .OrderBy(GetPathDepth)
+                .ThenBy(directoryPath => directoryPath, StringComparer.Ordinal)
+                .ToArray();
+            var nonemptyDirectories = new HashSet<string>(pathComparer);
+            foreach (var file in files)
+            {
+                var parentPath = GetParentPrefix(file.RelativePath);
+                while (!string.IsNullOrEmpty(parentPath))
+                {
+                    nonemptyDirectories.Add(parentPath);
+                    parentPath = GetParentPrefix(parentPath);
+                }
+            }
+
+            var emptyDirectories = directoryPaths.Values
+                .Where(directoryPath => !nonemptyDirectories.Contains(directoryPath))
+                .OrderBy(GetPathDepth)
+                .ThenBy(directoryPath => directoryPath, StringComparer.Ordinal)
+                .ToArray();
+            return new(files, directories, emptyDirectories, packages);
+        }
+        catch (Exception)
+        {
+            foreach (var package in packages)
+            {
+                await package.DisposeAsync();
+            }
+
+            throw;
+        }
+    }
+
+    private async Task<StagedRestorePackage> StageRestorePackageAsync
+    (
+        IObjectStore archiveStore,
+        RestoreArchiveObject restoreObject,
+        string packageOutputPrefix,
+        FileSystemRestoreTarget restoreTarget,
+        HashSet<string> filePaths,
+        Dictionary<string, string> directoryPaths,
+        CancellationToken cancellationToken
+    )
+    {
+        var temporaryPath = Path.Combine
+        (
+            Path.GetTempPath(),
+            $"yabt-restore-package-{Guid.NewGuid():N}.tmp"
+        );
+        var retainTemporaryPath = false;
+        try
+        {
+            var packageFiles = new List<RestoreFile>();
+            await using (var stagedContent = CreateRestoreStagingFileStream(
+                temporaryPath,
+                FileAccess.ReadWrite))
+            {
+                var hash = new XxHash128();
+                await using (var packageContent = await archiveStore.OpenReadAsync(
+                    restoreObject.ArchiveKey,
+                    cancellationToken))
+                {
+                    var buffer = new byte[DefaultBufferSize];
+                    while (true)
+                    {
+                        var bytesRead = await packageContent.Content.ReadAsync(
+                            buffer,
+                            cancellationToken);
+                        if (bytesRead == 0) { break; }
+
+                        hash.Append(buffer.AsSpan(0, bytesRead));
+                        await stagedContent.WriteAsync(
+                            buffer.AsMemory(0, bytesRead),
+                            cancellationToken);
+                    }
+                }
+
+                await stagedContent.FlushAsync(cancellationToken);
+                var actualHash = ArchiveHash.Format(hash.GetHashAndReset());
+                if (!string.Equals(
+                        restoreObject.ManifestEntry.ContentHash,
+                        actualHash,
+                        StringComparison.Ordinal))
+                {
+                    throw new YabtSyncException(
+                        $"ZIP package '{restoreObject.RelativePath}' failed its content hash check.");
+                }
+
+                stagedContent.Position = 0;
+                using var archive = new ZipArchive(
+                    stagedContent,
+                    ZipArchiveMode.Read,
+                    leaveOpen: true);
+                foreach (var entry in archive.Entries)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    ValidateZipEntry(entry, restoreObject.RelativePath);
+                    var entryRelativePath = NormalizeZipEntryPath(entry.FullName);
+                    var restorePath = ArchiveLayout.CombinePrefixAndRelativePath(
+                        packageOutputPrefix,
+                        entryRelativePath);
+                    if (string.IsNullOrEmpty(entry.Name))
+                    {
+                        AddRestoreDirectory(
+                            restorePath,
+                            restoreTarget,
+                            filePaths,
+                            directoryPaths);
+                        continue;
+                    }
+
+                    if (IsEmptyFolderMarker(restorePath))
+                    {
+                        AddRestoreDirectory(
+                            GetParentPrefix(restorePath),
+                            restoreTarget,
+                            filePaths,
+                            directoryPaths);
+                        continue;
+                    }
+
+                    AddRestoreFilePath(
+                        restorePath,
+                        restoreTarget,
+                        filePaths,
+                        directoryPaths);
+                    await using var entryContent = entry.Open();
+                    var entryContentHash = await ArchiveHash.ComputeAsync(
+                        entryContent,
+                        cancellationToken);
+                    packageFiles.Add(new(
+                        restorePath,
+                        restoreObject,
+                        new(temporaryPath, entry.FullName),
+                        entryContentHash,
+                        entry.Length,
+                        GetZipEntryLastModifiedUtc(entry)));
+                }
+            }
+
+            var result = new StagedRestorePackage(
+                temporaryPath,
+                packageFiles,
+                _logger);
+            retainTemporaryPath = true;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            if (ex is YabtSyncException) { throw; }
+
+            throw new YabtSyncException(
+                $"ZIP package '{restoreObject.RelativePath}' could not be safely prepared for restore.",
+                ex);
+        }
+        finally
+        {
+            if (!retainTemporaryPath)
+            {
+                TryDeleteRestoreTemporaryPath(
+                    _logger,
+                    temporaryPath,
+                    () => File.Delete(temporaryPath));
+            }
+        }
+    }
+
+    private static FileStream CreateRestoreStagingFileStream
+    (
+        string path,
+        FileAccess access
+    )
+    {
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = access,
+            Share = FileShare.None,
+            BufferSize = DefaultBufferSize,
+            Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
+        };
+        if (!OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        return new(path, options);
+    }
+
+    private static FileStream OpenRestoreStagingFileStream(string path) => new
+    (
+        path,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.None,
+        DefaultBufferSize,
+        FileOptions.Asynchronous | FileOptions.SequentialScan
+    );
+
+    private static void TryDeleteRestoreTemporaryPath
+    (
+        ILogger logger,
+        string path,
+        Action delete
+    )
+    {
+        logger.LogTrace(nameof(TryDeleteRestoreTemporaryPath));
+
+        try
+        {
+            delete();
+        }
+        catch (Exception ex)
+        {
+            logger.LogIgnoringRestoreTemporaryPathDeleteException(ex, path);
+        }
+    }
+
+    private static void ValidateZipEntry
+    (
+        ZipArchiveEntry entry,
+        string packageRelativePath
+    )
+    {
+        var unixFileType = (entry.ExternalAttributes >> 16) & 0xF000;
+        if (unixFileType == 0xA000 ||
+            (entry.ExternalAttributes & (int)FileAttributes.ReparsePoint) != 0)
+        {
+            throw new YabtSyncException(
+                $"ZIP package '{packageRelativePath}' contains linked entry '{entry.FullName}'.");
+        }
+
+        if (string.IsNullOrEmpty(entry.FullName) ||
+            entry.FullName.StartsWith('/') ||
+            entry.FullName.StartsWith('\\') ||
+            entry.FullName.Contains('\\'))
+        {
+            throw new YabtSyncException(
+                $"ZIP package '{packageRelativePath}' contains unsafe entry path '{entry.FullName}'.");
+        }
+    }
+
+    private static DateTimeOffset GetZipEntryLastModifiedUtc(ZipArchiveEntry entry)
+    {
+        var storedClockTime = entry.LastWriteTime.DateTime;
+        return new DateTimeOffset(
+            DateTime.SpecifyKind(storedClockTime, DateTimeKind.Utc));
+    }
+
+    private static string NormalizeZipEntryPath(string entryPath)
+    {
+        var pathWithoutDirectoryMarker = entryPath.EndsWith('/') ?
+            entryPath[..^1] :
+            entryPath;
+        try
+        {
+            var normalizedPath = ArchiveLayout.NormalizeObjectKey(pathWithoutDirectoryMarker);
+            if (string.IsNullOrEmpty(normalizedPath))
+            {
+                throw new YabtSyncException(
+                    $"ZIP entry path '{entryPath}' does not identify a restore item.");
+            }
+
+            return normalizedPath;
+        }
+        catch (ArgumentException ex)
+        {
+            throw new YabtSyncException(
+                $"ZIP entry path '{entryPath}' is unsafe.",
+                ex);
+        }
+    }
+
+    private static void AddRestoreFilePath
+    (
+        string relativePath,
+        FileSystemRestoreTarget restoreTarget,
+        HashSet<string> filePaths,
+        Dictionary<string, string> directoryPaths
+    )
+    {
+        restoreTarget.ValidateRelativePath(relativePath);
+        if (!filePaths.Add(relativePath) || directoryPaths.ContainsKey(relativePath))
+        {
+            throw new YabtSyncException(
+                $"Multiple archive items restore to the same path '{relativePath}'.");
+        }
+
+        var parentPath = GetParentPrefix(relativePath);
+        while (!string.IsNullOrEmpty(parentPath))
+        {
+            if (filePaths.Contains(parentPath))
+            {
+                throw new YabtSyncException(
+                    $"Restore file '{relativePath}' conflicts with file '{parentPath}'.");
+            }
+
+            AddRestoreDirectoryPath(parentPath, directoryPaths);
+            parentPath = GetParentPrefix(parentPath);
+        }
+    }
+
+    private static void AddRestoreDirectory
+    (
+        string relativePath,
+        FileSystemRestoreTarget restoreTarget,
+        HashSet<string> filePaths,
+        Dictionary<string, string> directoryPaths
+    )
+    {
+        if (string.IsNullOrEmpty(relativePath)) { return; }
+
+        restoreTarget.ValidateRelativePath(relativePath);
+        if (filePaths.Contains(relativePath))
+        {
+            throw new YabtSyncException(
+                $"Restore directory '{relativePath}' conflicts with a file at the same path.");
+        }
+
+        AddRestoreDirectoryPath(relativePath, directoryPaths);
+        var parentPath = GetParentPrefix(relativePath);
+        while (!string.IsNullOrEmpty(parentPath))
+        {
+            if (filePaths.Contains(parentPath))
+            {
+                throw new YabtSyncException(
+                    $"Restore directory '{relativePath}' conflicts with file '{parentPath}'.");
+            }
+
+            AddRestoreDirectoryPath(parentPath, directoryPaths);
+            parentPath = GetParentPrefix(parentPath);
+        }
+    }
+
+    private static void AddRestoreDirectoryPath
+    (
+        string directoryPath,
+        Dictionary<string, string> directoryPaths
+    )
+    {
+        if (!directoryPaths.TryGetValue(directoryPath, out var existingDirectoryPath))
+        {
+            directoryPaths.Add(directoryPath, directoryPath);
+            return;
+        }
+
+        if (!string.Equals(
+                existingDirectoryPath,
+                directoryPath,
+                StringComparison.Ordinal))
+        {
+            throw new YabtSyncException(
+                $"Restore directory paths '{existingDirectoryPath}' and '{directoryPath}' " +
+                    "differ only by case and cannot both be represented on this filesystem.");
+        }
+    }
+
+    private static async Task<RestoreReconciliation> CreateRestoreReconciliationAsync
+    (
+        IObjectStore destinationStore,
+        ArchiveLayout destinationLayout,
+        RestorePlan restorePlan,
+        CancellationToken cancellationToken
+    )
+    {
+        var pathComparer = OperatingSystem.IsWindows() ?
+            StringComparer.OrdinalIgnoreCase :
+            StringComparer.Ordinal;
+        var destinationState = await LoadRestoreDestinationStateAsync
+        (
+            destinationStore,
+            destinationLayout,
+            pathComparer,
+            cancellationToken
+        );
+        var desiredFiles = restorePlan.Files.ToDictionary(
+            file => file.RelativePath,
+            pathComparer);
+        var desiredDirectories = restorePlan.Directories.ToHashSet(pathComparer);
+        var desiredEmptyDirectories = restorePlan.EmptyDirectories.ToHashSet(pathComparer);
+        var filesToWrite = restorePlan.Files.ToHashSet();
+        var historyMoves = new List<RestoreHistoryMove>();
+        var changedDesiredPaths = new HashSet<string>(pathComparer);
+        var unchangedDesiredPaths = new HashSet<string>(pathComparer);
+        var extraCount = 0;
+
+        var folderMoves = new List<RestoreHistoryMove>();
+        var movedFolderPaths = new HashSet<string>(pathComparer);
+        var orderedDestinationDirectories = destinationState.Directories
+            .OrderBy(GetPathDepth)
+            .ThenBy(path => path, StringComparer.Ordinal);
+        foreach (var directoryPath in orderedDestinationDirectories)
+        {
+            if (IsUnderRestoreFolderMove(directoryPath, movedFolderPaths))
+            {
+                continue;
+            }
+
+            if (desiredFiles.ContainsKey(directoryPath))
+            {
+                folderMoves.Add(new(directoryPath, IsFolder: true));
+                movedFolderPaths.Add(directoryPath);
+                changedDesiredPaths.Add(directoryPath);
+                continue;
+            }
+
+            if (!desiredDirectories.Contains(directoryPath))
+            {
+                folderMoves.Add(new(directoryPath, IsFolder: true));
+                movedFolderPaths.Add(directoryPath);
+                extraCount++;
+            }
+        }
+
+        historyMoves.AddRange(folderMoves);
+        foreach (var destinationFile in destinationState.Files.Values
+            .OrderBy(file => file.RelativePath, StringComparer.Ordinal))
+        {
+            if (IsUnderRestoreFolderMove(destinationFile.RelativePath, movedFolderPaths))
+            {
+                continue;
+            }
+
+            if (desiredFiles.TryGetValue(destinationFile.RelativePath, out var desiredFile))
+            {
+                var destinationHash = await ComputeStoredObjectHashAsync(
+                    destinationStore,
+                    destinationFile.ArchiveKey,
+                    cancellationToken);
+                if (string.Equals(
+                        destinationHash,
+                        desiredFile.ContentHash,
+                        StringComparison.Ordinal))
+                {
+                    filesToWrite.Remove(desiredFile);
+                    unchangedDesiredPaths.Add(desiredFile.RelativePath);
+                }
+                else
+                {
+                    historyMoves.Add(new(destinationFile.RelativePath, IsFolder: false));
+                    changedDesiredPaths.Add(desiredFile.RelativePath);
+                }
+
+                continue;
+            }
+
+            historyMoves.Add(new(destinationFile.RelativePath, IsFolder: false));
+            if (desiredDirectories.Contains(destinationFile.RelativePath))
+            {
+                changedDesiredPaths.Add(destinationFile.RelativePath);
+            }
+            else
+            {
+                extraCount++;
+            }
+        }
+
+        foreach (var emptyDirectory in desiredEmptyDirectories)
+        {
+            if (changedDesiredPaths.Contains(emptyDirectory)) { continue; }
+
+            if (destinationState.Directories.Contains(emptyDirectory))
+            {
+                unchangedDesiredPaths.Add(emptyDirectory);
+            }
+        }
+
+        var newCount = desiredFiles.Keys.Count(path =>
+                !changedDesiredPaths.Contains(path) &&
+                !unchangedDesiredPaths.Contains(path)) +
+            desiredEmptyDirectories.Count(path =>
+                !changedDesiredPaths.Contains(path) &&
+                !unchangedDesiredPaths.Contains(path));
+
+        return new
+        (
+            filesToWrite
+                .OrderBy(file => file.RelativePath, StringComparer.Ordinal)
+                .ToArray(),
+            historyMoves,
+            NewCount: newCount,
+            ChangedCount: changedDesiredPaths.Count,
+            ExtraCount: extraCount,
+            UnchangedCount: unchangedDesiredPaths.Count
+        );
+    }
+
+    private static bool IsUnderRestoreFolderMove
+    (
+        string relativePath,
+        HashSet<string> movedFolderPaths
+    )
+    {
+        var candidatePath = relativePath;
+        while (!string.IsNullOrEmpty(candidatePath))
+        {
+            if (movedFolderPaths.Contains(candidatePath)) { return true; }
+
+            candidatePath = GetParentPrefix(candidatePath);
+        }
+
+        return false;
+    }
+
+    private static void ValidateRestorePlanInternalPaths
+    (
+        RestorePlan restorePlan,
+        ArchiveLayout destinationLayout,
+        FileSystemRestoreTarget restoreTarget
+    )
+    {
+        foreach (var file in restorePlan.Files)
+        {
+            var destinationPath = destinationLayout.ToLiveObjectKey(file.RelativePath);
+            restoreTarget.ValidateRelativePath(destinationPath);
+            if (IsInternalObject(destinationPath, destinationLayout) ||
+                IsStrictPrefixAncestor(destinationPath, destinationLayout.HistPrefix))
+            {
+                throw new YabtSyncException(
+                    $"Restore path '{file.RelativePath}' conflicts with destination history, " +
+                        "metadata, or provider plumbing.");
+            }
+        }
+
+        foreach (var directoryPath in restorePlan.Directories)
+        {
+            var destinationPath = destinationLayout.ToLiveObjectKey(directoryPath);
+            restoreTarget.ValidateRelativePath(destinationPath);
+            if (IsInternalObject(destinationPath, destinationLayout))
+            {
+                throw new YabtSyncException(
+                    $"Restore folder '{directoryPath}' conflicts with destination history or " +
+                        "provider plumbing.");
+            }
+        }
+    }
+
+    private static void ValidateRestoreLayoutPaths
+    (
+        ArchiveLayout destinationLayout,
+        FileSystemRestoreTarget restoreTarget
+    )
+    {
+        var livePrefix = ArchiveLayout.NormalizeObjectPrefix(destinationLayout.LivePrefix);
+        if (livePrefix is not null)
+        {
+            restoreTarget.ValidateRelativePath(livePrefix);
+        }
+
+        restoreTarget.ValidateRelativePath(destinationLayout.HistPrefix);
+    }
+
+    private static string ResolvePhysicalPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        try
+        {
+            var rootPath = Path.GetPathRoot(fullPath) ??
+                throw new IOException($"Path '{fullPath}' does not have a filesystem root.");
+            var relativePath = Path.GetRelativePath(rootPath, fullPath);
+            var segments = relativePath.Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries);
+            var currentPath = rootPath;
+            for (var segmentIndex = 0; segmentIndex < segments.Length; segmentIndex++)
+            {
+                var candidatePath = Path.Combine(currentPath, segments[segmentIndex]);
+                FileSystemInfo? fileSystemInfo = Directory.Exists(candidatePath) ?
+                    new DirectoryInfo(candidatePath) :
+                    File.Exists(candidatePath) ?
+                        new FileInfo(candidatePath) :
+                        null;
+                if (fileSystemInfo is null)
+                {
+                    for (; segmentIndex < segments.Length; segmentIndex++)
+                    {
+                        currentPath = Path.Combine(currentPath, segments[segmentIndex]);
+                    }
+
+                    break;
+                }
+
+                if ((fileSystemInfo.Attributes & FileAttributes.ReparsePoint) == 0)
+                {
+                    currentPath = candidatePath;
+                    continue;
+                }
+
+                var linkTarget = fileSystemInfo.ResolveLinkTarget(returnFinalTarget: true) ??
+                    throw new IOException(
+                        $"Reparse point '{candidatePath}' does not expose a resolvable target.");
+                currentPath = Path.GetFullPath(linkTarget.FullName);
+            }
+
+            return Path.GetFullPath(currentPath);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtSyncException(
+                $"Restore could not safely resolve filesystem path '{fullPath}'.",
+                ex);
+        }
+    }
+
+    private static async Task<RestoreDestinationState> LoadRestoreDestinationStateAsync
+    (
+        IObjectStore destinationStore,
+        ArchiveLayout destinationLayout,
+        StringComparer pathComparer,
+        CancellationToken cancellationToken
+    )
+    {
+        var files = new Dictionary<string, RestoreDestinationFile>(pathComparer);
+        var directories = new HashSet<string>(pathComparer);
+
+        async Task LoadFolderAsync(string relativeFolderPath)
+        {
+            var folderKey = destinationLayout.ToLiveObjectKey(relativeFolderPath);
+            var folderItems = destinationStore.GetFolderItemsAsync(
+                folderKey,
+                recursive: false,
+                cancellationToken);
+            await foreach (var item in folderItems)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var archiveKey = ArchiveLayout.NormalizeObjectKey(item.Key);
+                if (IsInternalObject(archiveKey, destinationLayout)) { continue; }
+
+                var relativePath = ArchiveLayout.RemovePrefix(
+                    archiveKey,
+                    destinationLayout.LivePrefix);
+                if (item.IsFolder)
+                {
+                    if (!directories.Add(relativePath))
+                    {
+                        throw new YabtSyncException(
+                            $"Restore destination folder '{relativePath}' was listed more than once.");
+                    }
+
+                    await LoadFolderAsync(relativePath);
+                    continue;
+                }
+
+                if (item.Object is not null &&
+                    !files.TryAdd(relativePath, new(relativePath, archiveKey)))
+                {
+                    throw new YabtSyncException(
+                        $"Restore destination file '{relativePath}' was listed more than once.");
+                }
+            }
+        }
+
+        await LoadFolderAsync(string.Empty);
+        return new(files, directories);
+    }
+
+    private async Task<StagedRestoreFiles> StageRestoreFilesAsync
+    (
+        IObjectStore archiveStore,
+        IEnumerable<RestoreFile> files,
+        CancellationToken cancellationToken
+    )
+    {
+        var stagingRootPath = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-restore-{Guid.NewGuid():N}");
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                Directory.CreateDirectory(stagingRootPath);
+            }
+            else
+            {
+                Directory.CreateDirectory(
+                    stagingRootPath,
+                    UnixFileMode.UserRead |
+                        UnixFileMode.UserWrite |
+                        UnixFileMode.UserExecute);
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new YabtSyncException(
+                $"Restore staging folder '{stagingRootPath}' could not be created.",
+                ex);
+        }
+
+        var stagedFiles = new StagedRestoreFiles(stagingRootPath, _logger);
+        try
+        {
+            async Task StageFileAsync(RestoreFile file, Stream source)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var stagingPath = Path.Combine(
+                    stagingRootPath,
+                    $"{Guid.NewGuid():N}.tmp");
+                stagedFiles.Add(file.RelativePath, stagingPath);
+                try
+                {
+                    await using var stagedContent = CreateRestoreStagingFileStream(
+                        stagingPath,
+                        FileAccess.Write);
+                    await CopyRestoreContentToStagingAsync(
+                        file,
+                        source,
+                        stagedContent,
+                        cancellationToken);
+                    await stagedContent.FlushAsync(cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    if (ex is YabtSyncException) { throw; }
+
+                    throw new YabtSyncException(
+                        $"Archive object for restore path '{file.RelativePath}' could not be staged.",
+                        ex);
+                }
+            }
+
+            var packageFilesByPath = new Dictionary<string, List<RestoreFile>>(
+                StringComparer.Ordinal);
+            foreach (var file in files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (file.PackageEntry is not null)
+                {
+                    if (!packageFilesByPath.TryGetValue(
+                            file.PackageEntry.PackagePath,
+                            out var packageFiles))
+                    {
+                        packageFiles = [];
+                        packageFilesByPath.Add(
+                            file.PackageEntry.PackagePath,
+                            packageFiles);
+                    }
+
+                    packageFiles.Add(file);
+                    continue;
+                }
+
+                try
+                {
+                    await using var archiveContent = await archiveStore.OpenReadAsync(
+                        file.ArchiveObject.ArchiveKey,
+                        cancellationToken);
+                    await StageFileAsync(file, archiveContent.Content);
+                }
+                catch (Exception ex)
+                {
+                    if (ex is YabtSyncException) { throw; }
+
+                    throw new YabtSyncException(
+                        $"Archive object for restore path '{file.RelativePath}' could not be staged.",
+                        ex);
+                }
+            }
+
+            foreach (var packageFiles in packageFilesByPath.Values)
+            {
+                var packagePath = packageFiles[0].PackageEntry?.PackagePath ??
+                    throw new YabtSyncException("A staged ZIP package path was not available.");
+                try
+                {
+                    await using var packageContent = OpenRestoreStagingFileStream(packagePath);
+                    using var packageArchive = new ZipArchive(
+                        packageContent,
+                        ZipArchiveMode.Read,
+                        leaveOpen: true);
+                    foreach (var file in packageFiles)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var packageEntryName = file.PackageEntry?.EntryFullName ??
+                            throw new YabtSyncException(
+                                $"Restore path '{file.RelativePath}' has no staged ZIP entry name.");
+                        var packageEntry = packageArchive.GetEntry(packageEntryName) ??
+                            throw new YabtSyncException(
+                                $"Staged ZIP package no longer contains entry '{packageEntryName}'.");
+                        await using var packageEntryContent = packageEntry.Open();
+                        await StageFileAsync(file, packageEntryContent);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (ex is YabtSyncException) { throw; }
+
+                    throw new YabtSyncException(
+                        $"Staged ZIP package '{packagePath}' could not be read for restore.",
+                        ex);
+                }
+            }
+
+            return stagedFiles;
+        }
+        catch (Exception)
+        {
+            await stagedFiles.DisposeAsync();
+            throw;
+        }
+    }
+
+    private static async Task CopyRestoreContentToStagingAsync
+    (
+        RestoreFile file,
+        Stream source,
+        Stream destination,
+        CancellationToken cancellationToken
+    )
+    {
+        var hash = new XxHash128();
+        long contentLength = 0;
+        var buffer = new byte[DefaultBufferSize];
+        while (true)
+        {
+            var bytesRead = await source.ReadAsync(buffer, cancellationToken);
+            if (bytesRead == 0) { break; }
+
+            hash.Append(buffer.AsSpan(0, bytesRead));
+            contentLength += bytesRead;
+            await destination.WriteAsync(
+                buffer.AsMemory(0, bytesRead),
+                cancellationToken);
+        }
+
+        if (file.ContentLength.HasValue && file.ContentLength.Value != contentLength)
+        {
+            throw new YabtSyncException(
+                $"Archive object for restore path '{file.RelativePath}' has length {contentLength}, " +
+                    $"but {file.ContentLength.Value} bytes were expected.");
+        }
+
+        var contentHash = ArchiveHash.Format(hash.GetHashAndReset());
+        if (!string.Equals(file.ContentHash, contentHash, StringComparison.Ordinal))
+        {
+            throw new YabtSyncException(
+                $"Archive object for restore path '{file.RelativePath}' failed its content hash check.");
+        }
+    }
+
+    private async Task ApplyRestorePlanAsync
+    (
+        IObjectStore archiveStore,
+        IArchiveMutableObjectStore destinationStore,
+        ArchiveLayout destinationLayout,
+        RestorePlan plan,
+        RestoreReconciliation reconciliation,
+        FileSystemRestoreTarget restoreTarget,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var stagedFiles = await StageRestoreFilesAsync(
+            archiveStore,
+            reconciliation.FilesToWrite,
+            cancellationToken);
+        var liveStateChanged = reconciliation.NewCount != 0 ||
+            reconciliation.ChangedCount != 0 ||
+            reconciliation.ExtraCount != 0;
+        var changeManifestInvalidationMarkerActive =
+            await PrepareRestoreChangeManifestMutationAsync(
+                destinationStore,
+                liveStateChanged,
+                cancellationToken);
+        var historyStateChanged = reconciliation.HistoryMoves.Count != 0;
+        var invalidationMarkerKey = destinationLayout.ToHistoryObjectKey(
+            ArchiveHistoryManifest.InvalidationMarkerFileName);
+        var historyRecoveryRequired = await destinationStore.ExistsAsync(
+            invalidationMarkerKey,
+            cancellationToken);
+        if (historyStateChanged)
+        {
+            await PrepareRestoreHistoryMutationAsync(
+                destinationStore,
+                destinationLayout,
+                cancellationToken);
+            var historyKeyAllocator = new ArchiveHistoryKeyAllocator(
+                destinationStore,
+                destinationLayout,
+                _timeProvider.GetUtcNow());
+            foreach (var historyMove in reconciliation.HistoryMoves)
+            {
+                var historyKey = await historyKeyAllocator.CreateHistoricalKeyAsync(
+                    historyMove.RelativePath,
+                    cancellationToken);
+                if (historyMove.IsFolder)
+                {
+                    await destinationStore.MoveFolderAsync(
+                        destinationLayout.ToLiveObjectKey(historyMove.RelativePath),
+                        historyKey,
+                        cancellationToken);
+                }
+                else
+                {
+                    await destinationStore.MoveAsync(
+                        destinationLayout.ToLiveObjectKey(historyMove.RelativePath),
+                        historyKey,
+                        cancellationToken);
+                }
+            }
+        }
+
+        await restoreTarget.CreateDirectoryAsync(
+            destinationLayout.ToLiveObjectKey(string.Empty),
+            cancellationToken);
+        foreach (var directoryPath in plan.EmptyDirectories)
+        {
+            await restoreTarget.CreateDirectoryAsync(
+                destinationLayout.ToLiveObjectKey(directoryPath),
+                cancellationToken);
+        }
+
+        foreach (var file in reconciliation.FilesToWrite)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await using var stagedContent = stagedFiles.OpenContent(file.RelativePath);
+            await restoreTarget.WriteFileAsync
+            (
+                destinationLayout.ToLiveObjectKey(file.RelativePath),
+                stagedContent,
+                file.ContentHash,
+                file.ContentLength,
+                file.LastModifiedUtc,
+                cancellationToken
+            );
+        }
+
+        if (historyStateChanged || historyRecoveryRequired)
+        {
+            await DeleteStaleHistoryManifestStateAsync(
+                destinationStore,
+                destinationLayout,
+                cancellationToken);
+        }
+
+        if (changeManifestInvalidationMarkerActive)
+        {
+            await DeleteInternalObjectAsync(
+                destinationStore,
+                ArchiveChangeManifest.InvalidationMarkerFileName,
+                "Change manifest invalidation marker",
+                cancellationToken);
+        }
+    }
+
+    private static async Task<bool> PrepareRestoreChangeManifestMutationAsync
+    (
+        IArchiveMutableObjectStore destinationStore,
+        bool liveStateChanged,
+        CancellationToken cancellationToken
+    )
+    {
+        var invalidationMarkerExists = await destinationStore.ExistsAsync(
+            ArchiveChangeManifest.InvalidationMarkerFileName,
+            cancellationToken);
+        if (!liveStateChanged && !invalidationMarkerExists)
+        {
+            return false;
+        }
+
+        var existingManifestFileNames = new List<string>();
+        foreach (var manifestFileName in GetChangeManifestFileNames())
+        {
+            if (await destinationStore.ExistsAsync(
+                    manifestFileName,
+                    cancellationToken))
+            {
+                existingManifestFileNames.Add(manifestFileName);
+            }
+        }
+
+        if (existingManifestFileNames.Count != 0 && !invalidationMarkerExists)
+        {
+            await UploadChangeManifestInvalidationMarkerAsync(
+                destinationStore,
+                cancellationToken);
+            invalidationMarkerExists = true;
+        }
+
+        await DeleteChangeManifestsAsync(
+            destinationStore,
+            existingManifestFileNames,
+            cancellationToken);
+        return invalidationMarkerExists;
+    }
+
+    private static async Task PrepareRestoreHistoryMutationAsync
+    (
+        IArchiveMutableObjectStore destinationStore,
+        ArchiveLayout destinationLayout,
+        CancellationToken cancellationToken
+    )
+    {
+        var manifestKey = destinationLayout.ToHistoryObjectKey(
+            ArchiveHistoryFileNames.Manifest);
+        var invalidationMarkerKey = destinationLayout.ToHistoryObjectKey(
+            ArchiveHistoryManifest.InvalidationMarkerFileName);
+        var manifestExists = await destinationStore.ExistsAsync(
+            manifestKey,
+            cancellationToken);
+        var invalidationMarkerExists = await destinationStore.ExistsAsync(
+            invalidationMarkerKey,
+            cancellationToken);
+        if (manifestExists && !invalidationMarkerExists)
+        {
+            await destinationStore.UploadAsync(
+                invalidationMarkerKey,
+                new MemoryStream(HistoryManifestInvalidationMarkerContent, writable: false),
+                "application/json",
+                EmptyMetadata,
+                cancellationToken);
+        }
+    }
+
+    private static bool TryParsePackagePath
+    (
+        string relativePath,
+        out string packageFolderName
+    )
+    {
+        packageFolderName = string.Empty;
+        var fileName = Path.GetFileName(relativePath);
+        var tokenSeparator = $".{ArchiveHash.AlgorithmName}-";
+        var tokenIndex = fileName.LastIndexOf(tokenSeparator, StringComparison.Ordinal);
+        if (tokenIndex <= 0 ||
+            !fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var tokenStart = tokenIndex + tokenSeparator.Length;
+        var tokenLength = fileName.Length - tokenStart - ".zip".Length;
+        if (tokenLength != ArchiveHash.FileNameEncodedValueLength)
+        {
+            return false;
+        }
+
+        var token = fileName.AsSpan(tokenStart, tokenLength);
+        foreach (var character in token)
+        {
+            if (character is < '0' or > '9' and < 'a' or > 'v')
+            {
+                return false;
+            }
+        }
+
+        if (token[^1] is not ('0' or '4' or '8' or 'c' or 'g' or 'k' or 'o' or 's'))
+        {
+            return false;
+        }
+
+        packageFolderName = fileName[..tokenIndex];
+        return true;
     }
 
     public Task<SyncRunResult> ScanAsync
@@ -435,7 +1978,7 @@ internal sealed class ArchiveSynchronizer
 
             await DeleteChangeManifestsAsync(
                 mutableTargetStore ??
-                    throw new YabtSyncException("A mutating sync requires a mutable target store."),
+                    throw new YabtSyncException("A mutating backup requires a mutable target store."),
                 changeManifestLoad.ExistingFileNames,
                 currentCancellationToken);
             changeManifestInvalidated = true;
@@ -446,6 +1989,9 @@ internal sealed class ArchiveSynchronizer
             cancellationToken.ThrowIfCancellationRequested();
 
             var relativePath = ArchiveLayout.NormalizeObjectKey(projectedObject.RelativePath);
+            ValidateProjectedLiveObjectPath(
+                relativePath,
+                context.TargetDescriptor.Layout);
             AddDesiredFolderPaths(relativePath, desiredFolderPaths);
             var targetFolder = await LoadTargetFolderStateAsync(
                 context.TargetStore,
@@ -550,7 +2096,9 @@ internal sealed class ArchiveSynchronizer
 
         if (writeChanges)
         {
-            var nextChangeManifest = _changeManifestSerializer.Create(nextManifestEntries.Values);
+            var nextChangeManifest = _changeManifestSerializer.Create(
+                nextManifestEntries.Values,
+                context.Policy.Format);
             var changeManifestNeedsWrite = changeManifestInvalidated ||
                 changeManifestLoad.NeedsRepresentationRewrite(changeManifestFileName) ||
                 previousChangeManifest is null ||
@@ -571,7 +2119,7 @@ internal sealed class ArchiveSynchronizer
                     await DeleteInternalObjectAsync(
                         mutableTargetStore ??
                             throw new YabtSyncException(
-                                "A mutating sync requires a mutable target store."),
+                                "A mutating backup requires a mutable target store."),
                         ArchiveChangeManifest.InvalidationMarkerFileName,
                         "Change manifest invalidation marker",
                         cancellationToken);
@@ -583,7 +2131,7 @@ internal sealed class ArchiveSynchronizer
             {
                 await DeleteStaleHistoryManifestStateAsync(
                     mutableTargetStore ??
-                        throw new YabtSyncException("A mutating sync requires a mutable target store."),
+                        throw new YabtSyncException("A mutating backup requires a mutable target store."),
                     context.TargetDescriptor.Layout,
                     cancellationToken);
             }
@@ -892,7 +2440,7 @@ internal sealed class ArchiveSynchronizer
         catch (Exception ex)
         {
             throw new YabtSyncException(
-                $"Sync history move failed for target folder '{targetFolderPrefix}' to '{destinationFolderPrefix}'.",
+                $"Backup history move failed for target folder '{targetFolderPrefix}' to '{destinationFolderPrefix}'.",
                 ex);
         }
     }
@@ -956,7 +2504,7 @@ internal sealed class ArchiveSynchronizer
         catch (Exception ex)
         {
             throw new YabtSyncException(
-                $"Sync upload failed for projected object '{relativePath}' to target object '{targetKey}'.",
+                $"Backup upload failed for projected object '{relativePath}' to target object '{targetKey}'.",
                 ex);
         }
     }
@@ -1256,7 +2804,7 @@ internal sealed class ArchiveSynchronizer
         catch (Exception ex)
         {
             throw new YabtSyncException(
-                $"Sync history move failed for target object '{sourceKey}' to '{destinationKey}'.",
+                $"Backup history move failed for target object '{sourceKey}' to '{destinationKey}'.",
                 ex);
         }
     }
@@ -1390,7 +2938,7 @@ internal sealed class ArchiveSynchronizer
         catch (Exception ex)
         {
             throw new YabtSyncException(
-                $"Sync content comparison failed for target object '{targetObject.Key}'.",
+                $"Backup content comparison failed for target object '{targetObject.Key}'.",
                 ex);
         }
     }
@@ -1617,20 +3165,14 @@ internal sealed class ArchiveSynchronizer
         return totalBytesRead;
     }
 
-    private static IEnumerable<string> CreateInternalObjectKeys(ArchiveLayout layout)
+    private static FrozenSet<string> CreateInternalObjectKeys(ArchiveLayout layout)
     {
         if (!string.IsNullOrEmpty(ArchiveLayout.NormalizeObjectKey(layout.LivePrefix)))
         {
-            return [];
+            return FrozenSet<string>.Empty;
         }
 
-        return
-        [
-            BackupRootFileNames.Primary,
-            ArchiveChangeManifest.UncompressedFileName,
-            ArchiveChangeManifest.BrotliFileName,
-            ArchiveChangeManifest.InvalidationMarkerFileName,
-        ];
+        return ReservedRootObjectKeys;
     }
 
     private static IEnumerable<string> GetChangeManifestFileNames() =>
@@ -1682,17 +3224,74 @@ internal sealed class ArchiveSynchronizer
         }
 
         var histPrefix = ArchiveLayout.NormalizeObjectPrefix(layout.HistPrefix);
-        if (histPrefix is not null && PrefixesOverlap(histPrefix, temporaryPrefix))
+        if (histPrefix is null)
+        {
+            throw new YabtSyncException("Archive operations require a nonempty history prefix.");
+        }
+
+        if (PrefixesOverlap(histPrefix, temporaryPrefix))
         {
             throw new YabtSyncException(
                 $"Archive history prefix '{histPrefix}' conflicts with reserved internal prefix " +
                     $"'{temporaryPrefix}'.");
+        }
+
+        foreach (var reservedRootObjectKey in ReservedRootObjectKeys)
+        {
+            if (livePrefix is not null &&
+                PrefixesOverlap(livePrefix, reservedRootObjectKey))
+            {
+                throw new YabtSyncException(
+                    $"Archive live prefix '{livePrefix}' conflicts with reserved root object " +
+                        $"'{reservedRootObjectKey}'.");
+            }
+
+            if (PrefixesOverlap(histPrefix, reservedRootObjectKey))
+            {
+                throw new YabtSyncException(
+                    $"Archive history prefix '{histPrefix}' conflicts with reserved root object " +
+                        $"'{reservedRootObjectKey}'.");
+            }
+        }
+
+        if (livePrefix is not null &&
+            histPrefix is not null &&
+            PrefixesOverlap(livePrefix, histPrefix))
+        {
+            throw new YabtSyncException(
+                $"Archive live prefix '{livePrefix}' overlaps history prefix '{histPrefix}'.");
         }
     }
 
     private static bool PrefixesOverlap(string firstPrefix, string secondPrefix) =>
         IsSameOrUnderPrefix(firstPrefix, secondPrefix) ||
         IsSameOrUnderPrefix(secondPrefix, firstPrefix);
+
+    private static void ValidateProjectedLiveObjectPath
+    (
+        string relativePath,
+        ArchiveLayout layout
+    )
+    {
+        var liveObjectKey = layout.ToLiveObjectKey(relativePath);
+        if (IsInternalObject(liveObjectKey, layout) ||
+            IsStrictPrefixAncestor(liveObjectKey, layout.HistPrefix))
+        {
+            throw new YabtSyncException(
+                $"Projected live object '{relativePath}' conflicts with archive history, " +
+                    "metadata, or provider plumbing.");
+        }
+    }
+
+    private static bool IsStrictPrefixAncestor(string objectKey, string prefix)
+    {
+        var normalizedObjectKey = ArchiveLayout.NormalizeObjectKey(objectKey);
+        var normalizedPrefix = ArchiveLayout.NormalizeObjectKey(prefix);
+        return !string.IsNullOrEmpty(normalizedObjectKey) &&
+            normalizedPrefix.StartsWith(
+                $"{normalizedObjectKey}/",
+                StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool IsSameOrUnderPrefix(string objectKey, string prefix)
     {
@@ -1814,6 +3413,15 @@ internal sealed class ArchiveSynchronizer
             StringComparison.Ordinal);
     }
 
+    private static string EnsureTrailingDirectorySeparator(string path) =>
+        Path.EndsInDirectorySeparator(path) ?
+            path :
+            $"{path}{Path.DirectorySeparatorChar}";
+
+    private static StringComparison GetFileSystemPathComparison() => OperatingSystem.IsWindows() ?
+        StringComparison.OrdinalIgnoreCase :
+        StringComparison.Ordinal;
+
     private static string BuildSummaryMessage
     (
         string operationName,
@@ -1858,6 +3466,176 @@ internal sealed class ArchiveSynchronizer
         ArchiveChangeManifestEntry? ManifestEntry,
         ArchiveObjectContent? PreparedContent
     );
+
+    private sealed record RestoreContext
+    (
+        string DescriptorRootPath,
+        IObjectStore ArchiveStore,
+        BackupRootDescriptor Descriptor,
+        bool RootIsPackaged,
+        string? LocalArchiveRootPath
+    );
+
+    private sealed record RestoreArchiveObject
+    (
+        string ArchiveKey,
+        string RelativePath,
+        ArchiveChangeManifestEntry ManifestEntry,
+        long? ContentLength,
+        DateTimeOffset? LastModifiedUtc
+    );
+
+    private sealed record RestoreFile
+    (
+        string RelativePath,
+        RestoreArchiveObject ArchiveObject,
+        StagedRestorePackageEntry? PackageEntry,
+        string ContentHash,
+        long? ContentLength,
+        DateTimeOffset? LastModifiedUtc
+    );
+
+    private sealed record StagedRestorePackageEntry
+    (
+        string PackagePath,
+        string EntryFullName
+    );
+
+    private sealed record RestoreDestinationFile
+    (
+        string RelativePath,
+        string ArchiveKey
+    );
+
+    private sealed record RestoreDestinationState
+    (
+        IReadOnlyDictionary<string, RestoreDestinationFile> Files,
+        IReadOnlySet<string> Directories
+    );
+
+    private sealed record RestoreHistoryMove
+    (
+        string RelativePath,
+        bool IsFolder
+    );
+
+    private sealed record RestoreReconciliation
+    (
+        IReadOnlyList<RestoreFile> FilesToWrite,
+        IReadOnlyList<RestoreHistoryMove> HistoryMoves,
+        int NewCount,
+        int ChangedCount,
+        int ExtraCount,
+        int UnchangedCount
+    );
+
+    private sealed class RestorePlan
+    (
+        IReadOnlyList<RestoreFile> _files,
+        IReadOnlyList<string> _directories,
+        IReadOnlyList<string> _emptyDirectories,
+        IReadOnlyList<StagedRestorePackage> _packages
+    ) : IAsyncDisposable
+    {
+        public IReadOnlyList<RestoreFile> Files => _files;
+
+        public IReadOnlyList<string> Directories => _directories;
+
+        public IReadOnlyList<string> EmptyDirectories => _emptyDirectories;
+
+        public async ValueTask DisposeAsync()
+        {
+            foreach (var package in _packages)
+            {
+                await package.DisposeAsync();
+            }
+        }
+    }
+
+    private sealed class StagedRestorePackage
+    (
+        string _path,
+        IReadOnlyList<RestoreFile> _files,
+        ILogger _logger
+    ) : IAsyncDisposable
+    {
+        public IReadOnlyList<RestoreFile> Files => _files;
+
+        public ValueTask DisposeAsync()
+        {
+            _logger.LogTrace(nameof(DisposeAsync));
+
+            TryDeleteRestoreTemporaryPath(
+                _logger,
+                _path,
+                () => File.Delete(_path));
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class StagedRestoreFiles
+    (
+        string _rootPath,
+        ILogger _logger
+    ) : IAsyncDisposable
+    {
+        private readonly Dictionary<string, string> _files = new(
+            OperatingSystem.IsWindows() ?
+                StringComparer.OrdinalIgnoreCase :
+                StringComparer.Ordinal);
+
+        public void Add(string relativePath, string stagingPath)
+        {
+            _logger.LogTrace(nameof(Add));
+
+            if (!_files.TryAdd(relativePath, stagingPath))
+            {
+                throw new YabtSyncException(
+                    $"Restore path '{relativePath}' was staged more than once.");
+            }
+        }
+
+        public FileStream OpenContent(string relativePath)
+        {
+            _logger.LogTrace(nameof(OpenContent));
+
+            if (!_files.TryGetValue(relativePath, out var stagingPath))
+            {
+                throw new YabtSyncException(
+                    $"Restore path '{relativePath}' does not have staged content.");
+            }
+
+            try
+            {
+                return OpenRestoreStagingFileStream(stagingPath);
+            }
+            catch (Exception ex)
+            {
+                throw new YabtSyncException(
+                    $"Restore staged content for '{relativePath}' could not be opened.",
+                    ex);
+            }
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            _logger.LogTrace(nameof(DisposeAsync));
+
+            foreach (var stagingPath in _files.Values)
+            {
+                TryDeleteRestoreTemporaryPath(
+                    _logger,
+                    stagingPath,
+                    () => File.Delete(stagingPath));
+            }
+
+            TryDeleteRestoreTemporaryPath(
+                _logger,
+                _rootPath,
+                () => Directory.Delete(_rootPath));
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private sealed record ChangeManifestLoad
     (

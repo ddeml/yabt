@@ -4,7 +4,8 @@ namespace Yabt.Cli.Implementation;
 
 internal static class YabtCliCommandNames
 {
-    public const string Sync = "sync";
+    public const string Backup = "backup";
+    public const string SyncAlias = "sync";
     public const string Restore = "restore";
     public const string Scan = "scan";
     public const string Verify = "verify";
@@ -14,7 +15,7 @@ internal static class YabtCliCommandNames
 
     public static readonly FrozenSet<string> Known = new[]
     {
-        Sync,
+        Backup,
         Restore,
         Scan,
         Verify,

@@ -9,6 +9,32 @@ namespace Yabt.Metadata.Tests;
 public sealed class JsonBackupRootSerializerTests
 {
     [TestMethod]
+    public async Task WriteAndReadAsyncRoundTripsStoreConfigSectionPath()
+    {
+        const string configSectionPath = "ObjectStores:MainAzure";
+        var descriptor = new BackupRootDescriptor
+        (
+            BackupRootDescriptor.ExpectedDocumentType,
+            BackupRootDescriptor.ExpectedSchemaVersion,
+            "test-archive",
+            new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero),
+            ArchiveLayout.Default,
+            [new BackupRootStore("target", "azureBlob", ConfigSectionPath: configSectionPath)]
+        );
+        var serializer = CreateSerializer();
+        await using var document = new MemoryStream();
+
+        await serializer.WriteAsync(descriptor, document);
+        document.Position = 0;
+        var restored = await serializer.ReadAsync(document);
+
+        var restoredStore = restored.Stores.Single();
+        Assert.AreEqual(configSectionPath, restoredStore.ConfigSectionPath);
+        Assert.IsNull(restoredStore.CredentialRef);
+        Assert.IsNull(restoredStore.ProviderProperties);
+    }
+
+    [TestMethod]
     public async Task ReadAsyncDefaultsMissingHistoryDeduplicationTinyFileMaximumBytes()
     {
         const string json =

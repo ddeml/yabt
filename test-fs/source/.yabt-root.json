@@ -16,6 +16,11 @@
       "id": "local-target",
       "kind": "fileSystem",
       "rootPath": "../target"
+    },
+    {
+      "id": "azure-dev",
+      "kind": "azureBlob",
+      "configSectionPath": "ObjectStores:AzureBlob"
     }
   ]
 }

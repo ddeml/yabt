@@ -14,6 +14,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Packaging", "src\Yabt.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.AzureBlob", "src\Yabt.AzureBlob\Yabt.AzureBlob.csproj", "{3C25F038-C514-498F-BC15-B18CD7378765}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.AzureBlob.Tests", "tests\Yabt.AzureBlob.Tests\Yabt.AzureBlob.Tests.csproj", "{270521B6-93AA-4603-B8FD-A0F35D06A0F7}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Sync", "src\Yabt.Sync\Yabt.Sync.csproj", "{3072B204-3877-4EDC-9786-DC5159D91947}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Cli", "src\Yabt.Cli\Yabt.Cli.csproj", "{59DD2410-A1AC-4833-9C55-361092B06E5F}"
@@ -108,6 +110,10 @@ Global
 		{3C25F038-C514-498F-BC15-B18CD7378765}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3C25F038-C514-498F-BC15-B18CD7378765}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3C25F038-C514-498F-BC15-B18CD7378765}.Release|Any CPU.Build.0 = Release|Any CPU
+		{270521B6-93AA-4603-B8FD-A0F35D06A0F7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{270521B6-93AA-4603-B8FD-A0F35D06A0F7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{270521B6-93AA-4603-B8FD-A0F35D06A0F7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{270521B6-93AA-4603-B8FD-A0F35D06A0F7}.Release|Any CPU.Build.0 = Release|Any CPU
 		{3072B204-3877-4EDC-9786-DC5159D91947}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{3072B204-3877-4EDC-9786-DC5159D91947}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3072B204-3877-4EDC-9786-DC5159D91947}.Release|Any CPU.ActiveCfg = Release|Any CPU

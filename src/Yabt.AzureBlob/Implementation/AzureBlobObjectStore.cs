@@ -13,20 +13,26 @@ namespace Yabt.AzureBlob.Implementation;
 internal sealed class AzureBlobObjectStore
 (
     IOptionsMonitor<AzureBlobObjectStoreOptions> _options,
+    AzureBlobContainerClientFactory _containerClientFactory,
     ILogger<AzureBlobObjectStore> _logger,
     TimeProvider _timeProvider
 ) : IArchiveMutableObjectStore
 {
+    private readonly object _contextLock = new();
+    private AzureBlobObjectStoreContext? _context;
+
     public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogTrace(nameof(EnsureReadyAsync));
 
         try
         {
-            var container = GetContainerClient();
-            await container.CreateIfNotExistsAsync(
+            var context = GetContext();
+            await context.ContainerClient.CreateIfNotExistsAsync
+            (
                 PublicAccessType.None,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken
+            );
         }
         catch (Exception ex)
         {
@@ -50,7 +56,8 @@ internal sealed class AzureBlobObjectStore
         var normalizedKey = NormalizeObjectKey(key);
         try
         {
-            var blob = GetBlobClient(normalizedKey);
+            var context = GetContext();
+            var blob = GetBlobClient(context, normalizedKey);
             var uploadOptions = new BlobUploadOptions
             {
                 Conditions = new BlobRequestConditions
@@ -87,7 +94,8 @@ internal sealed class AzureBlobObjectStore
         var normalizedKey = NormalizeObjectKey(key);
         try
         {
-            var blob = GetBlobClient(normalizedKey);
+            var context = GetContext();
+            var blob = GetBlobClient(context, normalizedKey);
             var download = await blob.DownloadStreamingAsync(cancellationToken: cancellationToken);
             var details = download.Value.Details;
 
@@ -129,7 +137,8 @@ internal sealed class AzureBlobObjectStore
         var normalizedKey = NormalizeObjectKey(key);
         try
         {
-            var blob = GetBlobClient(normalizedKey);
+            var context = GetContext();
+            var blob = GetBlobClient(context, normalizedKey);
             var current = await ReadCurrentHashAndETagAsync(blob, cancellationToken);
             if (!string.Equals(
                     current.ContentHash,
@@ -189,7 +198,8 @@ internal sealed class AzureBlobObjectStore
         var normalizedKey = NormalizeObjectKey(key);
         try
         {
-            var blob = GetBlobClient(normalizedKey);
+            var context = GetContext();
+            var blob = GetBlobClient(context, normalizedKey);
             var current = await ReadCurrentHashAndETagAsync(blob, cancellationToken);
             if (!string.Equals(
                     current.ContentHash,
@@ -234,10 +244,8 @@ internal sealed class AzureBlobObjectStore
         var normalizedKey = NormalizeObjectKey(key);
         try
         {
-            var blob = GetBlobClient(normalizedKey);
-            var response = await blob.ExistsAsync(cancellationToken);
-
-            return response.Value;
+            var context = GetContext();
+            return await ExistsAsync(context, normalizedKey, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -256,8 +264,9 @@ internal sealed class AzureBlobObjectStore
     {
         _logger.LogTrace(nameof(GetFolderItemsAsync));
 
-        var container = GetContainerClient();
-        var objectStorePrefix = NormalizeObjectPrefix(_options.CurrentValue.Prefix);
+        var context = GetContext();
+        var container = context.ContainerClient;
+        var objectStorePrefix = context.ObjectStorePrefix;
         var requestedPrefix = NormalizeObjectPrefix(folderPrefix);
         var blobPrefix = ToBlobFolderPrefix(CombineBlobNameParts(
             objectStorePrefix,
@@ -352,30 +361,14 @@ internal sealed class AzureBlobObjectStore
         var normalizedDestination = NormalizeObjectKey(destination);
         try
         {
-            var sourceBlob = GetBlobClient(normalizedSource);
-            var destinationBlob = GetBlobClient(normalizedDestination);
-            var properties = await sourceBlob.GetPropertiesAsync(cancellationToken: cancellationToken);
-            var sourceConditions = new BlobRequestConditions
-            {
-                IfMatch = properties.Value.ETag,
-            };
-
-            if (await TryCopyAndDeleteAsync(
-                    sourceBlob,
-                    destinationBlob,
-                    properties.Value,
-                    sourceConditions,
-                    cancellationToken))
-            {
-                return;
-            }
-
-            await MoveByDownloadUploadDeleteAsync(
-                sourceBlob,
-                destinationBlob,
-                properties.Value,
-                sourceConditions,
-                cancellationToken);
+            var context = GetContext();
+            await MoveAsync
+            (
+                context,
+                normalizedSource,
+                normalizedDestination,
+                cancellationToken
+            );
         }
         catch (Exception ex)
         {
@@ -404,9 +397,10 @@ internal sealed class AzureBlobObjectStore
 
         try
         {
-            var container = GetContainerClient();
-            var objectStorePrefix = NormalizeObjectPrefix(_options.CurrentValue.Prefix);
-            var blobPrefix = ToBlobFolderPrefix(GetBlobName(normalizedSourcePrefix));
+            var context = GetContext();
+            var container = context.ContainerClient;
+            var objectStorePrefix = context.ObjectStorePrefix;
+            var blobPrefix = ToBlobFolderPrefix(GetBlobName(context, normalizedSourcePrefix));
             var moves = new List<(string Source, string Destination)>();
             var blobs = container.GetBlobsAsync
             (
@@ -435,13 +429,16 @@ internal sealed class AzureBlobObjectStore
                     $"Azure Blob source folder '{normalizedSourcePrefix}' does not exist.");
             }
 
-            if (await ExistsAsync(normalizedDestinationPrefix, cancellationToken))
+            if (await ExistsAsync(context, normalizedDestinationPrefix, cancellationToken))
             {
                 throw new YabtAzureBlobException(
                     $"Azure Blob destination path '{normalizedDestinationPrefix}' already exists as an object.");
             }
 
-            var destinationBlobPrefix = ToBlobFolderPrefix(GetBlobName(normalizedDestinationPrefix));
+            var destinationBlobPrefix = ToBlobFolderPrefix
+            (
+                GetBlobName(context, normalizedDestinationPrefix)
+            );
             var destinationBlobs = container.GetBlobsAsync
             (
                 BlobTraits.None,
@@ -460,7 +457,7 @@ internal sealed class AzureBlobObjectStore
 
             foreach (var move in moves)
             {
-                await MoveAsync(move.Source, move.Destination, cancellationToken);
+                await MoveAsync(context, move.Source, move.Destination, cancellationToken);
             }
         }
         catch (Exception ex)
@@ -469,6 +466,61 @@ internal sealed class AzureBlobObjectStore
                 $"Move failed for Azure Blob folder '{normalizedSourcePrefix}' to '{normalizedDestinationPrefix}'.",
                 ex);
         }
+    }
+
+    private async Task MoveAsync
+    (
+        AzureBlobObjectStoreContext context,
+        string source,
+        string destination,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(MoveAsync));
+
+        var sourceBlob = GetBlobClient(context, source);
+        var destinationBlob = GetBlobClient(context, destination);
+        var properties = await sourceBlob.GetPropertiesAsync(cancellationToken: cancellationToken);
+        var sourceConditions = new BlobRequestConditions
+        {
+            IfMatch = properties.Value.ETag,
+        };
+
+        if (await TryCopyAndDeleteAsync
+            (
+                sourceBlob,
+                destinationBlob,
+                properties.Value,
+                sourceConditions,
+                cancellationToken
+            ))
+        {
+            return;
+        }
+
+        await MoveByDownloadUploadDeleteAsync
+        (
+            sourceBlob,
+            destinationBlob,
+            properties.Value,
+            sourceConditions,
+            cancellationToken
+        );
+    }
+
+    private async Task<bool> ExistsAsync
+    (
+        AzureBlobObjectStoreContext context,
+        string key,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(ExistsAsync));
+
+        var blob = GetBlobClient(context, key);
+        var response = await blob.ExistsAsync(cancellationToken);
+
+        return response.Value;
     }
 
     private async Task<bool> TryCopyAndDeleteAsync
@@ -480,6 +532,8 @@ internal sealed class AzureBlobObjectStore
         CancellationToken cancellationToken
     )
     {
+        _logger.LogTrace(nameof(TryCopyAndDeleteAsync));
+
         try
         {
             var sourceUri = GetCopySourceUri(sourceBlob);
@@ -582,11 +636,17 @@ internal sealed class AzureBlobObjectStore
             new Dictionary<string, string>(properties.Metadata, StringComparer.Ordinal);
     }
 
-    private BlobClient GetBlobClient(string key)
+    private BlobClient GetBlobClient
+    (
+        AzureBlobObjectStoreContext context,
+        string key
+    )
     {
+        _logger.LogTrace(nameof(GetBlobClient));
+
         try
         {
-            return GetContainerClient().GetBlobClient(GetBlobName(key));
+            return context.ContainerClient.GetBlobClient(GetBlobName(context, key));
         }
         catch (Exception ex)
         {
@@ -596,32 +656,34 @@ internal sealed class AzureBlobObjectStore
         }
     }
 
-    private BlobContainerClient GetContainerClient()
+    internal AzureBlobObjectStoreContext GetContext()
     {
-        var options = _options.CurrentValue;
-        var containerName = options.GetEffectiveContainerName();
-        if (string.IsNullOrWhiteSpace(containerName))
-        {
-            throw new YabtAzureBlobException("Azure Blob object store requires a container name.");
-        }
+        _logger.LogTrace(nameof(GetContext));
 
-        if (!string.IsNullOrWhiteSpace(options.ConnectionString))
+        lock (_contextLock)
         {
-            return new BlobContainerClient(options.ConnectionString, containerName);
-        }
+            var options = _options.CurrentValue;
+            if (_context is null || !ReferenceEquals(_context.Options, options))
+            {
+                _context = new
+                (
+                    options,
+                    _containerClientFactory.Create(options),
+                    NormalizeObjectPrefix(options.Prefix)
+                );
+            }
 
-        if (options.ServiceUri is not null)
-        {
-            return new BlobServiceClient(options.ServiceUri).GetBlobContainerClient(containerName);
+            return _context;
         }
-
-        throw new YabtAzureBlobException(
-            "Azure Blob object store requires either a connection string or service URI.");
     }
 
-    private string GetBlobName(string key)
+    private static string GetBlobName
+    (
+        AzureBlobObjectStoreContext context,
+        string key
+    )
     {
-        return CombineBlobNameParts(_options.CurrentValue.Prefix, key);
+        return CombineBlobNameParts(context.ObjectStorePrefix, key);
     }
 
     private static string CombineBlobNameParts(params IEnumerable<string?> parts)

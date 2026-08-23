@@ -2,6 +2,12 @@ namespace Yabt.Sync;
 
 public interface IArchiveSynchronizer
 {
+    Task<SyncRunResult> BackupAsync
+    (
+        SyncRunRequest request,
+        CancellationToken cancellationToken = default
+    );
+
     Task<SyncRunResult> SyncAsync
     (
         SyncRunRequest request,

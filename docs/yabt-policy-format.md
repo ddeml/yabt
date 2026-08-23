@@ -65,4 +65,4 @@ A zip policy with provider options is:
 
 ## Operational State
 
-Do not store scan cursors, upload checkpoints, cache keys, last successful sync times, or retry state in folder policy files.
+Do not store scan cursors, upload checkpoints, cache keys, last successful backup times, or retry state in folder policy files.

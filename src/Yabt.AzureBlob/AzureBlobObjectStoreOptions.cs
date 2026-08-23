@@ -2,6 +2,8 @@ namespace Yabt.AzureBlob;
 
 public sealed class AzureBlobObjectStoreOptions
 {
+    public const string DefaultConfigurationSectionPath = "ObjectStores:AzureBlob";
+
     public string? ConnectionString { get; init; }
 
     public Uri? ServiceUri { get; init; }

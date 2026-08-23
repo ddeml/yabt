@@ -21,10 +21,7 @@
     {
       "id": "main-azure",
       "kind": "azureBlob",
-      "accountUri": "https://example.blob.core.windows.net",
-      "container": "archive",
-      "prefix": "personal",
-      "credentialRef": "main-azure"
+      "configSectionPath": "ObjectStores:MainAzure"
     },
     {
       "id": "pcloud",

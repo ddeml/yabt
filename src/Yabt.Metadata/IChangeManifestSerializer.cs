@@ -2,7 +2,11 @@ namespace Yabt.Metadata;
 
 public interface IChangeManifestSerializer
 {
-    ArchiveChangeManifest Create(IEnumerable<ArchiveChangeManifestEntry> entries);
+    ArchiveChangeManifest Create
+    (
+        IEnumerable<ArchiveChangeManifestEntry> entries,
+        string rootFormat
+    );
 
     Task WriteAsync
     (

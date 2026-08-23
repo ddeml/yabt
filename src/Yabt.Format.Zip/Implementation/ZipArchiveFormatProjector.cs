@@ -18,6 +18,7 @@ internal sealed class ZipArchiveFormatProjector
 ) : IArchiveFormatProjector
 {
     private const int DefaultHashBufferSize = 81_920;
+    private const string EmptyFolderMarkerFingerprint = "yabt-empty-v1:present";
 
     private static readonly byte[] PackageFingerprintDomain =
         Encoding.UTF8.GetBytes("yabt-zip-change-v1");
@@ -138,6 +139,7 @@ internal sealed class ZipArchiveFormatProjector
         CancellationToken cancellationToken
     )
     {
+        var hasItems = false;
         var sourceItems = sourceStore.GetFolderItemsAsync(
             folderPrefix,
             recursive: false,
@@ -146,6 +148,7 @@ internal sealed class ZipArchiveFormatProjector
         await foreach (var sourceItem in sourceItems)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            hasItems = true;
 
             if (sourceItem.IsFolder)
             {
@@ -178,9 +181,28 @@ internal sealed class ZipArchiveFormatProjector
                 relativePath,
                 fingerprintResult.Length,
                 sourceItem.Object.LastModifiedUtc?.ToUniversalTime() ?? DefaultLastModifiedUtc,
-                fingerprintResult.ChangeFingerprint
+                fingerprintResult.ChangeFingerprint,
+                IsEmptyFolderMarker: false
             ));
         }
+
+        if (hasItems) { return; }
+
+        var folderRelativePath = ArchiveLayout.RemovePrefix(
+            ArchiveLayout.NormalizeObjectKey(folderPrefix),
+            sourcePrefix);
+        var markerRelativePath = ArchiveLayout.CombinePrefixAndRelativePath(
+            folderRelativePath,
+            ArchiveFolderMarkerFileNames.EmptyFolder);
+        sourceObjects.Add(new
+        (
+            SourceKey: null,
+            markerRelativePath,
+            Length: 0,
+            DefaultLastModifiedUtc,
+            EmptyFolderMarkerFingerprint,
+            IsEmptyFolderMarker: true
+        ));
     }
 
     private static ZipSourceObjectFingerprintResult GetSourceObjectFingerprint
@@ -251,8 +273,17 @@ internal sealed class ZipArchiveFormatProjector
                     );
                     entry.LastWriteTime = sourceObject.LastModifiedUtc.ToUniversalTime();
 
+                    if (sourceObject.IsEmptyFolderMarker)
+                    {
+                        await using var markerContent = entry.Open();
+                        completedSourceObjects.Add(sourceObject);
+                        continue;
+                    }
+
                     await using var sourceContent = await sourceStore.OpenReadAsync(
-                        sourceObject.SourceKey,
+                        sourceObject.SourceKey ??
+                            throw new InvalidOperationException(
+                                $"ZIP source object '{sourceObject.RelativePath}' has no source key."),
                         cancellationToken);
                     await using var entryContent = entry.Open();
                     if (sourceObject.ChangeFingerprint is not null)
@@ -394,7 +425,7 @@ internal sealed class ZipArchiveFormatProjector
                 hash,
                 sourceObject.ChangeFingerprint ??
                     throw new InvalidOperationException(
-                        $"ZIP source object '{sourceObject.SourceKey}' has no change fingerprint."));
+                        $"ZIP source object '{sourceObject.RelativePath}' has no change fingerprint."));
         }
 
         var hashValue = hash.GetHashAndReset();
@@ -461,11 +492,12 @@ internal sealed class ZipArchiveFormatProjector
 
     private sealed record ZipSourceObject
     (
-        string SourceKey,
+        string? SourceKey,
         string RelativePath,
         long? Length,
         DateTimeOffset LastModifiedUtc,
-        string? ChangeFingerprint
+        string? ChangeFingerprint,
+        bool IsEmptyFolderMarker
     );
 
     private sealed record ZipSourceObjectFingerprintResult

@@ -7,7 +7,8 @@ public sealed record BackupRootStore
 (
     string Id,
     string Kind,
-    string? CredentialRef = default
+    string? CredentialRef = default,
+    string? ConfigSectionPath = default
 )
 {
     [JsonExtensionData]

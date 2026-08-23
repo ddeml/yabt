@@ -1,14 +1,28 @@
 {
   "profiles": {
-    "sync": {
+    "backup": {
       "commandName": "Project",
-      "commandLineArgs": "sync",
-      "workingDirectory": "..\\..\\test-fs\\source"
+      "commandLineArgs": "backup \r\n--target-store-id azure-dev",
+      "workingDirectory": "..\\..\\test-fs\\source",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
     },
     "deduplicate": {
       "commandName": "Project",
-      "commandLineArgs": "deduplicate",
-      "workingDirectory": "..\\..\\test-fs\\source"
+      "commandLineArgs": "deduplicate\r\n--target-store-id azure-dev",
+      "workingDirectory": "..\\..\\test-fs\\source",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    },
+    "restore": {
+      "commandName": "Project",
+      "commandLineArgs": "restore \r\n--target-store-id azure-dev\r\n--destination-root ..\\restore",
+      "workingDirectory": "..\\..\\test-fs\\source",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
     }
   }
 }

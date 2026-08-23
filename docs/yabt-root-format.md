@@ -22,10 +22,10 @@ The root descriptor records:
 - Optional default object store id.
 - Optional change manifest compression.
 - Optional history tiny-file threshold for deduplication.
-- Non-secret store configuration.
-- Credential references.
+- Non-secret store configuration or a reference to runtime configuration.
+- Credential references for providers that support them.
 
-It does not record operational state such as last sync time, scan cursors, upload checkpoints, cache keys, or retry state.
+It does not record operational state such as last backup time, scan cursors, upload checkpoints, cache keys, or retry state.
 
 During MVP development, readers accept only `schemaVersion: 1`.
 
@@ -41,7 +41,29 @@ Initial store kinds:
 
 The same store can be a source, target, backup location, restore location, or reconciliation peer depending on the command being executed.
 
-Provider-specific store parameters live in the same JSON object as the store declaration. For example, a filesystem store may have `rootPath`, Azure Blob may have `accountUri`, `container`, and `prefix`, and WebDAV may have `endpoint` and `rootPath`.
+Provider-specific store parameters normally live in the same JSON object as the store declaration. For example, a filesystem store may have `rootPath`, while WebDAV may have `endpoint` and `rootPath`.
+
+Azure Blob is configured through the optional `configSectionPath` property instead. An Azure store declaration contains only `id`, `kind`, and optionally `configSectionPath`. When the property is missing or null, YABT uses `ObjectStores:AzureBlob`.
+
+YABT binds the selected section from the application's merged `IConfiguration`. This allows non-secret values such as `ServiceUri`, `ContainerName`, and `Prefix` to come from `appsettings.json`, while credentials can come from User Secrets, environment variables, or another configuration provider. A nonempty `ConnectionString` takes precedence. Otherwise, YABT requires `ServiceUri` and uses the host's registered Azure `TokenCredential`, which defaults to `DefaultAzureCredential`. A host may register a more specific credential such as `ManagedIdentityCredential`. A token credential authenticates access but does not identify the storage account endpoint.
+
+An Azure `ServiceUri` must be an absolute HTTPS URI and must not contain user information, a query, or a fragment. In particular, do not append a SAS token to this URI; deliver it through an explicitly supported runtime credential mechanism instead.
+
+For a store that selects `ObjectStores:MainAzure`, non-secret `appsettings.json` values can look like this:
+
+```json
+{
+  "ObjectStores": {
+    "MainAzure": {
+      "ServiceUri": "https://example.blob.core.windows.net",
+      "ContainerName": "archive",
+      "Prefix": "personal"
+    }
+  }
+}
+```
+
+Omit `ConnectionString` to use the registered token credential. If a connection string is required, supply `ObjectStores:MainAzure:ConnectionString` through User Secrets or the environment variable `ObjectStores__MainAzure__ConnectionString`, rather than committing it to an appsettings file.
 
 When a command does not specify a target store id, the optional root-level `defaultStoreId` selects the default store. If neither the command nor the descriptor selects a store, commands use the first store declaration and warn when more than one store is configured.
 
@@ -104,7 +126,9 @@ This option does not change synchronization behavior. History scanning and manda
 
 Secrets must not be stored in `.yabt-root.json`.
 
-Store declarations may include a `credentialRef` value. Runtime configuration resolves that reference through mechanisms such as Azure identity, OS credential storage, environment variables, user secrets, or an external secret store.
+Store declarations may include a `credentialRef` value for providers such as WebDAV. Runtime configuration resolves that reference through mechanisms such as OS credential storage, environment variables, user secrets, or an external secret store.
+
+Azure Blob declarations do not use `credentialRef` or contain endpoint, container, prefix, or authentication values. Their optional `configSectionPath` selects the runtime configuration section described above. When no explicit Azure credential is configured, `DefaultAzureCredential` can use a developer login locally or managed identity when YABT runs in Azure.
 
 ## Draft Shape
 
@@ -132,10 +156,7 @@ Store declarations may include a `credentialRef` value. Runtime configuration re
     {
       "id": "main-azure",
       "kind": "azureBlob",
-      "accountUri": "https://example.blob.core.windows.net",
-      "container": "archive",
-      "prefix": "personal",
-      "credentialRef": "main-azure"
+      "configSectionPath": "ObjectStores:MainAzure"
     },
     {
       "id": "pcloud",

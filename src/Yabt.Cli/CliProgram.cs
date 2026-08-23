@@ -16,7 +16,7 @@ public static class CliProgram
 
         builder.Services
             .AddYabtFileSystemObjectStore("ObjectStores:FileSystem")
-            .AddYabtAzureBlobObjectStore("ObjectStores:AzureBlob")
+            .AddYabtAzureBlobObjectStore()
             .AddYabtWebDavObjectStore("ObjectStores:WebDav")
             .AddYabtMirrorFormatProjector()
             .AddYabtZipFormatProjector("Formats:Zip")
