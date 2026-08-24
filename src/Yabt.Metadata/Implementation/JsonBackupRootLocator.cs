@@ -22,8 +22,8 @@ internal sealed class JsonBackupRootLocator(IBackupRootSerializer _serializer) :
             if (File.Exists(descriptorPath))
             {
                 await using var stream = File.OpenRead(descriptorPath);
-                var descriptor = await _serializer.ReadAsync(stream, cancellationToken);
-                return new(currentPath, descriptor);
+                var document = await _serializer.ReadDocumentAsync(stream, cancellationToken);
+                return new(currentPath, document);
             }
 
             currentPath = Directory.GetParent(currentPath)?.FullName;

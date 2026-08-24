@@ -5,22 +5,30 @@ using Yabt.Core.Models;
 
 namespace Yabt.Format.Mirror.Implementation;
 
-internal sealed class MirrorArchiveFormatProjector
+internal sealed class MirrorArchiveFormatHandler
 (
-    ILogger<MirrorArchiveFormatProjector> _logger
-) : IArchiveFormatProjector
+    ILogger<MirrorArchiveFormatHandler> _logger
+) : IArchiveFormatHandler
 {
     public string FormatName => MirrorArchiveFormatName.Value;
 
     public bool ProjectsBesideSourceFolder => false;
 
-    public async IAsyncEnumerable<ArchiveProjectedObject> ProjectAsync
+    public bool CanRestoreArtifact(ArchiveProjectedObject artifact)
+    {
+        _logger.LogTrace(nameof(CanRestoreArtifact));
+
+        ArgumentNullException.ThrowIfNull(artifact);
+        return true;
+    }
+
+    public async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupAsync
     (
         ArchiveProjectionRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        _logger.LogTrace(nameof(ProjectAsync));
+        _logger.LogTrace(nameof(ProjectBackupAsync));
 
         ArgumentNullException.ThrowIfNull(request);
 
@@ -43,6 +51,39 @@ internal sealed class MirrorArchiveFormatProjector
         }
 
         _logger.LogMirrorProjectionCompleted(projectedObjectCount);
+    }
+
+    public Task<ArchiveRestoreProjection> ProjectRestoreAsync
+    (
+        ArchiveRestoreRequest request,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(ProjectRestoreAsync));
+
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var artifact = request.Artifact;
+        var relativePath = ArchiveLayout.NormalizeObjectKey(artifact.RelativePath);
+        if (string.IsNullOrEmpty(relativePath))
+        {
+            throw new YabtFormatMirrorException(
+                "A mirror restore artifact must have a nonempty relative path.");
+        }
+
+        if (IsEmptyFolderMarker(relativePath))
+        {
+            var parentSeparator = relativePath.LastIndexOf('/');
+            var directoryPath = parentSeparator < 0 ?
+                string.Empty :
+                relativePath[..parentSeparator];
+            return Task.FromResult(new ArchiveRestoreProjection(
+                directories: string.IsNullOrEmpty(directoryPath) ? [] : [directoryPath]));
+        }
+
+        return Task.FromResult(new ArchiveRestoreProjection(
+            objects: [artifact with { RelativePath = relativePath }]));
     }
 
     private async IAsyncEnumerable<ArchiveProjectedObject> ProjectFolderAsync
@@ -128,7 +169,8 @@ internal sealed class MirrorArchiveFormatProjector
             sourceObject.ContentLength,
             sourceObject.LastModifiedUtc,
             sourceObject.ContentHash,
-            changeFingerprint
+            changeFingerprint,
+            sourceObject.Projection
         );
     }
 
@@ -173,4 +215,13 @@ internal sealed class MirrorArchiveFormatProjector
             ChangeFingerprint: "yabt-empty-v1:present"
         );
     }
+
+    private static bool IsEmptyFolderMarker(string relativePath) =>
+        string.Equals(
+            relativePath,
+            ArchiveFolderMarkerFileNames.EmptyFolder,
+            StringComparison.Ordinal) ||
+        relativePath.EndsWith(
+            $"/{ArchiveFolderMarkerFileNames.EmptyFolder}",
+            StringComparison.Ordinal);
 }

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/yabt/logical-state-manifest.schema.json",
+  "title": "YABT restored-filesystem logical state manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "documentType",
+    "schemaVersion",
+    "entries",
+    "manifestHash"
+  ],
+  "properties": {
+    "documentType": {
+      "const": "yabt.logicalStateManifest"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    },
+    "manifestHash": {
+      "$ref": "#/$defs/hash"
+    }
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
+    },
+    "logicalPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))[^\\s/\\\\](?:[^/\\\\]*[^\\s/\\\\])?(?:/[^\\s/\\\\](?:[^/\\\\]*[^\\s/\\\\])?)*$"
+    },
+    "statFingerprint": {
+      "type": "string",
+      "pattern": "^stat-v1:[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z:(?:0|[1-9][0-9]*)$"
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logicalRelativePath",
+        "statFingerprint",
+        "contentHash"
+      ],
+      "properties": {
+        "logicalRelativePath": { "$ref": "#/$defs/logicalPath" },
+        "statFingerprint": { "$ref": "#/$defs/statFingerprint" },
+        "contentHash": { "$ref": "#/$defs/hash" }
+      }
+    }
+  }
+}

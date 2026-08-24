@@ -5,5 +5,15 @@ namespace Yabt.Metadata;
 public sealed record BackupRootLocation
 (
     string RootPath,
-    BackupRootDescriptor Descriptor
-);
+    BackupRootDescriptor Descriptor,
+    BackupRootDocument? Document = default
+)
+{
+    public BackupRootLocation
+    (
+        string rootPath,
+        BackupRootDocument document
+    ) : this(rootPath, document.Descriptor, document)
+    {
+    }
+}

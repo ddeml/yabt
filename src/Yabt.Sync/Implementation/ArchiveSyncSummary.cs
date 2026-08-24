@@ -29,4 +29,16 @@ internal sealed class ArchiveSyncSummary
     {
         UnchangedCount++;
     }
+
+    public void PromoteUnchangedToChanged()
+    {
+        if (UnchangedCount <= 0)
+        {
+            throw new InvalidOperationException(
+                "An unchanged archive item is required before it can be promoted to changed.");
+        }
+
+        UnchangedCount--;
+        ChangedCount++;
+    }
 }

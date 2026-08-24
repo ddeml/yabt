@@ -22,6 +22,7 @@ public static class YabtMetadataServiceCollectionExtensions
         services.AddSingleton<IFolderPolicyReader, JsonFolderPolicyReader>();
         services.AddSingleton<IHistoryManifestSerializer, JsonHistoryManifestSerializer>();
         services.AddSingleton<IHistoryReferenceSerializer, JsonHistoryReferenceSerializer>();
+        services.AddSingleton<ILogicalStateManifestSerializer, JsonLogicalStateManifestSerializer>();
         services.AddSingleton<IManifestSerializer, JsonManifestSerializer>();
         return services;
     }

@@ -16,6 +16,8 @@ The leading slash is conceptual. Azure Blob names are stored without it, for exa
 
 `.yabt-root.json` identifies the root role, layout, and known object stores. It must not contain secrets.
 
+Backup validates this document and copies its exact bytes to the archive as reserved root metadata. It remains outside `livePrefix` and outside packages, so changing configuration does not change a ZIP identity. The schema-version-3 live change manifest records its actual-byte hash and length. Restore installs the same bytes unchanged, including whitespace and machine-specific filesystem paths; the user manually edits paths that are obsolete on the restored machine.
+
 The configured layout maps logical branches to physical prefixes:
 
 - `livePrefix`: current logical state.
@@ -28,11 +30,11 @@ livePrefix = ""
 histPrefix = ".yabt-hist"
 ```
 
-This keeps ordinary source folders rooted at their actual folder root. If a real data name would clash with `.yabt-root.json`, `.yabt-change-manifest.json.br`, `.yabt-change-manifest.json`, `.yabt-change-manifest.invalid`, `.yabt-policy.json`, `.yabt-tmp`, or the configured history prefix, initialize the root with different prefixes before using it.
+This keeps ordinary source folders rooted at their actual folder root. If a real data name would clash with `.yabt-root.json`, `.yabt-change-manifest.json.br`, `.yabt-change-manifest.json`, `.yabt-change-manifest.invalid`, `.yabt-logical-state-manifest.json`, `.yabt-logical-state-manifest.invalid`, `.yabt-policy.json`, `.yabt-tmp`, or the configured history prefix, initialize the root with different prefixes before using it.
 
 When `livePrefix` is empty, YABT metadata paths and the configured history prefix are internal to the archive root. They are not ordinary live data even though they physically sit under the same root.
 
-The logical change manifest always sits at the archive root, outside an explicit `livePrefix`. Brotli compression is the default, producing `.yabt-change-manifest.json.br`; `changeManifestCompression: "none"` produces `.yabt-change-manifest.json`. Its paths are logical live-relative paths. Both names are reserved when the live prefix is empty, so ordinary root source files with either exact name are excluded from live projection. Readers always inspect both representations. If both exist, they must validate to the same self-hash before either is trusted. A successful mutating backup deletes obsolete representations and leaves only the configured one live. During recovery from conflicting representations, `.yabt-change-manifest.invalid` may appear temporarily at the root. Its presence disables fast evidence until replacement is complete, and a successful backup deletes it last. Root change manifests and their invalidation marker are internal comparison metadata and are never moved to history.
+The logical change manifest always sits at the archive root, outside an explicit `livePrefix`. Brotli compression is the default, producing `.yabt-change-manifest.json.br`; `changeManifestCompression: "none"` produces `.yabt-change-manifest.json`. Its paths are logical live-relative paths. Schema version 3 also records exact root-descriptor evidence and projection provenance. Both names are reserved when the live prefix is empty, so ordinary root source files with either exact name are excluded from live projection. Readers always inspect both representations. If both exist, they must validate to the same self-hash before either is trusted. A successful mutating backup deletes obsolete representations and leaves only the configured one live. During recovery from conflicting representations, `.yabt-change-manifest.invalid` may appear temporarily at the root. Its presence disables fast evidence until replacement is complete, and a successful backup deletes it last. Root change manifests and their invalidation marker are internal comparison metadata and are never moved to history.
 
 YABT reserves `.yabt-tmp` for provider/runtime plumbing. The filesystem provider stages each upload there before atomically moving the completed file to its final path. Each upload uses a unique temporary file and removes that file after success or a controlled failure. Archive-mutating commands also coordinate through `.yabt-tmp/archive-mutation-lock.json`; on filesystem targets the lock is held by an exclusive file handle, while remote providers use conditional object replacement. Filesystem conditional object mutations share an empty `conditional-mutation.lock`, which may remain present while idle. The shared directory intentionally remains so concurrent processes do not race directory creation against deletion. YABT ignores it during synchronization and rejects live or history prefixes that overlap it, including case variants.
 
@@ -71,18 +73,29 @@ live/Documents/report.docx
 live/Photos/Vacation/img001.jpg
 ```
 
-The intended layout for folders using the `zip` format keeps the package artifact and adjacent manifest as visible objects:
+Folders using the `zip` format keep both the package artifact and its adjacent manifest as visible objects:
 
 ```text
 Photos/Vacation.xxh128-l4fjobirfl7o15l1ofkd5d7m0s.zip
-Photos/Vacation.xxh128-l4fjobirfl7o15l1ofkd5d7m0s.manifest.json
+Photos/Vacation.xxh128-l4fjobirfl7o15l1ofkd5d7m0s.zip.yabt-manifest.json
 ```
 
-Here the source folder is `Photos/Vacation`, but its package objects are placed directly in the target `Photos` folder. No target `Photos/Vacation` folder is created. The folder policy or equivalent artifact-scoped descriptor remains outside the package, in the same parent folder, so a browser or restore tool can identify the folder representation without opening the package first.
+Here the source folder is `Photos/Vacation`, but its package objects are placed directly in the target `Photos` folder. No target `Photos/Vacation` folder is created. The adjacent manifest contains the logical path, canonical policy snapshot, exact entry metadata, and projection provenance, so a browser or restore tool can identify the representation without opening the package. The original `.yabt-policy.json` bytes remain a normal payload entry and reappear when the folder is restored.
 
-The package name is deterministic for the projected representation, including archived metadata such as entry modification times. Its full xxHash128 value uses lowercase unpadded Base32hex in the file name so the token is stable on case-insensitive file systems. Package creation time belongs in the planned manifest instead of the live object name, so synchronizing an unchanged projected representation again resolves to the same key. A changed representation produces a different full-hash name, and the synchronizer moves the replaced name to history.
+The ZIP also contains the byte-identical manifest at the reserved entry `.yabt-package-manifest.json`. The package name is deterministic for the projected representation, including its logical path, policy, nested provenance, and archived metadata such as exact entry modification times. Its full xxHash128 value uses lowercase unpadded Base32hex in the file name so the token is stable on case-insensitive file systems. Deterministic creation metadata belongs in the manifest instead of the live object name, so synchronizing an unchanged projected representation again resolves to the same key. A changed representation produces a different full-hash name, and the synchronizer moves both replaced projection artifacts to history.
 
-The current initial ZIP projector emits the `.zip` artifact only. The adjacent manifest and external descriptor shown above remain planned work.
+When one packaged folder contains another packaged folder, the outer package manifest labels the inner package and adjacent-manifest entries with their nested projection provenance. Restore repeatedly groups and reverses those artifacts until only logical files and native directories remain. An ordinary file whose name merely resembles a YABT package has no provenance and remains an ordinary file.
+
+## Restored Filesystem Metadata
+
+A successful restore writes these reserved objects at the filesystem destination root, outside an explicit `livePrefix`:
+
+```text
+/.yabt-root.json
+/.yabt-logical-state-manifest.json
+```
+
+The root descriptor is the exact archived document. The logical-state manifest is destination-specific quick evidence: it records each logical file path's current canonical `stat-v1` fingerprint and validated content hash. During a restore mutation, `.yabt-logical-state-manifest.invalid` may temporarily appear. A leftover marker makes the evidence untrusted, so the next restore hashes destination files as needed and rebuilds the document. A destination live change manifest is archive-projection evidence rather than logical-filesystem evidence; restore invalidates and removes it when live state or root metadata changes.
 
 ## Hist
 

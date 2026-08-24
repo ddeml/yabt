@@ -99,6 +99,11 @@ internal sealed class CommandRunner
                 "relative paths use the current working directory.",
             Required = true,
         };
+        var replaceRootDescriptorOption = new Option<bool>("--replace-root-descriptor")
+        {
+            Description = "Historize and replace a different destination .yabt-root.json " +
+                "with the exact descriptor stored in the archive.",
+        };
 
         var command = new Command(commandName, GetCommandDescription(commandName))
         {
@@ -110,8 +115,10 @@ internal sealed class CommandRunner
             command.Aliases.Add(YabtCliCommandNames.SyncAlias);
         }
 
-        var supportsByteForByte =
-            commandName is YabtCliCommandNames.Backup or YabtCliCommandNames.Verify;
+        var supportsByteForByte = commandName is
+            YabtCliCommandNames.Backup or
+            YabtCliCommandNames.Restore or
+            YabtCliCommandNames.Verify;
         if (supportsByteForByte)
         {
             command.Options.Add(byteForByteOption);
@@ -119,6 +126,7 @@ internal sealed class CommandRunner
         if (commandName == YabtCliCommandNames.Restore)
         {
             command.Options.Add(destinationRootOption);
+            command.Options.Add(replaceRootDescriptorOption);
         }
 
         command.SetAction(async (parseResult, cancellationToken) =>
@@ -130,6 +138,8 @@ internal sealed class CommandRunner
             var destinationRoot = commandName == YabtCliCommandNames.Restore ?
                 parseResult.GetValue(destinationRootOption) :
                 null;
+            var replaceRootDescriptor = commandName == YabtCliCommandNames.Restore &&
+                parseResult.GetValue(replaceRootDescriptorOption);
             return await RunArchiveCommandAsync
             (
                 commandName,
@@ -138,6 +148,7 @@ internal sealed class CommandRunner
                 targetStoreId,
                 byteForByte,
                 destinationRoot,
+                replaceRootDescriptor,
                 cancellationToken
             );
         });
@@ -194,6 +205,7 @@ internal sealed class CommandRunner
         string? targetStoreId,
         bool byteForByte,
         string? destinationRoot,
+        bool replaceRootDescriptor,
         CancellationToken cancellationToken
     )
     {
@@ -203,7 +215,8 @@ internal sealed class CommandRunner
             dryRun,
             targetStoreId,
             byteForByte,
-            destinationRoot
+            destinationRoot,
+            replaceRootDescriptor
         );
         var result = commandName switch
         {

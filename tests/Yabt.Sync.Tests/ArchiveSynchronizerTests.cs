@@ -55,6 +55,365 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
+    public async Task BackupAsyncCarriesExactRootDescriptorAndRecordsV3Evidence()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var descriptor = CreateRootDescriptor(
+                [CreateFileSystemStore("target", archiveRoot)]);
+            var descriptorBytes = CreateExactRootDescriptorBytes(descriptor);
+            await WriteRootDescriptorBytesAsync(sourceRoot, descriptorBytes);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            var result = await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(result.Completed);
+            CollectionAssert.AreEqual(
+                descriptorBytes,
+                await File.ReadAllBytesAsync(Path.Combine(
+                    archiveRoot,
+                    BackupRootFileNames.Primary)));
+
+            var manifestSerializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+            await using var manifestContent = File.OpenRead(Path.Combine(
+                archiveRoot,
+                ArchiveChangeManifest.BrotliFileName));
+            var manifest = await ReadChangeManifestAsync(
+                manifestSerializer,
+                manifestContent,
+                ArchiveChangeManifestCompression.Brotli);
+            Assert.AreEqual(ArchiveChangeManifest.ExpectedSchemaVersion, manifest.SchemaVersion);
+            Assert.AreEqual(descriptorBytes.LongLength, manifest.RootDescriptorContentLength);
+            Assert.AreEqual(
+                ArchiveHash.Compute(descriptorBytes),
+                manifest.RootDescriptorContentHash);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task VerifyAndBackupDryRunReportMissingArchivedRootDescriptorWithoutMutating()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var descriptor = CreateRootDescriptor(
+                [CreateFileSystemStore("target", archiveRoot)]);
+            var descriptorBytes = CreateExactRootDescriptorBytes(descriptor);
+            await WriteRootDescriptorBytesAsync(sourceRoot, descriptorBytes);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var archivedDescriptorPath = Path.Combine(
+                archiveRoot,
+                BackupRootFileNames.Primary);
+            var changeManifestPath = Path.Combine(
+                archiveRoot,
+                ArchiveChangeManifest.BrotliFileName);
+            File.Delete(archivedDescriptorPath);
+            var changeManifestBytes = await File.ReadAllBytesAsync(changeManifestPath);
+
+            var verifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsFalse(verifyResult.Completed);
+            StringAssert.Contains(verifyResult.Message, "root descriptor is missing");
+            Assert.IsFalse(File.Exists(archivedDescriptorPath));
+            CollectionAssert.AreEqual(
+                changeManifestBytes,
+                await File.ReadAllBytesAsync(changeManifestPath));
+
+            var dryRunResult = await synchronizer.BackupAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DryRun: true
+            ));
+
+            Assert.IsTrue(dryRunResult.Completed);
+            StringAssert.Contains(dryRunResult.Message, "root descriptor is missing");
+            StringAssert.Contains(
+                dryRunResult.Message,
+                "a mutating backup would install the exact source bytes");
+            Assert.IsFalse(File.Exists(archivedDescriptorPath));
+            CollectionAssert.AreEqual(
+                changeManifestBytes,
+                await File.ReadAllBytesAsync(changeManifestPath));
+            Assert.IsFalse(Directory.Exists(Path.Combine(archiveRoot, ".yabt-hist")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task VerifyAndBackupDryRunReportDifferentArchivedRootDescriptorWithoutMutating()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var descriptor = CreateRootDescriptor(
+                [CreateFileSystemStore("target", archiveRoot)]);
+            var initialDescriptorBytes = CreateExactRootDescriptorBytes(descriptor);
+            await WriteRootDescriptorBytesAsync(sourceRoot, initialDescriptorBytes);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var archivedDescriptorPath = Path.Combine(
+                archiveRoot,
+                BackupRootFileNames.Primary);
+            var changeManifestPath = Path.Combine(
+                archiveRoot,
+                ArchiveChangeManifest.BrotliFileName);
+            var archivedDescriptorBytes = await File.ReadAllBytesAsync(archivedDescriptorPath);
+            var changeManifestBytes = await File.ReadAllBytesAsync(changeManifestPath);
+            var reconfiguredSourceDescriptorBytes = JsonSerializer.SerializeToUtf8Bytes(
+                descriptor,
+                JsonOptions);
+            Assert.IsFalse(initialDescriptorBytes.SequenceEqual(reconfiguredSourceDescriptorBytes));
+            await WriteRootDescriptorBytesAsync(
+                sourceRoot,
+                reconfiguredSourceDescriptorBytes);
+
+            var verifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsFalse(verifyResult.Completed);
+            StringAssert.Contains(
+                verifyResult.Message,
+                "root descriptor differs from the source descriptor");
+            CollectionAssert.AreEqual(
+                archivedDescriptorBytes,
+                await File.ReadAllBytesAsync(archivedDescriptorPath));
+            CollectionAssert.AreEqual(
+                changeManifestBytes,
+                await File.ReadAllBytesAsync(changeManifestPath));
+
+            var dryRunResult = await synchronizer.BackupAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DryRun: true
+            ));
+
+            Assert.IsTrue(dryRunResult.Completed);
+            StringAssert.Contains(
+                dryRunResult.Message,
+                "root descriptor differs from the source descriptor");
+            StringAssert.Contains(
+                dryRunResult.Message,
+                "a mutating backup would install the exact source bytes");
+            CollectionAssert.AreEqual(
+                archivedDescriptorBytes,
+                await File.ReadAllBytesAsync(archivedDescriptorPath));
+            CollectionAssert.AreEqual(
+                changeManifestBytes,
+                await File.ReadAllBytesAsync(changeManifestPath));
+            Assert.IsFalse(Directory.Exists(Path.Combine(archiveRoot, ".yabt-hist")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncCarriesExactRootDescriptorWithoutRewritingConfiguredPaths()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            var descriptor = CreateRootDescriptor(
+                [CreateFileSystemStore("target", archiveRoot)]);
+            var descriptorBytes = CreateExactRootDescriptorBytes(descriptor);
+            await WriteRootDescriptorBytesAsync(sourceRoot, descriptorBytes);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var result = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(result.Completed);
+            var restoredDescriptorBytes = await File.ReadAllBytesAsync(Path.Combine(
+                destinationRoot,
+                BackupRootFileNames.Primary));
+            CollectionAssert.AreEqual(descriptorBytes, restoredDescriptorBytes);
+
+            var rootSerializer = serviceProvider.GetRequiredService<IBackupRootSerializer>();
+            await using var restoredDescriptorContent = new MemoryStream(
+                restoredDescriptorBytes,
+                writable: false);
+            var restoredDocument = await rootSerializer.ReadDocumentAsync(
+                restoredDescriptorContent);
+            var restoredStore = restoredDocument.Descriptor.Stores.Single();
+            Assert.IsNotNull(restoredStore.ProviderProperties);
+            Assert.AreEqual(
+                archiveRoot,
+                restoredStore.ProviderProperties["rootPath"].GetString());
+            Assert.AreNotEqual(
+                destinationRoot,
+                restoredStore.ProviderProperties["rootPath"].GetString());
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncRequiresOptInBeforeReplacingSameArchiveDescriptor()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            var destinationArchiveRoot = Path.Combine(workspace, "destination-archive");
+            var archivedDescriptor = CreateRootDescriptor(
+                [CreateFileSystemStore("target", archiveRoot)]);
+            var archivedDescriptorBytes = CreateExactRootDescriptorBytes(archivedDescriptor);
+            await WriteRootDescriptorBytesAsync(sourceRoot, archivedDescriptorBytes);
+            await InitializeSourceRootAsync(
+                destinationRoot,
+                [CreateFileSystemStore("destination", destinationArchiveRoot)]);
+            var existingDescriptorPath = Path.Combine(
+                destinationRoot,
+                BackupRootFileNames.Primary);
+            var existingDescriptorBytes = await File.ReadAllBytesAsync(existingDescriptorPath);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
+
+            var timeProvider = new FixedTimeProvider(
+                new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero));
+            using var serviceProvider = CreateServices(timeProvider).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+                () => synchronizer.RestoreAsync(new SyncRunRequest
+                (
+                    sourceRoot,
+                    DestinationRoot: destinationRoot
+                )));
+
+            StringAssert.Contains(exception.Message, "--replace-root-descriptor");
+            CollectionAssert.AreEqual(
+                existingDescriptorBytes,
+                await File.ReadAllBytesAsync(existingDescriptorPath));
+            Assert.IsFalse(File.Exists(Path.Combine(destinationRoot, "file.txt")));
+
+            var result = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot,
+                ReplaceRootDescriptor: true
+            ));
+
+            Assert.IsTrue(result.Completed);
+            CollectionAssert.AreEqual(
+                archivedDescriptorBytes,
+                await File.ReadAllBytesAsync(existingDescriptorPath));
+            CollectionAssert.AreEqual(
+                existingDescriptorBytes,
+                await File.ReadAllBytesAsync(Path.Combine(
+                    destinationRoot,
+                    ".yabt-hist",
+                    "20260824T120000Z",
+                    BackupRootFileNames.Primary)));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task BackupAndRestoreAsyncUseCustomBidirectionalFormatHandler()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            var sourceBytes = Encoding.UTF8.GetBytes("custom format round-trip content");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await WritePolicyAsync(
+                sourceRoot,
+                TestBidirectionalArchiveFormatHandler.FormatNameValue);
+            await File.WriteAllBytesAsync(
+                Path.Combine(sourceRoot, TestBidirectionalArchiveFormatHandler.SourceFileName),
+                sourceBytes);
+
+            var formatHandler = new TestBidirectionalArchiveFormatHandler();
+            using var serviceProvider = CreateCustomFormatServices(formatHandler)
+                .BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            var backupResult = await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(backupResult.Completed);
+            Assert.AreEqual(1, backupResult.NewCount);
+            Assert.AreEqual(1, formatHandler.BackupProjectionCount);
+            Assert.AreEqual(0, formatHandler.RestoreProjectionCount);
+            var artifactPath = Path.Combine(
+                archiveRoot,
+                TestBidirectionalArchiveFormatHandler.ArtifactFileName);
+            Assert.IsTrue(File.Exists(artifactPath));
+            Assert.IsFalse(TestBidirectionalArchiveFormatHandler.ArtifactFileName.EndsWith(
+                ".zip",
+                StringComparison.OrdinalIgnoreCase));
+            var artifactBytes = await File.ReadAllBytesAsync(artifactPath);
+            Assert.IsFalse(sourceBytes.SequenceEqual(artifactBytes));
+
+            var restoreResult = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(restoreResult.Completed);
+            Assert.AreEqual(1, restoreResult.NewCount);
+            Assert.AreEqual(1, formatHandler.BackupProjectionCount);
+            Assert.AreEqual(1, formatHandler.RestoreProjectionCount);
+            CollectionAssert.AreEqual(
+                sourceBytes,
+                await File.ReadAllBytesAsync(Path.Combine(
+                    destinationRoot,
+                    TestBidirectionalArchiveFormatHandler.SourceFileName)));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
     public async Task BackupAsyncRejectsEmptyHistoryPrefix()
     {
         var workspace = CreateWorkspacePath();
@@ -71,11 +430,56 @@ public sealed class ArchiveSynchronizerTests
             using var serviceProvider = CreateServices().BuildServiceProvider();
             var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
 
-            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+            var exception = await Assert.ThrowsExactlyAsync<YabtMetadataException>(
                 () => synchronizer.BackupAsync(new SyncRunRequest(sourceRoot)));
 
-            StringAssert.Contains(exception.Message, "nonempty history prefix");
+            StringAssert.Contains(exception.Message, "history prefix");
             Assert.IsFalse(File.Exists(Path.Combine(targetRoot, "file.txt")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task BackupAsyncRejectsSecretPropertyOnUnselectedAzureStoreBeforeTargetMutation()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var unselectedAzureStore = new BackupRootStore("unused-azure", "azureBlob")
+            {
+                ProviderProperties = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+                {
+                    ["connectionString"] = JsonSerializer.SerializeToElement(
+                        "DefaultEndpointsProtocol=https;AccountName=fake;AccountKey=fake"),
+                },
+            };
+            await InitializeSourceRootAsync
+            (
+                sourceRoot,
+                [CreateFileSystemStore("target", targetRoot), unselectedAzureStore],
+                defaultStoreId: "target"
+            );
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            var exception = await Assert.ThrowsExactlyAsync<YabtMetadataException>(
+                () => synchronizer.BackupAsync(new SyncRunRequest(sourceRoot)));
+
+            StringAssert.Contains(exception.Message, "unused-azure");
+            StringAssert.Contains(
+                exception.Message,
+                "may contain only id, kind, and configSectionPath");
+            Assert.AreEqual(0, Directory.GetFiles(
+                targetRoot,
+                "*",
+                SearchOption.AllDirectories).Length);
         }
         finally
         {
@@ -113,7 +517,158 @@ public sealed class ArchiveSynchronizerTests
                 Path.Combine(destinationRoot, "folder", "file.txt"),
                 "source content");
             Assert.IsTrue(Directory.Exists(Path.Combine(destinationRoot, ".yabt-tmp")));
-            Assert.IsFalse(File.Exists(Path.Combine(destinationRoot, BackupRootFileNames.Primary)));
+            Assert.IsTrue(File.Exists(Path.Combine(destinationRoot, BackupRootFileNames.Primary)));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncUsesLogicalStateEvidenceUnlessByteForByteIsRequested()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+            await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            var logicalStateManifestPath = Path.Combine(
+                destinationRoot,
+                ArchiveLogicalStateManifest.FileName);
+            Assert.IsTrue(File.Exists(logicalStateManifestPath));
+            var logicalStateSerializer =
+                serviceProvider.GetRequiredService<ILogicalStateManifestSerializer>();
+            await using (var logicalStateContent = File.OpenRead(logicalStateManifestPath))
+            {
+                var logicalStateManifest = await logicalStateSerializer.ReadAsync(
+                    logicalStateContent);
+                Assert.AreEqual(1, logicalStateManifest.Entries.Count());
+                Assert.AreEqual(
+                    "file.txt",
+                    logicalStateManifest.Entries.Single().LogicalRelativePath);
+            }
+
+            var destinationFilePath = Path.Combine(destinationRoot, "file.txt");
+            await using var exclusiveDestinationContent = new FileStream
+            (
+                destinationFilePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.Asynchronous
+            );
+
+            var normalResult = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(normalResult.Completed);
+            Assert.AreEqual(0, normalResult.NewCount);
+            Assert.AreEqual(0, normalResult.ChangedCount);
+            Assert.AreEqual(1, normalResult.UnchangedCount);
+
+            var byteForByteException = await Assert.ThrowsAsync<YabtFileSystemException>(
+                () => synchronizer.RestoreAsync(new SyncRunRequest
+                (
+                    sourceRoot,
+                    ByteForByte: true,
+                    DestinationRoot: destinationRoot
+                )));
+            StringAssert.Contains(byteForByteException.Message, "file.txt");
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncRejectsCaseDistinctLogicalStateEntriesBeforeMutationOnWindows()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive(
+                "This logical-state collision is specific to case-insensitive Windows paths.");
+        }
+
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            var destinationFilePath = Path.Combine(destinationRoot, "keep.txt");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "archive content");
+            await WriteTextFileAsync(destinationFilePath, "destination content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var logicalStateSerializer =
+                serviceProvider.GetRequiredService<ILogicalStateManifestSerializer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var evidenceBytes = Encoding.UTF8.GetBytes("logical evidence");
+            var contentHash = ArchiveHash.Compute(evidenceBytes);
+            var statFingerprint = ArchiveChangeFingerprint.Create
+            (
+                evidenceBytes.LongLength,
+                new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero)
+            );
+            var logicalStateManifest = logicalStateSerializer.Create
+            (
+                [
+                    new("A.txt", statFingerprint, contentHash),
+                    new("a.txt", statFingerprint, contentHash),
+                ]
+            );
+            var logicalStateManifestPath = Path.Combine(
+                destinationRoot,
+                ArchiveLogicalStateManifest.FileName);
+            await using (var content = File.Create(logicalStateManifestPath))
+            {
+                await logicalStateSerializer.WriteAsync(logicalStateManifest, content);
+            }
+
+            var originalLogicalStateBytes = await File.ReadAllBytesAsync(
+                logicalStateManifestPath);
+            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+                () => synchronizer.RestoreAsync(new SyncRunRequest
+                (
+                    sourceRoot,
+                    DestinationRoot: destinationRoot
+                )));
+
+            StringAssert.Contains(exception.Message, "Logical-state manifest");
+            StringAssert.Contains(exception.Message, "cannot be represented distinctly");
+            AssertTextFile(destinationFilePath, "destination content");
+            CollectionAssert.AreEqual(
+                originalLogicalStateBytes,
+                await File.ReadAllBytesAsync(logicalStateManifestPath));
+            Assert.IsFalse(File.Exists(Path.Combine(
+                destinationRoot,
+                ArchiveLogicalStateManifest.InvalidationMarkerFileName)));
+            Assert.IsFalse(File.Exists(Path.Combine(
+                destinationRoot,
+                BackupRootFileNames.Primary)));
+            Assert.IsFalse(Directory.Exists(Path.Combine(destinationRoot, ".yabt-hist")));
         }
         finally
         {
@@ -216,6 +771,305 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
+    public async Task RestoreAsyncRecursivelyExtractsZipFolderNestedInsidePackagedRoot()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            var nestedZipRoot = Path.Combine(sourceRoot, "albums", "photos");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await WritePolicyAsync(sourceRoot, ZipArchiveFormatName.Value);
+            await WritePolicyAsync(nestedZipRoot, ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(
+                Path.Combine(sourceRoot, "root.txt"),
+                "root content");
+            await WriteTextFileAsync(
+                Path.Combine(nestedZipRoot, "image.txt"),
+                "nested image content");
+            Directory.CreateDirectory(Path.Combine(nestedZipRoot, "empty"));
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var result = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(result.Completed);
+            AssertTextFile(Path.Combine(destinationRoot, "root.txt"), "root content");
+            AssertTextFile(
+                Path.Combine(destinationRoot, "albums", "photos", "image.txt"),
+                "nested image content");
+            Assert.IsTrue(Directory.Exists(Path.Combine(
+                destinationRoot,
+                "albums",
+                "photos",
+                "empty")));
+            AssertPolicyFormat(
+                Path.Combine(destinationRoot, FolderPolicyFileNames.Primary),
+                ZipArchiveFormatName.Value);
+            AssertPolicyFormat(
+                Path.Combine(
+                    destinationRoot,
+                    "albums",
+                    "photos",
+                    FolderPolicyFileNames.Primary),
+                ZipArchiveFormatName.Value);
+            Assert.AreEqual(0, Directory.GetFiles(
+                destinationRoot,
+                "*.zip",
+                SearchOption.AllDirectories).Length);
+            Assert.AreEqual(0, Directory.GetFiles(
+                destinationRoot,
+                "*.zip.yabt-manifest.json",
+                SearchOption.AllDirectories).Length);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncKeepsHashLookingZipWithoutProjectionProvenanceAsOrdinaryFile()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            var ordinaryContent = Encoding.UTF8.GetBytes("not a package");
+            var ordinaryFileName =
+                $"ordinary.{ArchiveHash.FormatFileNameToken(ArchiveHash.Compute(ordinaryContent))}.zip";
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await File.WriteAllBytesAsync(
+                Path.Combine(sourceRoot, ordinaryFileName),
+                ordinaryContent);
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var result = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(result.Completed);
+            CollectionAssert.AreEqual(
+                ordinaryContent,
+                await File.ReadAllBytesAsync(Path.Combine(
+                    destinationRoot,
+                    ordinaryFileName)));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task RestoreAsyncRejectsInvalidAdjacentPackageManifestBeforeDestinationMutation
+    (
+        bool deleteManifest
+    )
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            var destinationFilePath = Path.Combine(destinationRoot, "file.txt");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await WritePolicyAsync(sourceRoot, ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "archive content");
+            await WriteTextFileAsync(destinationFilePath, "destination content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+            var manifestPath = Directory.GetFiles(
+                archiveRoot,
+                "*.zip.yabt-manifest.json",
+                SearchOption.AllDirectories).Single();
+            if (deleteManifest)
+            {
+                File.Delete(manifestPath);
+            }
+            else
+            {
+                await File.AppendAllTextAsync(manifestPath, "tampered");
+            }
+
+            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+                () => synchronizer.RestoreAsync(new SyncRunRequest
+                (
+                    sourceRoot,
+                    DestinationRoot: destinationRoot
+                )));
+
+            StringAssert.Contains(exception.Message, "manifest");
+            AssertTextFile(destinationFilePath, "destination content");
+            Assert.IsFalse(File.Exists(Path.Combine(
+                destinationRoot,
+                BackupRootFileNames.Primary)));
+            Assert.IsFalse(Directory.Exists(Path.Combine(destinationRoot, ".yabt-hist")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncRejectsEmptyPackagedRootProjectionBeforeDestinationMutation()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            var destinationFilePath = Path.Combine(destinationRoot, "file.txt");
+            var descriptor = CreateRootDescriptor
+            (
+                [CreateFileSystemStore("target", archiveRoot)],
+                changeManifestCompression: ArchiveChangeManifestCompression.None
+            );
+            var descriptorBytes = CreateExactRootDescriptorBytes(descriptor);
+            await WriteRootDescriptorBytesAsync(sourceRoot, descriptorBytes);
+            await WritePolicyAsync(sourceRoot, ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "archive content");
+            await WriteTextFileAsync(destinationFilePath, "destination content");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var manifestSerializer = serviceProvider.GetRequiredService<IChangeManifestSerializer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var changeManifestPath = Path.Combine(
+                archiveRoot,
+                ArchiveChangeManifest.UncompressedFileName);
+            ArchiveChangeManifest validManifest;
+            await using (var manifestContent = File.OpenRead(changeManifestPath))
+            {
+                validManifest = await manifestSerializer.ReadAsync(manifestContent);
+            }
+            foreach (var entry in validManifest.Entries)
+            {
+                File.Delete(Path.Combine(
+                    archiveRoot,
+                    entry.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
+            }
+
+            var emptyPackagedRootManifest = manifestSerializer.Create
+            (
+                [],
+                ZipArchiveFormatName.Value,
+                validManifest.RootDescriptorContentHash,
+                validManifest.RootDescriptorContentLength
+            );
+            await using (var replacementContent = File.Create(changeManifestPath))
+            {
+                await manifestSerializer.WriteAsync(
+                    emptyPackagedRootManifest,
+                    replacementContent);
+            }
+
+            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+                () => synchronizer.RestoreAsync(new SyncRunRequest
+                (
+                    sourceRoot,
+                    DestinationRoot: destinationRoot
+                )));
+
+            StringAssert.Contains(exception.Message, "packaged-root projection");
+            AssertTextFile(destinationFilePath, "destination content");
+            Assert.IsFalse(File.Exists(Path.Combine(
+                destinationRoot,
+                BackupRootFileNames.Primary)));
+            Assert.IsFalse(Directory.Exists(Path.Combine(destinationRoot, ".yabt-hist")));
+            Assert.IsFalse(File.Exists(Path.Combine(
+                destinationRoot,
+                ArchiveLogicalStateManifest.FileName)));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncDoesNotOpenTopLevelZipPackageDuringSecondNoOpRestore()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-no-op-zip-source-{Guid.NewGuid():N}");
+        var destinationRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-no-op-zip-destination-{Guid.NewGuid():N}");
+        try
+        {
+            var sourceStore = new MemoryObjectStore(provideContentHash: true);
+            var archiveStore = new MemoryObjectStore(provideContentHash: true);
+            var guardedArchiveStore = new DataReadGuardObjectStore(archiveStore);
+            await UploadTextObjectAsync(sourceStore, "file.txt", "content");
+            var descriptor = CreateRootDescriptor(
+                [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+            using var serviceProvider = CreateStreamingServices(
+                sourceRoot,
+                descriptor,
+                sourceStore,
+                guardedArchiveStore,
+                folderPolicy: new FolderPolicy(ZipArchiveFormatName.Value))
+                .BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+            var packageKey = archiveStore.Snapshot()
+                .Single(archiveObject => archiveObject.Key.EndsWith(
+                    ".zip",
+                    StringComparison.Ordinal))
+                .Key;
+
+            await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+            guardedArchiveStore.ResetCounts();
+
+            var secondResult = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(secondResult.Completed);
+            Assert.AreEqual(0, secondResult.NewCount);
+            Assert.AreEqual(0, secondResult.ChangedCount);
+            Assert.AreEqual(1, secondResult.UnchangedCount);
+            Assert.AreEqual(0, guardedArchiveStore.GetOpenReadCount(packageKey));
+        }
+        finally
+        {
+            DeleteWorkspace(sourceRoot);
+            DeleteWorkspace(destinationRoot);
+        }
+    }
+
+    [TestMethod]
     public async Task RestoreAsyncRejectsDirectoryNamesThatDifferOnlyByCaseOnWindows()
     {
         if (!OperatingSystem.IsWindows())
@@ -314,7 +1168,7 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
-    public async Task RestoreAsyncRoundsPackagedFileModificationTimeToZipTwoSecondPrecision()
+    public async Task RestoreAsyncUsesExactPackagedFileModificationTimeFromManifest()
     {
         var workspace = CreateWorkspacePath();
         try
@@ -332,14 +1186,6 @@ public sealed class ArchiveSynchronizerTests
                 5,
                 123,
                 DateTimeKind.Utc);
-            var expectedRestoredLastModifiedUtc = new DateTime(
-                2020,
-                1,
-                2,
-                3,
-                4,
-                4,
-                DateTimeKind.Utc);
             await InitializeSourceRootAsync(sourceRoot, archiveRoot);
             await WritePolicyAsync(sourceRoot, ZipArchiveFormatName.Value);
             await WriteTextFileAsync(sourceFilePath, "content");
@@ -355,7 +1201,7 @@ public sealed class ArchiveSynchronizerTests
             ));
 
             Assert.AreEqual(
-                expectedRestoredLastModifiedUtc,
+                sourceLastModifiedUtc,
                 File.GetLastWriteTimeUtc(Path.Combine(destinationRoot, "file.txt")));
         }
         finally
@@ -905,7 +1751,7 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
-    public async Task RestoreAsyncHonorsExistingDestinationLayout()
+    public async Task RestoreAsyncRejectsExistingDestinationWithDifferentLayout()
     {
         var workspace = CreateWorkspacePath();
         try
@@ -936,17 +1782,17 @@ public sealed class ArchiveSynchronizerTests
             var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
             await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
 
-            var result = await synchronizer.RestoreAsync(new SyncRunRequest
-            (
-                sourceRoot,
-                DestinationRoot: destinationRoot
-            ));
+            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+                () => synchronizer.RestoreAsync(new SyncRunRequest
+                (
+                    sourceRoot,
+                    DestinationRoot: destinationRoot
+                )));
 
-            Assert.IsTrue(result.Completed);
-            Assert.AreEqual(1, result.ChangedCount);
+            StringAssert.Contains(exception.Message, "different archive id or layout");
             AssertTextFile(
                 Path.Combine(destinationRoot, "live", "file.txt"),
-                "archived");
+                "changed");
             Assert.IsFalse(File.Exists(Path.Combine(destinationRoot, "file.txt")));
             Assert.IsTrue(File.Exists(Path.Combine(
                 destinationRoot,
@@ -954,12 +1800,9 @@ public sealed class ArchiveSynchronizerTests
             AssertTextFile(
                 Path.Combine(destinationRoot, "history", "older.txt"),
                 "older history");
-
-            var historyVersionRoot = Directory.GetDirectories(
-                Path.Combine(destinationRoot, "history")).Single();
-            AssertTextFile(
-                Path.Combine(historyVersionRoot, "file.txt"),
-                "changed");
+            Assert.AreEqual(
+                0,
+                Directory.GetDirectories(Path.Combine(destinationRoot, "history")).Length);
         }
         finally
         {
@@ -1104,7 +1947,7 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
-    public async Task RestoreAsyncRejectsLivePathReservedForDestinationHistory()
+    public async Task RestoreAsyncAllowsHistoryNamedFolderInsideSeparateLivePrefix()
     {
         var workspace = CreateWorkspacePath();
         try
@@ -1127,15 +1970,17 @@ public sealed class ArchiveSynchronizerTests
             var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
             await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
 
-            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
-                () => synchronizer.RestoreAsync(new SyncRunRequest
-                (
-                    sourceRoot,
-                    DestinationRoot: destinationRoot
-                )));
+            var result = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
 
-            StringAssert.Contains(exception.Message, "conflicts with destination history");
-            Assert.IsFalse(Directory.Exists(destinationRoot));
+            Assert.IsTrue(result.Completed);
+            AssertTextFile(
+                Path.Combine(destinationRoot, "live", ".yabt-hist", "file.txt"),
+                "ordinary live content");
+            Assert.IsFalse(Directory.Exists(Path.Combine(destinationRoot, ".yabt-hist")));
         }
         finally
         {
@@ -1189,14 +2034,12 @@ public sealed class ArchiveSynchronizerTests
             var sourceRoot = Path.Combine(workspace, "source");
             var archiveRoot = Path.Combine(workspace, "archive");
             var destinationRoot = Path.Combine(workspace, "restored");
-            var destinationArchiveRoot = Path.Combine(workspace, "destination-archive");
             var destinationLayout = new ArchiveLayout(
                 LivePrefix: "live",
                 HistPrefix: "history");
-            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
             await InitializeSourceRootAsync(
-                destinationRoot,
-                [CreateFileSystemStore("destination", destinationArchiveRoot)],
+                sourceRoot,
+                [CreateFileSystemStore("target", archiveRoot)],
                 layout: destinationLayout);
             await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
             await WriteTextFileAsync(
@@ -1234,14 +2077,12 @@ public sealed class ArchiveSynchronizerTests
             var sourceRoot = Path.Combine(workspace, "source");
             var archiveRoot = Path.Combine(workspace, "archive");
             var destinationRoot = Path.Combine(workspace, "restored");
-            var destinationArchiveRoot = Path.Combine(workspace, "destination-archive");
             var destinationLayout = new ArchiveLayout(
                 LivePrefix: "branches/live",
                 HistPrefix: "branches/history");
-            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
             await InitializeSourceRootAsync(
-                destinationRoot,
-                [CreateFileSystemStore("destination", destinationArchiveRoot)],
+                sourceRoot,
+                [CreateFileSystemStore("target", archiveRoot)],
                 layout: destinationLayout);
             await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
             await WriteTextFileAsync(
@@ -1350,6 +2191,59 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
+    public async Task RestoreAsyncStagesEveryWriteBeforeMutatingDestination()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "a.txt"), "archive a");
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "z.txt"), "archive z");
+            await WriteTextFileAsync(
+                Path.Combine(destinationRoot, "a.txt"),
+                "destination a");
+            await WriteTextFileAsync(
+                Path.Combine(destinationRoot, "z.txt"),
+                "destination z");
+            await WriteTextFileAsync(
+                Path.Combine(destinationRoot, "extra.txt"),
+                "extra content");
+            var destinationManifestPath = Path.Combine(
+                destinationRoot,
+                ArchiveChangeManifest.UncompressedFileName);
+            await WriteTextFileAsync(destinationManifestPath, "destination manifest");
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+            await File.WriteAllTextAsync(Path.Combine(archiveRoot, "z.txt"), "tampered z");
+
+            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+                () => synchronizer.RestoreAsync(new SyncRunRequest
+                (
+                    sourceRoot,
+                    DestinationRoot: destinationRoot
+                )));
+
+            StringAssert.Contains(exception.Message, "failed its content hash check");
+            AssertTextFile(Path.Combine(destinationRoot, "a.txt"), "destination a");
+            AssertTextFile(Path.Combine(destinationRoot, "z.txt"), "destination z");
+            AssertTextFile(
+                Path.Combine(destinationRoot, "extra.txt"),
+                "extra content");
+            AssertTextFile(destinationManifestPath, "destination manifest");
+            Assert.IsFalse(Directory.Exists(Path.Combine(destinationRoot, ".yabt-hist")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
     public async Task SyncAsyncPlacesNestedZipPackageInParentTargetFolder()
     {
         var workspace = CreateWorkspacePath();
@@ -1375,7 +2269,7 @@ public sealed class ArchiveSynchronizerTests
             var result = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
 
             Assert.IsTrue(result.Completed);
-            Assert.AreEqual(2, result.NewCount);
+            Assert.AreEqual(3, result.NewCount);
             AssertTextFile(Path.Combine(targetRoot, "readme.txt"), "root content");
             Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, "albums", "photos")));
 
@@ -1420,7 +2314,7 @@ public sealed class ArchiveSynchronizerTests
                 var synchronizer = firstServiceProvider.GetRequiredService<IArchiveSynchronizer>();
                 var firstResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
                 Assert.IsTrue(firstResult.Completed);
-                Assert.AreEqual(1, firstResult.NewCount);
+                Assert.AreEqual(2, firstResult.NewCount);
             }
 
             var firstPackagePath = Directory.GetFiles(
@@ -1438,7 +2332,7 @@ public sealed class ArchiveSynchronizerTests
                 Assert.AreEqual(0, secondResult.NewCount);
                 Assert.AreEqual(0, secondResult.ChangedCount);
                 Assert.AreEqual(0, secondResult.ExtraCount);
-                Assert.AreEqual(1, secondResult.UnchangedCount);
+                Assert.AreEqual(2, secondResult.UnchangedCount);
             }
 
             var secondPackagePath = Directory.GetFiles(
@@ -1446,6 +2340,82 @@ public sealed class ArchiveSynchronizerTests
                 "photos.*.zip").Single();
             Assert.AreEqual(firstPackagePath, secondPackagePath);
             Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, ".yabt-hist")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task BackupAsyncKeepsZipArtifactsInSameGenerationWhenManifestIsMissing()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var sourceFilePath = Path.Combine(sourceRoot, "file.txt");
+            var preservedLastWriteTimeUtc = new DateTime
+            (
+                2026,
+                8,
+                24,
+                12,
+                0,
+                0,
+                DateTimeKind.Utc
+            );
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WritePolicyAsync(sourceRoot, ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(sourceFilePath, "first");
+            File.SetLastWriteTimeUtc(sourceFilePath, preservedLastWriteTimeUtc);
+
+            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            var firstResult = await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(firstResult.Completed);
+
+            var packagePath = Directory.GetFiles(targetRoot, "*.zip").Single();
+            var manifestPath =
+                $"{packagePath}{ArchivePackageManifestFileNames.AdjacentSuffix}";
+            File.Delete(manifestPath);
+
+            await WriteTextFileAsync(sourceFilePath, "other");
+            File.SetLastWriteTimeUtc(sourceFilePath, preservedLastWriteTimeUtc);
+
+            var secondResult = await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+            Assert.IsTrue(secondResult.Completed);
+            Assert.IsTrue(File.Exists(manifestPath));
+
+            var adjacentManifestBytes = await File.ReadAllBytesAsync(manifestPath);
+            await using (var packageContent = File.OpenRead(packagePath))
+            using (var archive = new ZipArchive(packageContent, ZipArchiveMode.Read))
+            {
+                var embeddedManifest = archive.GetEntry(
+                    ArchivePackageManifestFileNames.EmbeddedEntryName);
+                Assert.IsNotNull(embeddedManifest);
+                await using var embeddedManifestContent = embeddedManifest.Open();
+                using var embeddedManifestBuffer = new MemoryStream();
+                await embeddedManifestContent.CopyToAsync(embeddedManifestBuffer);
+                CollectionAssert.AreEqual(
+                    adjacentManifestBytes,
+                    embeddedManifestBuffer.ToArray());
+
+                var packagedFile = archive.GetEntry("file.txt");
+                Assert.IsNotNull(packagedFile);
+                using var reader = new StreamReader(packagedFile.Open(), Encoding.UTF8);
+                Assert.AreEqual("other", await reader.ReadToEndAsync());
+            }
+
+            var destinationRoot = Path.Combine(workspace, "restore");
+            var restoreResult = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+            Assert.IsTrue(restoreResult.Completed);
+            AssertTextFile(Path.Combine(destinationRoot, "file.txt"), "other");
         }
         finally
         {
@@ -1485,9 +2455,9 @@ public sealed class ArchiveSynchronizerTests
             var secondResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
 
             Assert.IsTrue(secondResult.Completed);
-            Assert.AreEqual(1, secondResult.NewCount);
+            Assert.AreEqual(2, secondResult.NewCount);
             Assert.AreEqual(0, secondResult.ChangedCount);
-            Assert.AreEqual(1, secondResult.ExtraCount);
+            Assert.AreEqual(2, secondResult.ExtraCount);
             var secondPackagePath = Directory.GetFiles(
                 Path.Combine(targetRoot, "albums"),
                 "photos.*.zip").Single();
@@ -1615,7 +2585,7 @@ public sealed class ArchiveSynchronizerTests
             var zipResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
 
             Assert.IsTrue(zipResult.Completed);
-            Assert.AreEqual(1, zipResult.NewCount);
+            Assert.AreEqual(2, zipResult.NewCount);
             Assert.AreEqual(2, zipResult.ExtraCount);
             Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, "albums", "photos")));
             Assert.AreEqual(
@@ -1677,7 +2647,7 @@ public sealed class ArchiveSynchronizerTests
             var zipResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
 
             Assert.IsTrue(zipResult.Completed);
-            Assert.AreEqual(1, zipResult.NewCount);
+            Assert.AreEqual(2, zipResult.NewCount);
             Assert.AreEqual(1, zipResult.ExtraCount);
             Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, "albums", "photos")));
             var historicalMarkers = Directory.GetFiles(
@@ -1767,7 +2737,7 @@ public sealed class ArchiveSynchronizerTests
             var zipResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
 
             Assert.IsTrue(zipResult.Completed);
-            Assert.AreEqual(1, zipResult.NewCount);
+            Assert.AreEqual(2, zipResult.NewCount);
             Assert.AreEqual(1, zipResult.ExtraCount);
             Assert.IsFalse(File.Exists(Path.Combine(
                 targetRoot,
@@ -1815,7 +2785,7 @@ public sealed class ArchiveSynchronizerTests
             Assert.AreEqual(0, verifyResult.NewCount);
             Assert.AreEqual(0, verifyResult.ChangedCount);
             Assert.AreEqual(1, verifyResult.ExtraCount);
-            Assert.AreEqual(1, verifyResult.UnchangedCount);
+            Assert.AreEqual(2, verifyResult.UnchangedCount);
             Assert.IsTrue(Directory.Exists(Path.Combine(targetRoot, "albums", "photos")));
             Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, ".yabt-hist")));
         }
@@ -1853,7 +2823,7 @@ public sealed class ArchiveSynchronizerTests
 
             Assert.IsTrue(mirrorResult.Completed);
             Assert.AreEqual(2, mirrorResult.NewCount);
-            Assert.AreEqual(1, mirrorResult.ExtraCount);
+            Assert.AreEqual(2, mirrorResult.ExtraCount);
             AssertTextFile(
                 Path.Combine(targetRoot, "albums", "photos", "image.txt"),
                 "image content");
@@ -2144,12 +3114,12 @@ public sealed class ArchiveSynchronizerTests
         var secondResult = await synchronizer.SyncAsync(new SyncRunRequest(sourceRoot));
 
         Assert.IsTrue(firstResult.Completed);
-        Assert.AreEqual(1, firstResult.NewCount);
+        Assert.AreEqual(2, firstResult.NewCount);
         Assert.IsTrue(secondResult.Completed);
         Assert.AreEqual(0, secondResult.NewCount);
         Assert.AreEqual(0, secondResult.ChangedCount);
         Assert.AreEqual(0, secondResult.ExtraCount);
-        Assert.AreEqual(1, secondResult.UnchangedCount);
+        Assert.AreEqual(2, secondResult.UnchangedCount);
     }
 
     [TestMethod]
@@ -2193,7 +3163,10 @@ public sealed class ArchiveSynchronizerTests
             manifestSerializer,
             manifestContent,
             ArchiveChangeManifestCompression.Brotli);
-        var manifestEntry = manifest.Entries.Single();
+        Assert.AreEqual(2, manifest.Entries.Count());
+        var manifestEntry = manifest.Entries.Single(entry => entry.RelativePath.EndsWith(
+            ".zip",
+            StringComparison.Ordinal));
         Assert.IsTrue(manifestEntry.RelativePath.EndsWith(".zip", StringComparison.Ordinal));
         Assert.IsTrue(manifestEntry.ChangeFingerprint.StartsWith(
             "xxh128:",
@@ -2208,9 +3181,9 @@ public sealed class ArchiveSynchronizerTests
         var verifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
 
         Assert.IsTrue(secondSyncResult.Completed);
-        Assert.AreEqual(1, secondSyncResult.UnchangedCount);
+        Assert.AreEqual(2, secondSyncResult.UnchangedCount);
         Assert.IsTrue(verifyResult.Completed);
-        Assert.AreEqual(1, verifyResult.UnchangedCount);
+        Assert.AreEqual(2, verifyResult.UnchangedCount);
 
         await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.VerifyAsync(
             new SyncRunRequest(sourceRoot, ByteForByte: true)));
@@ -2236,12 +3209,16 @@ public sealed class ArchiveSynchronizerTests
             manifestSerializer,
             currentManifestContent,
             ArchiveChangeManifestCompression.Brotli);
-        Assert.IsTrue(currentManifest.Entries.Single().ArtifactLength > 1);
+        Assert.IsTrue(currentManifest.Entries.Single(entry => string.Equals(
+            entry.RelativePath,
+            manifestEntry.RelativePath,
+            StringComparison.Ordinal)).ArtifactLength > 1);
 
         var truncatedResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
 
         Assert.IsFalse(truncatedResult.Completed);
         Assert.AreEqual(1, truncatedResult.ChangedCount);
+        Assert.AreEqual(1, truncatedResult.UnchangedCount);
     }
 
     [TestMethod]
@@ -2731,7 +3708,7 @@ public sealed class ArchiveSynchronizerTests
             new SyncRunRequest(sourceRoot, ByteForByte: true));
 
         Assert.IsTrue(verifyResult.Completed);
-        Assert.AreEqual(1, verifyResult.UnchangedCount);
+        Assert.AreEqual(2, verifyResult.UnchangedCount);
     }
 
     [TestMethod]
@@ -3677,8 +4654,23 @@ public sealed class ArchiveSynchronizerTests
         }
 
         services.AddYabtFileSystemObjectStore();
-        services.AddYabtMirrorFormatProjector();
-        services.AddYabtZipFormatProjector();
+        services.AddYabtMirrorFormatHandler();
+        services.AddYabtZipFormatHandler();
+        services.AddYabtMetadata();
+        services.AddYabtSync();
+
+        return services;
+    }
+
+    private static ServiceCollection CreateCustomFormatServices
+    (
+        TestBidirectionalArchiveFormatHandler formatHandler
+    )
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddYabtFileSystemObjectStore();
+        services.AddSingleton<IArchiveFormatHandler>(formatHandler);
         services.AddYabtMetadata();
         services.AddYabtSync();
 
@@ -3710,8 +4702,8 @@ public sealed class ArchiveSynchronizerTests
             folderPolicy ?? FolderPolicy.Default));
         services.AddSingleton<IBackupRootStoreResolver>(new FixedBackupRootStoreResolver(targetStore));
         services.AddSingleton<ISourceRootObjectStoreResolver>(new FixedSourceRootObjectStoreResolver(sourceStore));
-        services.AddYabtMirrorFormatProjector();
-        services.AddYabtZipFormatProjector();
+        services.AddYabtMirrorFormatHandler();
+        services.AddYabtZipFormatHandler();
         services.AddYabtSync();
 
         return services;
@@ -3751,6 +4743,32 @@ public sealed class ArchiveSynchronizerTests
             stream,
             descriptor,
             JsonOptions);
+    }
+
+    private static byte[] CreateExactRootDescriptorBytes(BackupRootDescriptor descriptor)
+    {
+        var serializedDescriptor = JsonSerializer.SerializeToUtf8Bytes(
+            descriptor,
+            JsonOptions);
+        var utf8WithBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+        return
+        [
+            .. utf8WithBom.GetPreamble(),
+            .. serializedDescriptor,
+            .. Encoding.UTF8.GetBytes("\r\n\r\n"),
+        ];
+    }
+
+    private static async Task WriteRootDescriptorBytesAsync
+    (
+        string rootPath,
+        byte[] descriptorBytes
+    )
+    {
+        Directory.CreateDirectory(rootPath);
+        await File.WriteAllBytesAsync(
+            Path.Combine(rootPath, BackupRootFileNames.Primary),
+            descriptorBytes);
     }
 
     private static async Task WritePolicyAsync
@@ -4045,6 +5063,15 @@ public sealed class ArchiveSynchronizerTests
     )
     {
         Assert.AreEqual(expectedContent, File.ReadAllText(path));
+    }
+
+    private static void AssertPolicyFormat(string path, string expectedFormat)
+    {
+        var policy = JsonSerializer.Deserialize<FolderPolicy>(
+            File.ReadAllText(path),
+            JsonOptions);
+        Assert.IsNotNull(policy);
+        Assert.AreEqual(expectedFormat, policy.Format);
     }
 
     private static void DeleteWorkspace(string workspace)
@@ -4487,6 +5514,149 @@ public sealed class ArchiveSynchronizerTests
             _ = rootPath;
 
             return _sourceStore;
+        }
+    }
+
+    private sealed class TestBidirectionalArchiveFormatHandler : IArchiveFormatHandler
+    {
+        public const string ArtifactFileName = "payload.yabt-test-bundle";
+        public const string FormatNameValue = "test-bidirectional";
+        public const string SourceFileName = "payload.bin";
+
+        private int _backupProjectionCount;
+        private int _restoreProjectionCount;
+
+        public int BackupProjectionCount => Volatile.Read(ref _backupProjectionCount);
+
+        public int RestoreProjectionCount => Volatile.Read(ref _restoreProjectionCount);
+
+        public string FormatName => FormatNameValue;
+
+        public bool ProjectsBesideSourceFolder => true;
+
+        public bool CanRestoreArtifact(ArchiveProjectedObject artifact) =>
+            string.Equals(
+                ArchiveLayout.NormalizeObjectKey(artifact.RelativePath),
+                ArtifactFileName,
+                StringComparison.Ordinal);
+
+        public async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupAsync
+        (
+            ArchiveProjectionRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default
+        )
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            Interlocked.Increment(ref _backupProjectionCount);
+
+            var sourceKey = ArchiveLayout.CombinePrefixAndRelativePath(
+                request.SourcePrefix,
+                SourceFileName);
+            await using var sourceContent = await request.SourceStore.OpenReadAsync(
+                sourceKey,
+                cancellationToken);
+            var sourceBytes = await ReadAllBytesAsync(
+                sourceContent.Content,
+                cancellationToken);
+            var artifactBytes = Transform(sourceBytes);
+            var artifactHash = ArchiveHash.Compute(artifactBytes);
+            var projectionId = $"test-bidirectional-v1:{artifactHash}";
+
+            yield return new
+            (
+                ArtifactFileName,
+                currentCancellationToken =>
+                {
+                    currentCancellationToken.ThrowIfCancellationRequested();
+                    return Task.FromResult(new ArchiveObjectContent(
+                        new MemoryStream(artifactBytes, writable: false),
+                        "application/x-yabt-test-bundle"));
+                },
+                artifactBytes.Length,
+                ContentHash: artifactHash,
+                ChangeFingerprint: projectionId,
+                Projection: new ArchiveProjectionProvenance
+                (
+                    ArchiveLayout.NormalizeObjectKey(request.LogicalPath),
+                    FormatNameValue,
+                    1,
+                    projectionId,
+                    "bundle"
+                )
+            );
+        }
+
+        public async Task<ArchiveRestoreProjection> ProjectRestoreAsync
+        (
+            ArchiveRestoreRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            Interlocked.Increment(ref _restoreProjectionCount);
+            if (!request.RestoreAsRoot || !CanRestoreArtifact(request.Artifact))
+            {
+                throw new InvalidDataException(
+                    $"Artifact '{request.Artifact.RelativePath}' is not a root test bundle.");
+            }
+
+            await using var artifactContent = await request.Artifact.OpenContentAsync(
+                cancellationToken);
+            var artifactBytes = await ReadAllBytesAsync(
+                artifactContent.Content,
+                cancellationToken);
+            var actualArtifactHash = ArchiveHash.Compute(artifactBytes);
+            if (!string.Equals(
+                    request.Artifact.ContentHash,
+                    actualArtifactHash,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Artifact '{request.Artifact.RelativePath}' failed its content hash check.");
+            }
+
+            var restoredBytes = Transform(artifactBytes);
+            var restoredHash = ArchiveHash.Compute(restoredBytes);
+            return new ArchiveRestoreProjection
+            (
+                [
+                    new ArchiveProjectedObject
+                    (
+                        SourceFileName,
+                        currentCancellationToken =>
+                        {
+                            currentCancellationToken.ThrowIfCancellationRequested();
+                            return Task.FromResult(new ArchiveObjectContent(
+                                new MemoryStream(restoredBytes, writable: false)));
+                        },
+                        restoredBytes.Length,
+                        ContentHash: restoredHash,
+                        ChangeFingerprint: $"test-restored-v1:{restoredHash}"
+                    ),
+                ]
+            );
+        }
+
+        private static async Task<byte[]> ReadAllBytesAsync
+        (
+            Stream content,
+            CancellationToken cancellationToken
+        )
+        {
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, cancellationToken);
+            return buffer.ToArray();
+        }
+
+        private static byte[] Transform(ReadOnlySpan<byte> content)
+        {
+            var transformed = new byte[content.Length];
+            for (var index = 0; index < content.Length; index++)
+            {
+                transformed[index] = (byte)(content[index] ^ 0xA5);
+            }
+
+            return transformed;
         }
     }
 

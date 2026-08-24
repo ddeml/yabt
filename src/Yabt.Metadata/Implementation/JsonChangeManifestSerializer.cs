@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Yabt.Core.Models;
 
 namespace Yabt.Metadata.Implementation;
@@ -6,6 +7,13 @@ namespace Yabt.Metadata.Implementation;
 internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOptions) :
     IChangeManifestSerializer
 {
+    private readonly JsonSerializerOptions _strictJsonOptions = new(_jsonOptions)
+    {
+        AllowDuplicateProperties = false,
+        PropertyNameCaseInsensitive = false,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+    };
+
     public JsonChangeManifestSerializer()
         : this(JsonMetadataOptions.Create())
     {
@@ -14,20 +22,33 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
     public ArchiveChangeManifest Create
     (
         IEnumerable<ArchiveChangeManifestEntry> entries,
-        string rootFormat
+        string rootFormat,
+        string? rootDescriptorContentHash = default,
+        long? rootDescriptorContentLength = default
     )
     {
         ArgumentNullException.ThrowIfNull(entries);
         ValidateRequiredRootFormat(rootFormat);
+        ValidateRootDescriptorEvidence
+        (
+            rootDescriptorContentHash,
+            rootDescriptorContentLength
+        );
 
-        var canonicalEntries = CreateCanonicalEntries(entries);
+        var canonicalEntries = CreateCanonicalEntries
+        (
+            entries,
+            ArchiveChangeManifest.ExpectedSchemaVersion
+        );
         var manifest = new ArchiveChangeManifest
         (
             ArchiveChangeManifest.ExpectedDocumentType,
             ArchiveChangeManifest.ExpectedSchemaVersion,
             canonicalEntries,
             string.Empty,
-            rootFormat
+            rootFormat,
+            rootDescriptorContentHash,
+            rootDescriptorContentLength
         );
 
         return manifest with
@@ -53,14 +74,14 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         var validatedManifest = ValidateManifest
         (
             manifest,
-            allowLegacySchema: false
+            allowPreviousSchemas: false
         );
         try
         {
             await JsonSerializer.SerializeAsync(
                 destination,
                 validatedManifest,
-                _jsonOptions,
+                _strictJsonOptions,
                 cancellationToken);
         }
         catch (Exception ex)
@@ -80,10 +101,12 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         ArchiveChangeManifest? manifest;
         try
         {
-            manifest = await JsonSerializer.DeserializeAsync<ArchiveChangeManifest>(
+            using var document = await JsonDocument.ParseAsync(
                 source,
-                _jsonOptions,
-                cancellationToken);
+                cancellationToken: cancellationToken);
+            manifest = document.RootElement.Deserialize<ArchiveChangeManifest>(
+                _strictJsonOptions);
+            ValidateSchemaPropertyPresence(document.RootElement, manifest);
         }
         catch (Exception ex)
         {
@@ -98,14 +121,14 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         return ValidateManifest
         (
             manifest,
-            allowLegacySchema: true
+            allowPreviousSchemas: true
         );
     }
 
     private static ArchiveChangeManifest ValidateManifest
     (
         ArchiveChangeManifest manifest,
-        bool allowLegacySchema
+        bool allowPreviousSchemas
     )
     {
         if (!string.Equals(
@@ -116,7 +139,7 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             throw new YabtMetadataException("Change manifest JSON has an unexpected document type.");
         }
 
-        ValidateSchemaVersionAndRootFormat(manifest, allowLegacySchema);
+        ValidateSchemaAndRootEvidence(manifest, allowPreviousSchemas);
 
         if (manifest.Entries is null)
         {
@@ -124,7 +147,11 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         }
 
         var serializedEntries = manifest.Entries.ToArray();
-        var canonicalEntries = CreateCanonicalEntries(serializedEntries);
+        var canonicalEntries = CreateCanonicalEntries
+        (
+            serializedEntries,
+            manifest.SchemaVersion
+        );
         EnsureEntriesAreCanonical(serializedEntries, canonicalEntries);
         ValidateManifestHash(manifest.ManifestHash);
 
@@ -146,7 +173,8 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
 
     private static ArchiveChangeManifestEntry[] CreateCanonicalEntries
     (
-        IEnumerable<ArchiveChangeManifestEntry> entries
+        IEnumerable<ArchiveChangeManifestEntry> entries,
+        int schemaVersion
     )
     {
         var canonicalEntries = new List<ArchiveChangeManifestEntry>();
@@ -190,10 +218,31 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
                     entry.ContentHash,
                     $"Change manifest entry '{relativePath}' content hash");
             }
+            else if (schemaVersion == ArchiveChangeManifest.ExpectedSchemaVersion)
+            {
+                throw new YabtMetadataException(
+                    $"Change manifest entry '{relativePath}' content hash is required by " +
+                        $"schema version {schemaVersion}.");
+            }
+
+            if (schemaVersion != ArchiveChangeManifest.ExpectedSchemaVersion &&
+                entry.Projection is not null)
+            {
+                throw new YabtMetadataException
+                (
+                    $"Schema version {schemaVersion} change manifest entry " +
+                    $"'{relativePath}' must not contain projection provenance."
+                );
+            }
+
+            var projection = entry.Projection is null
+                ? null
+                : CreateCanonicalProjection(entry.Projection, relativePath);
 
             canonicalEntries.Add(entry with
             {
                 RelativePath = relativePath,
+                Projection = projection,
             });
         }
 
@@ -237,7 +286,9 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
                 !string.Equals(
                     serializedEntry.ContentHash,
                     canonicalEntry.ContentHash,
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal) ||
+                serializedEntry.ArtifactLength != canonicalEntry.ArtifactLength ||
+                serializedEntry.Projection != canonicalEntry.Projection)
             {
                 throw new YabtMetadataException(
                     "Change manifest entries are not in canonical path order or contain noncanonical values.");
@@ -267,18 +318,18 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         }
     }
 
-    private static void ValidateSchemaVersionAndRootFormat
+    private static void ValidateSchemaAndRootEvidence
     (
         ArchiveChangeManifest manifest,
-        bool allowLegacySchema
+        bool allowPreviousSchemas
     )
     {
         if (manifest.SchemaVersion == ArchiveChangeManifest.LegacySchemaVersion)
         {
-            if (!allowLegacySchema)
+            if (!allowPreviousSchemas)
             {
                 throw new YabtMetadataException(
-                    "Legacy schema version 1 change manifests can be read but cannot be written.");
+                    "Previous change manifest schema versions can be read but cannot be written.");
             }
 
             if (manifest.RootFormat is not null)
@@ -287,6 +338,23 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
                     "Legacy schema version 1 change manifests must not contain a root format.");
             }
 
+            EnsurePreviousSchemaHasNoRootDescriptorEvidence(manifest);
+
+            return;
+        }
+
+        if (manifest.SchemaVersion == ArchiveChangeManifest.PreviousSchemaVersion)
+        {
+            if (!allowPreviousSchemas)
+            {
+                throw new YabtMetadataException
+                (
+                    "Previous change manifest schema versions can be read but cannot be written."
+                );
+            }
+
+            ValidateRequiredRootFormat(manifest.RootFormat);
+            EnsurePreviousSchemaHasNoRootDescriptorEvidence(manifest);
             return;
         }
 
@@ -296,6 +364,188 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         }
 
         ValidateRequiredRootFormat(manifest.RootFormat);
+        ValidateRootDescriptorEvidence
+        (
+            manifest.RootDescriptorContentHash,
+            manifest.RootDescriptorContentLength
+        );
+    }
+
+    private static void ValidateSchemaPropertyPresence
+    (
+        JsonElement root,
+        ArchiveChangeManifest? manifest
+    )
+    {
+        if (manifest is null || root.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        if (manifest.SchemaVersion == ArchiveChangeManifest.LegacySchemaVersion &&
+            root.TryGetProperty("rootFormat", out _))
+        {
+            throw new YabtMetadataException(
+                "Schema version 1 change manifests must not contain rootFormat, even when null.");
+        }
+
+        if (manifest.SchemaVersion is
+                ArchiveChangeManifest.LegacySchemaVersion or
+                ArchiveChangeManifest.PreviousSchemaVersion)
+        {
+            RejectPresentProperty(
+                root,
+                "rootDescriptorContentHash",
+                manifest.SchemaVersion);
+            RejectPresentProperty(
+                root,
+                "rootDescriptorContentLength",
+                manifest.SchemaVersion);
+
+            if (!root.TryGetProperty("entries", out var entries) ||
+                entries.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            foreach (var entry in entries.EnumerateArray())
+            {
+                if (entry.ValueKind == JsonValueKind.Object &&
+                    entry.TryGetProperty("projection", out _))
+                {
+                    throw new YabtMetadataException(
+                        $"Schema version {manifest.SchemaVersion} change manifest entries " +
+                            "must not contain projection, even when null.");
+                }
+            }
+        }
+    }
+
+    private static void RejectPresentProperty
+    (
+        JsonElement root,
+        string propertyName,
+        int schemaVersion
+    )
+    {
+        if (root.TryGetProperty(propertyName, out _))
+        {
+            throw new YabtMetadataException(
+                $"Schema version {schemaVersion} change manifests must not contain " +
+                    $"{propertyName}, even when null.");
+        }
+    }
+
+    private static ArchiveProjectionProvenance CreateCanonicalProjection
+    (
+        ArchiveProjectionProvenance projection,
+        string relativePath
+    )
+    {
+        string logicalPath;
+        try
+        {
+            logicalPath = ArchiveLayout.NormalizeObjectKey(projection.LogicalPath);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtMetadataException
+            (
+                $"Change manifest entry '{relativePath}' projection logical path " +
+                $"'{projection.LogicalPath}' is invalid.",
+                ex
+            );
+        }
+
+        ValidateProjectionName
+        (
+            projection.Format,
+            $"Change manifest entry '{relativePath}' projection format"
+        );
+        if (projection.FormatVersion <= 0)
+        {
+            throw new YabtMetadataException
+            (
+                $"Change manifest entry '{relativePath}' projection format version " +
+                "must be positive."
+            );
+        }
+
+        ValidateFingerprint
+        (
+            projection.ProjectionId,
+            $"Change manifest entry '{relativePath}' projection id"
+        );
+        ValidateProjectionName
+        (
+            projection.ArtifactRole,
+            $"Change manifest entry '{relativePath}' projection artifact role"
+        );
+
+        return projection with
+        {
+            LogicalPath = logicalPath,
+        };
+    }
+
+    private static void ValidateProjectionName(string value, string description)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            !value.AsSpan().SequenceEqual(value.Trim().AsSpan()))
+        {
+            throw new YabtMetadataException($"{description} is required and must be nonempty.");
+        }
+
+        if (value.AsSpan().IndexOfAny(['\r', '\n', '\t']) >= 0)
+        {
+            throw new YabtMetadataException($"{description} contains invalid whitespace.");
+        }
+    }
+
+    private static void EnsurePreviousSchemaHasNoRootDescriptorEvidence
+    (
+        ArchiveChangeManifest manifest
+    )
+    {
+        if (manifest.RootDescriptorContentHash is not null ||
+            manifest.RootDescriptorContentLength is not null)
+        {
+            throw new YabtMetadataException
+            (
+                $"Schema version {manifest.SchemaVersion} change manifests must not contain " +
+                "root descriptor evidence."
+            );
+        }
+    }
+
+    private static void ValidateRootDescriptorEvidence
+    (
+        string? contentHash,
+        long? contentLength
+    )
+    {
+        if ((contentHash is null) != (contentLength is null))
+        {
+            throw new YabtMetadataException
+            (
+                "Change manifest root descriptor content hash and content length must either " +
+                "both be present or both be absent."
+            );
+        }
+
+        if (contentHash is null)
+        {
+            return;
+        }
+
+        ValidateContentHash(contentHash, "Change manifest root descriptor content hash");
+        if (contentLength < 0)
+        {
+            throw new YabtMetadataException
+            (
+                "Change manifest root descriptor content length cannot be negative."
+            );
+        }
     }
 
     private static void ValidateRequiredRootFormat(string? rootFormat)
@@ -356,6 +606,22 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             {
                 writer.WriteString("rootFormat", manifest.RootFormat);
             }
+            if (manifest.RootDescriptorContentHash is not null)
+            {
+                writer.WriteString
+                (
+                    "rootDescriptorContentHash",
+                    manifest.RootDescriptorContentHash
+                );
+            }
+            if (manifest.RootDescriptorContentLength.HasValue)
+            {
+                writer.WriteNumber
+                (
+                    "rootDescriptorContentLength",
+                    manifest.RootDescriptorContentLength.Value
+                );
+            }
             writer.WriteStartArray("entries");
 
             foreach (var entry in entries)
@@ -370,6 +636,16 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
                 if (entry.ContentHash is not null)
                 {
                     writer.WriteString("contentHash", entry.ContentHash);
+                }
+                if (entry.Projection is not null)
+                {
+                    writer.WriteStartObject("projection");
+                    writer.WriteString("logicalPath", entry.Projection.LogicalPath);
+                    writer.WriteString("format", entry.Projection.Format);
+                    writer.WriteNumber("formatVersion", entry.Projection.FormatVersion);
+                    writer.WriteString("projectionId", entry.Projection.ProjectionId);
+                    writer.WriteString("artifactRole", entry.Projection.ArtifactRole);
+                    writer.WriteEndObject();
                 }
                 writer.WriteEndObject();
             }

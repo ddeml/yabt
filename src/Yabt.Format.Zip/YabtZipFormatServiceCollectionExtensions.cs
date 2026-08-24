@@ -8,7 +8,7 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public static class YabtZipFormatServiceCollectionExtensions
 {
-    public static IServiceCollection AddYabtZipFormatProjector
+    public static IServiceCollection AddYabtZipFormatHandler
     (
         this IServiceCollection services,
         string? configSectionPath = null
@@ -20,7 +20,7 @@ public static class YabtZipFormatServiceCollectionExtensions
             optionsBuilder.BindConfiguration(configSectionPath);
         }
 
-        services.AddSingleton<IArchiveFormatProjector, ZipArchiveFormatProjector>();
+        services.AddSingleton<IArchiveFormatHandler, ZipArchiveFormatHandler>();
         return services;
     }
 }

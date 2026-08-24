@@ -15,21 +15,152 @@
       "const": "yabt.changeManifest"
     },
     "schemaVersion": {
-      "const": 1
+      "enum": [1, 2, 3]
+    },
+    "rootFormat": {
+      "$ref": "#/$defs/nonemptyString"
+    },
+    "rootDescriptorContentHash": {
+      "$ref": "#/$defs/hash"
+    },
+    "rootDescriptorContentLength": {
+      "type": "integer",
+      "minimum": 0
     },
     "entries": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/entry"
+        "$ref": "#/$defs/currentEntry"
       }
     },
     "manifestHash": {
-      "type": "string",
-      "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
+      "$ref": "#/$defs/hash"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": { "const": 1 }
+        },
+        "required": ["schemaVersion"]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["rootFormat"] },
+            { "required": ["rootDescriptorContentHash"] },
+            { "required": ["rootDescriptorContentLength"] }
+          ]
+        },
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/previousEntry" }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": { "const": 2 }
+        },
+        "required": ["schemaVersion"]
+      },
+      "then": {
+        "required": ["rootFormat"],
+        "not": {
+          "anyOf": [
+            { "required": ["rootDescriptorContentHash"] },
+            { "required": ["rootDescriptorContentLength"] }
+          ]
+        },
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/previousEntry" }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": { "const": 3 }
+        },
+        "required": ["schemaVersion"]
+      },
+      "then": {
+        "required": ["rootFormat"],
+        "oneOf": [
+          {
+            "required": [
+              "rootDescriptorContentHash",
+              "rootDescriptorContentLength"
+            ]
+          },
+          {
+            "not": {
+              "anyOf": [
+                { "required": ["rootDescriptorContentHash"] },
+                { "required": ["rootDescriptorContentLength"] }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
   "$defs": {
-    "entry": {
+    "hash": {
+      "type": "string",
+      "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[a-z0-9_.-]+:[^\\s]+$"
+    },
+    "nonemptyString": {
+      "type": "string",
+      "pattern": ".*\\S.*"
+    },
+    "projectionName": {
+      "type": "string",
+      "pattern": "^\\S(?:[^\\r\\n\\t]*\\S)?$"
+    },
+    "logicalPath": {
+      "type": "string",
+      "pattern": "^(?:$|(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))[^\\s/\\\\](?:[^/\\\\]*[^\\s/\\\\])?(?:/[^\\s/\\\\](?:[^/\\\\]*[^\\s/\\\\])?)*)$"
+    },
+    "nonemptyLogicalPath": {
+      "allOf": [
+        { "$ref": "#/$defs/logicalPath" },
+        { "minLength": 1 }
+      ]
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logicalPath",
+        "format",
+        "formatVersion",
+        "projectionId",
+        "artifactRole"
+      ],
+      "properties": {
+        "logicalPath": { "$ref": "#/$defs/logicalPath" },
+        "format": { "$ref": "#/$defs/projectionName" },
+        "formatVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "projectionId": { "$ref": "#/$defs/fingerprint" },
+        "artifactRole": { "$ref": "#/$defs/projectionName" }
+      }
+    },
+    "previousEntry": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -37,24 +168,33 @@
         "changeFingerprint"
       ],
       "properties": {
-        "relativePath": {
-          "type": "string",
-          "minLength": 1
+        "relativePath": { "$ref": "#/$defs/nonemptyLogicalPath" },
+        "artifactLength": {
+          "type": "integer",
+          "minimum": 0
         },
+        "changeFingerprint": { "$ref": "#/$defs/fingerprint" },
+        "contentHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "currentEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relativePath",
+        "changeFingerprint",
+        "contentHash"
+      ],
+      "properties": {
+        "relativePath": { "$ref": "#/$defs/nonemptyLogicalPath" },
         "artifactLength": {
           "type": "integer",
           "minimum": 0,
-          "description": "Actual stored byte length, present only when the projector cannot supply a length for quick target comparison."
+          "description": "Actual stored byte length, present only when the format handler cannot supply a length before materialization."
         },
-        "changeFingerprint": {
-          "type": "string",
-          "description": "Ordinary files use stat-v1:<UTC timestamp>:<length>; format and provider fingerprints remain type-qualified opaque values.",
-          "pattern": "^[a-z0-9_.-]+:[^\\s]+$"
-        },
-        "contentHash": {
-          "type": "string",
-          "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
-        }
+        "changeFingerprint": { "$ref": "#/$defs/fingerprint" },
+        "contentHash": { "$ref": "#/$defs/hash" },
+        "projection": { "$ref": "#/$defs/projection" }
       }
     }
   }

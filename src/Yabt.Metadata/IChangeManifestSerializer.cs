@@ -5,7 +5,9 @@ public interface IChangeManifestSerializer
     ArchiveChangeManifest Create
     (
         IEnumerable<ArchiveChangeManifestEntry> entries,
-        string rootFormat
+        string rootFormat,
+        string? rootDescriptorContentHash = default,
+        long? rootDescriptorContentLength = default
     );
 
     Task WriteAsync

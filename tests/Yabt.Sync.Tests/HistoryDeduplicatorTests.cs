@@ -536,6 +536,53 @@ public sealed class HistoryDeduplicatorTests
     }
 
     [TestMethod]
+    public async Task DeduplicateAsyncLeavesRepeatedPackageManifestSidecarsMaterialized()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var targetRoot = Path.Combine(workspace, "target");
+            await InitializeArchiveRootAsync(archiveRoot, targetRoot);
+            var content = CreateContent(10_000);
+            var sidecarFileName =
+                $"Photos.xxh128-example.zip{ArchivePackageManifestFileNames.AdjacentSuffix}";
+            var firstPath = Path.Combine(
+                targetRoot,
+                ".yabt-hist",
+                "20260818T100000Z",
+                sidecarFileName);
+            var secondPath = Path.Combine(
+                targetRoot,
+                ".yabt-hist",
+                "20260819T100000Z",
+                sidecarFileName);
+            await WriteBytesAsync(firstPath, content);
+            await WriteBytesAsync(secondPath, content);
+
+            using var services = CreateServices().BuildServiceProvider();
+            var result = await services.GetRequiredService<IHistoryDeduplicator>().DeduplicateAsync(
+                new HistoryDeduplicationRequest(archiveRoot));
+
+            Assert.IsTrue(result.Completed);
+            Assert.AreEqual(2, result.ScannedObjectCount);
+            Assert.AreEqual(0, result.DuplicateGroupCount);
+            Assert.AreEqual(0, result.ReplacedObjectCount);
+            Assert.AreEqual(0, result.TinyObjectCount);
+            CollectionAssert.AreEqual(content, await File.ReadAllBytesAsync(firstPath));
+            CollectionAssert.AreEqual(content, await File.ReadAllBytesAsync(secondPath));
+            Assert.AreEqual(0, Directory.GetFiles(
+                Path.Combine(targetRoot, ".yabt-hist"),
+                $"*{ArchiveHistoryFileNames.ReferenceSuffix}",
+                SearchOption.AllDirectories).Length);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
     [DataRow("", ".yabt-tmp/history")]
     [DataRow("archive/live", "archive")]
     public async Task DeduplicateAsyncRejectsUnsafeHistoryLayout
@@ -583,7 +630,7 @@ public sealed class HistoryDeduplicatorTests
             var sourceFile = Path.Combine(archiveRoot, "file.txt");
             await File.WriteAllTextAsync(sourceFile, "first", Encoding.UTF8);
 
-            using var services = CreateServices(includeMirrorProjector: true).BuildServiceProvider();
+            using var services = CreateServices(includeMirrorFormatHandler: true).BuildServiceProvider();
             var synchronizer = services.GetRequiredService<IArchiveSynchronizer>();
             await synchronizer.SyncAsync(new SyncRunRequest(archiveRoot));
 
@@ -617,16 +664,16 @@ public sealed class HistoryDeduplicatorTests
         }
     }
 
-    private static ServiceCollection CreateServices(bool includeMirrorProjector = false)
+    private static ServiceCollection CreateServices(bool includeMirrorFormatHandler = false)
     {
         var services = new ServiceCollection();
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddYabtFileSystemObjectStore();
         services.AddYabtMetadata();
         services.AddYabtSync();
-        if (includeMirrorProjector)
+        if (includeMirrorFormatHandler)
         {
-            services.AddYabtMirrorFormatProjector();
+            services.AddYabtMirrorFormatHandler();
         }
 
         return services;

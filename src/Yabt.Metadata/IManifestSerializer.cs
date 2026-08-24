@@ -4,6 +4,18 @@ namespace Yabt.Metadata;
 
 public interface IManifestSerializer
 {
+    ArchiveManifest Create
+    (
+        string sourcePath,
+        DateTimeOffset createdAtUtc,
+        string format,
+        int formatVersion,
+        string projectionId,
+        string packageName,
+        FolderPolicy policy,
+        IEnumerable<ArchiveManifestEntry> entries
+    );
+
     Task WriteAsync
     (
         ArchiveManifest manifest,

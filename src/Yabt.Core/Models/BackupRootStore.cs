@@ -5,8 +5,8 @@ namespace Yabt.Core.Models;
 
 public sealed record BackupRootStore
 (
-    string Id,
-    string Kind,
+    [property: JsonRequired] string Id,
+    [property: JsonRequired] string Kind,
     string? CredentialRef = default,
     string? ConfigSectionPath = default
 )

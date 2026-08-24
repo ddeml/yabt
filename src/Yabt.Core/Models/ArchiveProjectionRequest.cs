@@ -7,5 +7,6 @@ public sealed record ArchiveProjectionRequest
     IReadOnlyObjectStore SourceStore,
     string? SourcePrefix = default,
     FolderPolicy? Policy = default,
-    string? SourceDisplayName = default
+    string? SourceDisplayName = default,
+    string? LogicalPath = default
 );

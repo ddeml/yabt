@@ -6,5 +6,6 @@ public sealed record SyncRunRequest
     bool DryRun = default,
     string? TargetStoreId = default,
     bool ByteForByte = default,
-    string? DestinationRoot = default
+    string? DestinationRoot = default,
+    bool ReplaceRootDescriptor = default
 );

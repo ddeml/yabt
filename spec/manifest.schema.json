@@ -5,46 +5,157 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "sourcePath": { "type": "string" },
-    "createdAtUtc": { "type": "string", "format": "date-time" },
-    "format": {
-      "type": "string",
-      "minLength": 1
-    },
-    "files": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "relativePath": { "type": "string" },
-          "length": { "type": "integer", "minimum": 0 },
-          "lastWriteTimeUtc": { "type": "string", "format": "date-time" },
-          "contentHash": {
-            "type": ["string", "null"],
-            "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
-          }
-        },
-        "required": ["relativePath", "length", "lastWriteTimeUtc"]
-      }
-    },
-    "totalBytes": { "type": "integer", "minimum": 0 },
-    "manifestHash": {
-      "type": "string",
-      "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
-    },
+    "documentType": { "const": "yabt.packageManifest" },
+    "schemaVersion": { "const": 1 },
+    "sourcePath": { "$ref": "#/$defs/logicalPath" },
+    "createdAtUtc": { "$ref": "#/$defs/utcTimestamp" },
+    "format": { "$ref": "#/$defs/token" },
+    "formatVersion": { "type": "integer", "minimum": 1 },
+    "projectionId": { "$ref": "#/$defs/hash" },
     "packageName": {
       "type": "string",
-      "minLength": 1
-    }
+      "minLength": 1,
+      "pattern": "^(?=.*\\S)[^/\\\\]+$"
+    },
+    "policy": { "$ref": "#/$defs/policy" },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/entry" }
+    },
+    "totalBytes": { "type": "integer", "minimum": 0 },
+    "manifestHash": { "$ref": "#/$defs/hash" }
   },
   "required": [
+    "documentType",
+    "schemaVersion",
     "sourcePath",
     "createdAtUtc",
     "format",
-    "files",
+    "formatVersion",
+    "projectionId",
+    "packageName",
+    "policy",
+    "entries",
     "totalBytes",
-    "manifestHash",
-    "packageName"
-  ]
+    "manifestHash"
+  ],
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^xxh128:[A-Za-z0-9_-]{21}[AQgw]$"
+    },
+    "token": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\\\\\s]+$"
+    },
+    "logicalPath": {
+      "type": "string",
+      "pattern": "^(?:$|(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))[^\\s/\\\\](?:[^/\\\\]*[^\\s/\\\\])?(?:/[^\\s/\\\\](?:[^/\\\\]*[^\\s/\\\\])?)*)$"
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format": { "$ref": "#/$defs/token" },
+        "includePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": ".*\\S.*"
+          }
+        },
+        "excludePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": ".*\\S.*"
+          }
+        },
+        "options": true
+      },
+      "required": ["format"]
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "logicalPath": { "$ref": "#/$defs/logicalPath" },
+        "format": { "$ref": "#/$defs/token" },
+        "formatVersion": { "type": "integer", "minimum": 1 },
+        "projectionId": { "$ref": "#/$defs/hash" },
+        "artifactRole": { "$ref": "#/$defs/token" }
+      },
+      "required": [
+        "logicalPath",
+        "format",
+        "formatVersion",
+        "projectionId",
+        "artifactRole"
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": ["file", "directory", "formatArtifact"]
+        },
+        "relativePath": { "$ref": "#/$defs/logicalPath" },
+        "storedPath": {
+          "allOf": [
+            { "$ref": "#/$defs/logicalPath" },
+            { "minLength": 1 }
+          ]
+        },
+        "length": { "type": "integer", "minimum": 0 },
+        "lastModifiedUtc": { "$ref": "#/$defs/utcTimestamp" },
+        "contentHash": { "$ref": "#/$defs/hash" },
+        "projection": { "$ref": "#/$defs/projection" }
+      },
+      "required": [
+        "kind",
+        "relativePath",
+        "storedPath",
+        "length",
+        "lastModifiedUtc",
+        "contentHash"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "formatArtifact" } },
+            "required": ["kind"]
+          },
+          "then": { "required": ["projection"] },
+          "else": { "not": { "required": ["projection"] } }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "directory" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "length": { "const": 0 },
+              "storedPath": {
+                "pattern": "^(?:\\.yabt-empty|.+/\\.yabt-empty)$"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "relativePath": { "minLength": 1 }
+            }
+          }
+        }
+      ]
+    }
+  }
 }

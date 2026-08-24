@@ -879,6 +879,9 @@ internal sealed class HistoryDeduplicator
             !string.Equals(fileName, ArchiveChangeManifest.UncompressedFileName, StringComparison.Ordinal) &&
             !string.Equals(fileName, ArchiveChangeManifest.BrotliFileName, StringComparison.Ordinal) &&
             !string.Equals(fileName, ArchiveChangeManifest.InvalidationMarkerFileName, StringComparison.Ordinal) &&
+            !fileName.EndsWith(
+                ArchivePackageManifestFileNames.AdjacentSuffix,
+                StringComparison.Ordinal) &&
             !string.Equals(fileName, ArchiveHistoryFileNames.Manifest, StringComparison.Ordinal) &&
             !string.Equals(
                 fileName,

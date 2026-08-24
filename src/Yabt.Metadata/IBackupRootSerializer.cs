@@ -16,4 +16,10 @@ public interface IBackupRootSerializer
         Stream source,
         CancellationToken cancellationToken = default
     );
+
+    Task<BackupRootDocument> ReadDocumentAsync
+    (
+        Stream source,
+        CancellationToken cancellationToken = default
+    );
 }

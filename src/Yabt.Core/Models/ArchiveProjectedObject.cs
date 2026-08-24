@@ -7,5 +7,6 @@ public sealed record ArchiveProjectedObject
     long? ContentLength = default,
     DateTimeOffset? LastModifiedUtc = default,
     string? ContentHash = default,
-    string? ChangeFingerprint = default
+    string? ChangeFingerprint = default,
+    ArchiveProjectionProvenance? Projection = default
 );

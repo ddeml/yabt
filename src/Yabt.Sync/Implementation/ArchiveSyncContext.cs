@@ -1,5 +1,6 @@
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
+using Yabt.Metadata;
 
 namespace Yabt.Sync.Implementation;
 
@@ -11,6 +12,7 @@ internal sealed record ArchiveSyncContext
     IObjectStore TargetStore,
     BackupRootDescriptor SourceDescriptor,
     BackupRootDescriptor TargetDescriptor,
+    BackupRootDocument? SourceDocument,
     FolderPolicy Policy,
-    IArchiveFormatProjector Projector
+    IArchiveFormatHandler FormatHandler
 );

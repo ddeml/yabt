@@ -29,6 +29,25 @@ It does not record operational state such as last backup time, scan cursors, upl
 
 During MVP development, readers accept only `schemaVersion: 1`.
 
+## Exact Archive Copy And Restore
+
+`.yabt-root.json` is reserved root metadata, not an ordinary object in the logical live branch. A mutating backup validates the source document and copies its exact bytes to the selected archive root, outside `livePrefix` and outside every package. Exact means that whitespace, property order, line endings, and a UTF-8 byte-order mark are preserved. The schema-version-3 live change manifest records the archived descriptor's actual-byte xxHash128 value and length, so restore can detect a missing or changed copy before modifying the destination.
+
+If an archived descriptor already exists with the same `archiveId` and layout but different bytes, backup moves the old document to history before replacing it. A different archive id or layout is refused because it would combine incompatible roots.
+
+Backup dry-run and verify inspect this reserved object too. Dry-run reports a missing or byte-different copy as a pending exact installation, while verify is incomplete until the archived bytes match. Corrupt descriptors, incompatible identities or layouts, and disagreement with schema-version-3 descriptor evidence are refused.
+
+Restore writes the archived descriptor bytes unchanged. In particular, YABT does not rewrite `rootRole`, store declarations, or machine-specific filesystem paths for the new destination. This is deliberate: after restore, inspect the file and manually update any path that is obsolete on the new machine.
+
+For destination safety:
+
+- A missing descriptor is installed.
+- An exact byte match is left untouched.
+- A different descriptor with the same archive id and layout is refused unless `--replace-root-descriptor` is supplied; with that option, the old document moves to history before replacement.
+- A different archive id or layout is refused even with `--replace-root-descriptor`.
+
+The archived layout is authoritative for restored live and history paths. The local source descriptor used to connect to the archive must identify the same archive id, but its runtime store configuration remains the way YABT locates that archive before it can read the preserved copy.
+
 ## Object Stores
 
 Object stores are identified by provider-owned string names.
@@ -44,6 +63,8 @@ The same store can be a source, target, backup location, restore location, or re
 Provider-specific store parameters normally live in the same JSON object as the store declaration. For example, a filesystem store may have `rootPath`, while WebDAV may have `endpoint` and `rootPath`.
 
 Azure Blob is configured through the optional `configSectionPath` property instead. An Azure store declaration contains only `id`, `kind`, and optionally `configSectionPath`. When the property is missing or null, YABT uses `ObjectStores:AzureBlob`.
+
+Root validation checks every declared Azure store, not only the store selected for the current command. Any `credentialRef` or provider-specific property on an Azure declaration is rejected before backup can copy the descriptor, which prevents a secret-bearing unused declaration from leaking into another archive. Conversely, `configSectionPath` is rejected on non-Azure store declarations.
 
 YABT binds the selected section from the application's merged `IConfiguration`. This allows non-secret values such as `ServiceUri`, `ContainerName`, and `Prefix` to come from `appsettings.json`, while credentials can come from User Secrets, environment variables, or another configuration provider. A nonempty `ConnectionString` takes precedence. Otherwise, YABT requires `ServiceUri` and uses the host's registered Azure `TokenCredential`, which defaults to `DefaultAzureCredential`. A host may register a more specific credential such as `ManagedIdentityCredential`. A token credential authenticates access but does not identify the storage account endpoint.
 

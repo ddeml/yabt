@@ -11,7 +11,8 @@ internal sealed class ArchiveProjectionObjectStore
     string _sourceRoot,
     string? sourceRootPrefix,
     IFolderPolicyReader _folderPolicyReader,
-    IReadOnlyDictionary<string, IArchiveFormatProjector> _projectors
+    IReadOnlyDictionary<string, IArchiveFormatHandler> _formatHandlers,
+    string? logicalRootPath = default
 ) : IReadOnlyObjectStore
 {
     private readonly object _gate = new();
@@ -22,6 +23,7 @@ internal sealed class ArchiveProjectionObjectStore
     private readonly HashSet<string> _openingProjectedObjectKeys = new(StringComparer.Ordinal);
     private readonly List<string> _projectedSourcePrefixes = [];
     private readonly string? _sourceRootPrefix = ArchiveLayout.NormalizeObjectPrefix(sourceRootPrefix);
+    private readonly string _logicalRootPath = ArchiveLayout.NormalizeObjectKey(logicalRootPath);
 
     public Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
@@ -150,7 +152,7 @@ internal sealed class ArchiveProjectionObjectStore
                     projectedSourcePrefix,
                     cancellationToken);
 
-                if (projectedScopeDefinition.Projector.ProjectsBesideSourceFolder)
+                if (projectedScopeDefinition.FormatHandler.ProjectsBesideSourceFolder)
                 {
                     var projectedScope = await GetProjectedScopeAsync(
                         projectedSourcePrefix,
@@ -298,7 +300,8 @@ internal sealed class ArchiveProjectionObjectStore
                 projectedObject.ContentLength,
                 projectedObject.LastModifiedUtc,
                 projectedObject.ContentHash,
-                projectedObject.ChangeFingerprint
+                projectedObject.ChangeFingerprint,
+                projectedObject.Projection
             );
             folderItems.TryAdd(
                 relativePath,
@@ -348,8 +351,8 @@ internal sealed class ArchiveProjectionObjectStore
             }
         }
 
-        var projector = projectedScopeDefinition.Projector;
-        var outputPrefix = projector.ProjectsBesideSourceFolder ?
+        var formatHandler = projectedScopeDefinition.FormatHandler;
+        var outputPrefix = formatHandler.ProjectsBesideSourceFolder ?
             GetParentPrefix(projectedScopePrefix) :
             ArchiveLayout.NormalizeObjectKey(projectedScopePrefix);
         var projectedSourceStore = new ArchiveProjectionObjectStore
@@ -358,17 +361,19 @@ internal sealed class ArchiveProjectionObjectStore
             projectedScopeDefinition.SourceDisplayName,
             projectedScopePrefix,
             _folderPolicyReader,
-            _projectors
+            _formatHandlers,
+            projectedScopeDefinition.LogicalPath
         );
         var request = new ArchiveProjectionRequest
         (
             projectedSourceStore,
             projectedScopePrefix,
             projectedScopeDefinition.Policy,
-            projectedScopeDefinition.SourceDisplayName
+            projectedScopeDefinition.SourceDisplayName,
+            projectedScopeDefinition.LogicalPath
         );
         var projectedObjects = new List<ArchiveProjectedObject>();
-        var streamedProjectedObjects = projector.ProjectAsync(
+        var streamedProjectedObjects = formatHandler.ProjectBackupAsync(
             request,
             cancellationToken);
 
@@ -379,10 +384,18 @@ internal sealed class ArchiveProjectionObjectStore
             await RegisterProjectedObjectAsync(
                 projectedScopePrefix,
                 outputPrefix,
-                projector.ProjectsBesideSourceFolder,
+                formatHandler.ProjectsBesideSourceFolder,
                 projectedObject,
                 cancellationToken);
             projectedObjects.Add(projectedObject);
+        }
+
+        if (formatHandler.ProjectsBesideSourceFolder)
+        {
+            ValidatePackagedProjection(
+                projectedScopePrefix,
+                projectedScopeDefinition,
+                projectedObjects);
         }
 
         var projectedScope = new ProjectedScope
@@ -396,6 +409,58 @@ internal sealed class ArchiveProjectionObjectStore
         }
 
         return projectedScope;
+    }
+
+    private static void ValidatePackagedProjection
+    (
+        string projectedScopePrefix,
+        ProjectedScopeDefinition definition,
+        List<ArchiveProjectedObject> projectedObjects
+    )
+    {
+        if (projectedObjects.Count == 0)
+        {
+            throw new YabtSyncException(
+                $"Packaged source folder '{projectedScopePrefix}' did not produce any artifacts.");
+        }
+
+        string? projectionId = null;
+        int? formatVersion = null;
+        var artifactRoles = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var projectedObject in projectedObjects)
+        {
+            var projection = projectedObject.Projection ??
+                throw new YabtSyncException(
+                    $"Packaged source folder '{projectedScopePrefix}' produced artifact " +
+                        $"'{projectedObject.RelativePath}' without projection provenance.");
+            if (!string.Equals(
+                    projection.LogicalPath,
+                    definition.LogicalPath,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    projection.Format,
+                    definition.FormatHandler.FormatName,
+                    StringComparison.Ordinal))
+            {
+                throw new YabtSyncException(
+                    $"Packaged source folder '{projectedScopePrefix}' produced inconsistent " +
+                        "projection provenance.");
+            }
+
+            projectionId ??= projection.ProjectionId;
+            formatVersion ??= projection.FormatVersion;
+            if (!string.Equals(
+                    projectionId,
+                    projection.ProjectionId,
+                    StringComparison.Ordinal) ||
+                formatVersion != projection.FormatVersion ||
+                !artifactRoles.Add(projection.ArtifactRole))
+            {
+                throw new YabtSyncException(
+                    $"Packaged source folder '{projectedScopePrefix}' produced artifacts from " +
+                        "multiple projections or with duplicate roles.");
+            }
+        }
     }
 
     private async Task<ProjectedScopeDefinition> GetProjectedScopeDefinitionAsync
@@ -415,15 +480,21 @@ internal sealed class ArchiveProjectionObjectStore
         }
 
         var sourceDisplayName = CreateSourceDisplayName(projectedScopePrefix);
+        var logicalPath = ArchiveLayout.CombinePrefixAndRelativePath(
+            _logicalRootPath,
+            ArchiveLayout.RemovePrefix(
+                projectedScopePrefix,
+                _sourceRootPrefix));
         var policy = await _folderPolicyReader.ReadPolicyAsync(
             sourceDisplayName,
             cancellationToken);
-        var projector = ResolveProjector(policy);
+        var formatHandler = ResolveFormatHandler(policy);
         var projectedScopeDefinition = new ProjectedScopeDefinition
         (
             sourceDisplayName,
+            logicalPath,
             policy,
-            projector
+            formatHandler
         );
         lock (_gate)
         {
@@ -442,14 +513,14 @@ internal sealed class ArchiveProjectionObjectStore
         return projectedScopeDefinition;
     }
 
-    private IArchiveFormatProjector ResolveProjector(FolderPolicy policy)
+    private IArchiveFormatHandler ResolveFormatHandler(FolderPolicy policy)
     {
-        if (_projectors.TryGetValue(policy.Format, out var projector))
+        if (_formatHandlers.TryGetValue(policy.Format, out var formatHandler))
         {
-            return projector;
+            return formatHandler;
         }
 
-        throw new YabtSyncException($"No archive format projector is registered for format '{policy.Format}'.");
+        throw new YabtSyncException($"No archive format handler is registered for format '{policy.Format}'.");
     }
 
     private async Task RegisterProjectedObjectAsync
@@ -461,6 +532,13 @@ internal sealed class ArchiveProjectionObjectStore
         CancellationToken cancellationToken
     )
     {
+        if (projectsBesideSourceFolder && projectedObject.Projection is null)
+        {
+            throw new YabtSyncException(
+                $"Packaged source folder '{projectedSourcePrefix}' produced artifact " +
+                    $"'{projectedObject.RelativePath}' without projection provenance.");
+        }
+
         var projectedKey = ArchiveLayout.CombinePrefixAndRelativePath(
             projectedOutputPrefix,
             projectedObject.RelativePath);
@@ -609,7 +687,7 @@ internal sealed class ArchiveProjectionObjectStore
             ArchiveLayout.CombinePrefixAndRelativePath(
                 sourcePrefix,
                 FolderPolicyFileNames.Primary),
-            cancellationToken);//TODO: bei sub muss hier true geliefert werden, wird aber nicht
+            cancellationToken);
     }
 
     private string CreateSourceDisplayName(string sourcePrefix)
@@ -639,7 +717,8 @@ internal sealed class ArchiveProjectionObjectStore
     private sealed record ProjectedScopeDefinition
     (
         string SourceDisplayName,
+        string LogicalPath,
         FolderPolicy Policy,
-        IArchiveFormatProjector Projector
+        IArchiveFormatHandler FormatHandler
     );
 }

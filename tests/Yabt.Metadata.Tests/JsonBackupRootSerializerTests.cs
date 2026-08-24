@@ -186,6 +186,213 @@ public sealed class JsonBackupRootSerializerTests
     }
 
     [TestMethod]
+    public async Task ReadAsyncRejectsMissingArchiveId()
+    {
+        var json = CreateRootJson(archiveIdProperty: null);
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.ToString(), "archiveId");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsNullArchiveId()
+    {
+        var json = CreateRootJson(archiveIdProperty: "\"archiveId\":null");
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.Message, "archive id is required");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsMissingLayout()
+    {
+        var json = CreateRootJson(layoutProperty: null);
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.ToString(), "layout");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsNullLayout()
+    {
+        var json = CreateRootJson(layoutProperty: "\"layout\":null");
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.Message, "layout is required");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsMissingStores()
+    {
+        var json = CreateRootJson(storesProperty: null);
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.ToString(), "stores");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsNullStores()
+    {
+        var json = CreateRootJson(storesProperty: "\"stores\":null");
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.Message, "stores collection is required");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsEmptyStoreId()
+    {
+        var json = CreateRootJson(
+            storesProperty: "\"stores\":[{\"id\":\"\",\"kind\":\"fileSystem\"}]");
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.Message, "object store id is required");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsDuplicateStoreIdsIgnoringCase()
+    {
+        var json = CreateRootJson(
+            storesProperty:
+                "\"stores\":[{\"id\":\"target\",\"kind\":\"fileSystem\"}," +
+                    "{\"id\":\"TARGET\",\"kind\":\"azureBlob\"}]");
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.Message, "duplicate object store id");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsInvalidRootRole()
+    {
+        var json = CreateRootJson(additionalProperty: "\"rootRole\":\"Source\"");
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.Message, "root role");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsUnknownLayoutProperty()
+    {
+        var json = CreateRootJson(
+            layoutProperty:
+                "\"layout\":{\"livePrefix\":\"\",\"histPrefix\":\".yabt-hist\"," +
+                    "\"historyPrefix\":\"hist\"}");
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.ToString(), "historyPrefix");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsIncorrectlyCasedRootPropertyName()
+    {
+        var json = CreateRootJson(archiveIdProperty: "\"ArchiveId\":\"test-archive\"");
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.ToString(), "ArchiveId");
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsIncorrectlyCasedLayoutPropertyName()
+    {
+        var json = CreateRootJson(
+            layoutProperty: "\"layout\":{\"LivePrefix\":\"\",\"histPrefix\":\".yabt-hist\"}");
+
+        var exception = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(exception.ToString(), "LivePrefix");
+    }
+
+    [DataRow("\"credentialRef\":\"legacy-secret\"")]
+    [DataRow("\"connectionString\":\"UseDevelopmentStorage=true\"")]
+    [TestMethod]
+    public async Task ReadAsyncRejectsForbiddenUnselectedAzureStoreProperty
+    (
+        string forbiddenProperty
+    )
+    {
+        var json = CreateRootJson
+        (
+            storesProperty:
+                "\"stores\":[{\"id\":\"selected\",\"kind\":\"fileSystem\"," +
+                    "\"rootPath\":\"archive\"},{\"id\":\"unselected-azure\"," +
+                    $"\"kind\":\"azureBlob\",{forbiddenProperty}}}]",
+            additionalProperty: "\"defaultStoreId\":\"selected\""
+        );
+
+        await AssertReadRejectedAsync(json);
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsExplicitNullCredentialRefForAzureStore()
+    {
+        var json = CreateRootJson
+        (
+            storesProperty:
+                "\"stores\":[{\"id\":\"target\",\"kind\":\"azureBlob\"," +
+                    "\"credentialRef\":null}]"
+        );
+
+        await AssertReadRejectedAsync(json);
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsConfigSectionPathForNonAzureStore()
+    {
+        var json = CreateRootJson
+        (
+            storesProperty:
+                "\"stores\":[{\"id\":\"target\",\"kind\":\"fileSystem\"," +
+                    "\"rootPath\":\"archive\"," +
+                    "\"configSectionPath\":\"ObjectStores:FileSystem\"}]"
+        );
+
+        await AssertReadRejectedAsync(json);
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsExplicitNullConfigSectionPathForNonAzureStore()
+    {
+        var json = CreateRootJson
+        (
+            storesProperty:
+                "\"stores\":[{\"id\":\"target\",\"kind\":\"fileSystem\"," +
+                    "\"rootPath\":\"archive\",\"configSectionPath\":null}]"
+        );
+
+        await AssertReadRejectedAsync(json);
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsNullLivePrefix()
+    {
+        var json = CreateRootJson(
+            layoutProperty: "\"layout\":{\"livePrefix\":null,\"histPrefix\":\".yabt-hist\"}");
+
+        await AssertReadRejectedAsync(json);
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsDuplicateJsonProperties()
+    {
+        var json = CreateRootJson(
+            archiveIdProperty:
+                "\"archiveId\":\"test-archive\",\"archiveId\":\"test-archive\"");
+
+        await AssertReadRejectedAsync(json);
+    }
+
+    [TestMethod]
     public async Task WriteAsyncRejectsUnsupportedChangeManifestCompression()
     {
         var descriptor = CreateDescriptor(
@@ -246,6 +453,47 @@ public sealed class JsonBackupRootSerializerTests
         ChangeManifestCompression: changeManifestCompression,
         HistoryDeduplicationTinyFileMaximumBytes: historyDeduplicationTinyFileMaximumBytes
     );
+
+    private static string CreateRootJson
+    (
+        string? archiveIdProperty = "\"archiveId\":\"test-archive\"",
+        string? layoutProperty =
+            "\"layout\":{\"livePrefix\":\"\",\"histPrefix\":\".yabt-hist\"}",
+        string? storesProperty =
+            "\"stores\":[{\"id\":\"target\",\"kind\":\"fileSystem\"}]",
+        string? additionalProperty = default
+    )
+    {
+        List<string> properties =
+        [
+            "\"documentType\":\"yabt.backupRoot\"",
+            "\"schemaVersion\":1",
+            "\"createdAtUtc\":\"2026-08-16T12:00:00Z\"",
+        ];
+
+        AddProperty(archiveIdProperty);
+        AddProperty(layoutProperty);
+        AddProperty(storesProperty);
+        AddProperty(additionalProperty);
+        return $"{{{string.Join(',', properties)}}}";
+
+        void AddProperty(string? property)
+        {
+            if (property is not null)
+            {
+                properties.Add(property);
+            }
+        }
+    }
+
+    private static async Task<YabtMetadataException> AssertReadRejectedAsync(string json)
+    {
+        var serializer = CreateSerializer();
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        return await Assert.ThrowsAsync<YabtMetadataException>(
+            () => serializer.ReadAsync(source));
+    }
 
     private static IBackupRootSerializer CreateSerializer()
     {

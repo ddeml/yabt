@@ -16,6 +16,7 @@ public static class YabtEventIds
 
     public const int MirrorProjectedObject = 3000;
     public const int MirrorProjectionCompleted = 3001;
+    public const int IgnoringZipRestoreTemporaryPathDeleteException = 3100;
 
     public const int FallingBackToDownloadedAzureBlobMove = 4000;
 }

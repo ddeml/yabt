@@ -3,7 +3,7 @@ using Yabt.Common;
 
 namespace Yabt.Format.Mirror.Implementation;
 
-internal static partial class MirrorArchiveFormatProjectorLogMessages
+internal static partial class MirrorArchiveFormatHandlerLogMessages
 {
     [LoggerMessage(
         EventId = YabtEventIds.MirrorProjectedObject,

@@ -10,30 +10,30 @@ using Yabt.Tests;
 namespace Yabt.Format.Mirror.Tests;
 
 [TestClass]
-public sealed class MirrorArchiveFormatProjectorTests
+public sealed class MirrorArchiveFormatHandlerTests
 {
     [TestMethod]
-    public void ServiceRegistrationRegistersMirrorFormatProjector()
+    public void ServiceRegistrationRegistersMirrorFormatHandler()
     {
         using var serviceProvider = CreateServices().BuildServiceProvider();
 
-        var projectors = serviceProvider.GetServices<IArchiveFormatProjector>().ToArray();
+        var handlers = serviceProvider.GetServices<IArchiveFormatHandler>().ToArray();
 
-        Assert.AreEqual(1, projectors.Length);
-        var projector = projectors[0];
-        Assert.AreEqual(MirrorArchiveFormatName.Value, projector.FormatName);
+        Assert.AreEqual(1, handlers.Length);
+        var handler = handlers[0];
+        Assert.AreEqual(MirrorArchiveFormatName.Value, handler.FormatName);
     }
 
     [TestMethod]
-    public async Task ProjectAsyncMapsSourceObjectsOneToOne()
+    public async Task ProjectBackupAsyncMapsSourceObjectsOneToOne()
     {
         using var serviceProvider = CreateServices().BuildServiceProvider();
-        var projector = serviceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var handler = serviceProvider.GetRequiredService<IArchiveFormatHandler>();
         var sourceStore = new MemoryObjectStore();
 
         await UploadTextAsync(sourceStore, "folder/file.txt", "source content");
 
-        var projectedObjects = await CollectProjectedObjectsAsync(projector.ProjectAsync(new
+        var projectedObjects = await CollectProjectedObjectsAsync(handler.ProjectBackupAsync(new
         (
             sourceStore,
             Policy: new FolderPolicy(MirrorArchiveFormatName.Value)
@@ -98,15 +98,15 @@ public sealed class MirrorArchiveFormatProjectorTests
     }
 
     [TestMethod]
-    public async Task ProjectAsyncRemovesConfiguredSourcePrefix()
+    public async Task ProjectBackupAsyncRemovesConfiguredSourcePrefix()
     {
         using var serviceProvider = CreateServices().BuildServiceProvider();
-        var projector = serviceProvider.GetRequiredService<IArchiveFormatProjector>();
+        var handler = serviceProvider.GetRequiredService<IArchiveFormatHandler>();
         var sourceStore = new MemoryObjectStore();
 
         await UploadTextAsync(sourceStore, "live/folder/file.txt", "source content");
 
-        var projectedObjects = await CollectProjectedObjectsAsync(projector.ProjectAsync(new
+        var projectedObjects = await CollectProjectedObjectsAsync(handler.ProjectBackupAsync(new
         (
             sourceStore,
             SourcePrefix: "live",
@@ -117,11 +117,80 @@ public sealed class MirrorArchiveFormatProjectorTests
         Assert.AreEqual("folder/file.txt", projectedObject.RelativePath);
     }
 
+    [TestMethod]
+    public async Task ProjectRestoreAsyncRoundTripsFileContentAndTimestamp()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var handler = serviceProvider.GetRequiredService<IArchiveFormatHandler>();
+        var expectedLastModifiedUtc = new DateTimeOffset
+        (
+            2026,
+            8,
+            24,
+            12,
+            30,
+            6,
+            TimeSpan.Zero
+        );
+        var sourceStore = new MemoryObjectStore
+        (
+            new MirrorSourceTimeProvider(expectedLastModifiedUtc)
+        );
+        await UploadTextAsync(sourceStore, "folder/file.txt", "source content");
+        var backupArtifact = (await CollectProjectedObjectsAsync(handler.ProjectBackupAsync(new
+        (
+            sourceStore,
+            Policy: new FolderPolicy(MirrorArchiveFormatName.Value)
+        )))).Single();
+
+        await using var restoreProjection = await handler.ProjectRestoreAsync(new
+        (
+            backupArtifact
+        ));
+
+        Assert.AreEqual(0, restoreProjection.Directories.Count);
+        var restoredObject = restoreProjection.Objects.Single();
+        Assert.AreEqual("folder/file.txt", restoredObject.RelativePath);
+        Assert.AreEqual(backupArtifact.LastModifiedUtc, restoredObject.LastModifiedUtc);
+        await AssertProjectedTextAsync(restoredObject, "source content");
+    }
+
+    [TestMethod]
+    public async Task ProjectRestoreAsyncConvertsEmptyFolderMarkerToDirectory()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var handler = serviceProvider.GetRequiredService<IArchiveFormatHandler>();
+        var markerArtifact = new ArchiveProjectedObject
+        (
+            $"folder/{ArchiveFolderMarkerFileNames.EmptyFolder}",
+            cancellationToken =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult(new ArchiveObjectContent
+                (
+                    new MemoryStream([], writable: false)
+                ));
+            },
+            ContentLength: 0,
+            ChangeFingerprint: "yabt-empty-v1:present"
+        );
+
+        await using var restoreProjection = await handler.ProjectRestoreAsync(new
+        (
+            markerArtifact
+        ));
+
+        Assert.AreEqual(0, restoreProjection.Objects.Count);
+        CollectionAssert.AreEqual(
+            new[] { "folder" },
+            restoreProjection.Directories.ToArray());
+    }
+
     private static ServiceCollection CreateServices()
     {
         var services = new ServiceCollection();
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
-        services.AddYabtMirrorFormatProjector();
+        services.AddYabtMirrorFormatHandler();
 
         return services;
     }
@@ -164,5 +233,10 @@ public sealed class MirrorArchiveFormatProjectorTests
         }
 
         return result;
+    }
+
+    private sealed class MirrorSourceTimeProvider(DateTimeOffset _utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => _utcNow;
     }
 }

@@ -8,7 +8,7 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public static class YabtMirrorFormatServiceCollectionExtensions
 {
-    public static IServiceCollection AddYabtMirrorFormatProjector
+    public static IServiceCollection AddYabtMirrorFormatHandler
     (
         this IServiceCollection services,
         string? configSectionPath = null
@@ -16,7 +16,7 @@ public static class YabtMirrorFormatServiceCollectionExtensions
     {
         _ = configSectionPath;
 
-        services.AddSingleton<IArchiveFormatProjector, MirrorArchiveFormatProjector>();
+        services.AddSingleton<IArchiveFormatHandler, MirrorArchiveFormatHandler>();
         return services;
     }
 }

@@ -1,9 +1,12 @@
+using System.Text.Json.Serialization;
+
 namespace Yabt.Core.Models;
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ArchiveLayout
 (
-    string LivePrefix = "",
-    string HistPrefix = ".yabt-hist"
+    [property: JsonRequired] string LivePrefix = "",
+    [property: JsonRequired] string HistPrefix = ".yabt-hist"
 )
 {
     public static ArchiveLayout Default { get; } = new();
