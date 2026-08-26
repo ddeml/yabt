@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.CommandLine;
+using Microsoft.Extensions.Logging;
 using Yabt.Common;
 using Yabt.Sync;
 
@@ -8,7 +9,10 @@ namespace Yabt.Cli.Implementation;
 internal sealed class CommandRunner
 (
     IArchiveSynchronizer _archiveSynchronizer,
-    IHistoryDeduplicator _historyDeduplicator
+    IHistoryDeduplicator _historyDeduplicator,
+    ILogger<CommandRunner> _logger,
+    LogFileStartup _logFileStartup,
+    LogFilePathGuard _logFilePathGuard
 )
 {
     private static readonly FrozenSet<string> HelpArguments = new[]
@@ -25,6 +29,8 @@ internal sealed class CommandRunner
         CancellationToken cancellationToken = default
     )
     {
+        _logger.LogTrace(nameof(RunAsync));
+
         var rootCommand = CreateRootCommand();
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -40,6 +46,10 @@ internal sealed class CommandRunner
         }
         catch (YabtException ex)
         {
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogDebug(ex, "Command failed: {ErrorMessage}", ex.Message);
+            }
             Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
         }
@@ -61,7 +71,12 @@ internal sealed class CommandRunner
 
     private RootCommand CreateRootCommand()
     {
-        var rootCommand = new RootCommand("Replicate folders to inspectable object-store archives.");
+        _logger.LogTrace(nameof(CreateRootCommand));
+
+        var rootCommand = new RootCommand("Replicate folders to inspectable object-store archives.")
+        {
+            Options = { LogFileCommandLine.CreateOption() },
+        };
 
         foreach (var command in YabtCliCommandNames.Known.Order(StringComparer.OrdinalIgnoreCase))
         {
@@ -76,6 +91,8 @@ internal sealed class CommandRunner
 
     private Command CreateArchiveCommand(string commandName)
     {
+        _logger.LogTrace(nameof(CreateArchiveCommand));
+
         var sourceRootArgument = new Argument<string>("source-root")
         {
             Description = "Folder to use as the command root.",
@@ -140,6 +157,12 @@ internal sealed class CommandRunner
                 null;
             var replaceRootDescriptor = commandName == YabtCliCommandNames.Restore &&
                 parseResult.GetValue(replaceRootDescriptorOption);
+            await EnsureFileLoggingStartedAsync(
+                commandName,
+                sourceRoot,
+                targetStoreId,
+                destinationRoot,
+                cancellationToken);
             return await RunArchiveCommandAsync
             (
                 commandName,
@@ -158,6 +181,8 @@ internal sealed class CommandRunner
 
     private Command CreateDeduplicateCommand()
     {
+        _logger.LogTrace(nameof(CreateDeduplicateCommand));
+
         var archiveRootArgument = new Argument<string>("archive-root")
         {
             Description = "Archive root whose history should be deduplicated.",
@@ -187,6 +212,12 @@ internal sealed class CommandRunner
             var archiveRoot = parseResult.GetValue(archiveRootArgument) ?? Directory.GetCurrentDirectory();
             var dryRun = parseResult.GetValue(dryRunOption);
             var targetStoreId = parseResult.GetValue(targetStoreIdOption);
+            await EnsureFileLoggingStartedAsync(
+                YabtCliCommandNames.Deduplicate,
+                archiveRoot,
+                targetStoreId,
+                destinationRoot: null,
+                cancellationToken);
             var request = new HistoryDeduplicationRequest(archiveRoot, dryRun, targetStoreId);
             var result = await _historyDeduplicator.DeduplicateAsync(request, cancellationToken);
 
@@ -195,6 +226,33 @@ internal sealed class CommandRunner
         });
 
         return command;
+    }
+
+    private async Task EnsureFileLoggingStartedAsync
+    (
+        string commandName,
+        string commandRoot,
+        string? targetStoreId,
+        string? destinationRoot,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(EnsureFileLoggingStartedAsync));
+
+        if (!_logFileStartup.IsEnabled)
+        {
+            return;
+        }
+
+        await _logFilePathGuard.EnsureOutsideOperationRootsAsync(
+            _logFileStartup.Path,
+            commandName,
+            commandRoot,
+            targetStoreId,
+            destinationRoot,
+            cancellationToken);
+        _logFileStartup.Start();
+        Console.WriteLine($"Log file: {_logFileStartup.Path}");
     }
 
     private async Task<int> RunArchiveCommandAsync
@@ -209,6 +267,8 @@ internal sealed class CommandRunner
         CancellationToken cancellationToken
     )
     {
+        _logger.LogTrace(nameof(RunArchiveCommandAsync));
+
         var request = new SyncRunRequest
         (
             sourceRoot,

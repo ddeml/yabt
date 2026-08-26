@@ -279,6 +279,7 @@ internal sealed class ZipArchiveFormatHandler
                     $"ZIP package '{artifact.RelativePath}' has no embedded package manifest.");
             }
             ArchiveManifest manifest;
+            _logger.LogZipEmbeddedManifestRead(artifact.RelativePath);
             await using (var manifestContent = embeddedManifestEntry.Open())
             using (var boundedManifestContent = new MemoryStream(
                 await ReadBoundedManifestContentAsync(
@@ -423,9 +424,13 @@ internal sealed class ZipArchiveFormatHandler
         var retainTemporaryPath = false;
         try
         {
+            _logger.LogZipTemporaryPlumbingOperation(
+                "Creating restore staging file",
+                temporaryPath);
             await using var stagedContent = CreateRestoreStagingFileStream(temporaryPath);
             var hash = new XxHash128();
             long contentLength = 0;
+            _logger.LogZipRestoreArtifactRead(artifact.RelativePath);
             await using var packageContent = await artifact.OpenContentAsync(cancellationToken);
             var buffer = new byte[DefaultHashBufferSize];
             while (true)
@@ -443,6 +448,9 @@ internal sealed class ZipArchiveFormatHandler
             }
 
             await stagedContent.FlushAsync(cancellationToken);
+            _logger.LogZipTemporaryPlumbingOperation(
+                "Finished writing restore staging file",
+                temporaryPath);
             if (artifact.ContentLength.HasValue &&
                 artifact.ContentLength.Value != contentLength)
             {
@@ -506,6 +514,9 @@ internal sealed class ZipArchiveFormatHandler
     private void TryDeleteRestoreTemporaryPath(string path)
     {
         _logger.LogTrace(nameof(TryDeleteRestoreTemporaryPath));
+        _logger.LogZipTemporaryPlumbingOperation(
+            "Deleting restore staging file",
+            path);
 
         try
         {
@@ -933,10 +944,12 @@ internal sealed class ZipArchiveFormatHandler
                         continue;
                     }
 
+                    var sourceKey = sourceObject.SourceKey ??
+                        throw new InvalidOperationException(
+                            $"ZIP source object '{sourceObject.RelativePath}' has no source key.");
+                    _logger.LogZipSourceObjectRead(sourceKey, sourceObject.RelativePath);
                     await using var sourceContent = await sourceStore.OpenReadAsync(
-                        sourceObject.SourceKey ??
-                            throw new InvalidOperationException(
-                                $"ZIP source object '{sourceObject.RelativePath}' has no source key."),
+                        sourceKey,
                         cancellationToken);
                     await using var entryContent = entry.Open();
                     var hash = new XxHash128();
@@ -1177,6 +1190,9 @@ internal sealed class ZipArchiveFormatHandler
     {
         async Task<ArchiveObjectContent> OpenPackageAsync(CancellationToken cancellationToken)
         {
+            _logger.LogZipProjectedArtifactRead(
+                ArchiveProjectionArtifactRoles.Package,
+                packageName);
             var package = await materialization.GetAsync(cancellationToken);
             return new
             (
@@ -1211,6 +1227,10 @@ internal sealed class ZipArchiveFormatHandler
     {
         async Task<ArchiveObjectContent> OpenManifestAsync(CancellationToken cancellationToken)
         {
+            var manifestPath = $"{packageName}{ArchivePackageManifestFileNames.AdjacentSuffix}";
+            _logger.LogZipProjectedArtifactRead(
+                ArchiveProjectionArtifactRoles.Manifest,
+                manifestPath);
             var package = await materialization.GetAsync(cancellationToken);
             return new
             (
@@ -1356,6 +1376,7 @@ internal sealed class ZipArchiveFormatHandler
         }
 
         ValidateProjectionPair(packageArtifact, manifestArtifact);
+        _logger.LogZipAdjacentManifestRead(manifestArtifact.RelativePath);
         var manifestBytes = await ReadAndValidateManifestArtifactAsync(
             manifestArtifact,
             cancellationToken);
@@ -1639,6 +1660,7 @@ internal sealed class ZipArchiveFormatHandler
             }
 
             byte[] embeddedManifestBytes;
+            _logger.LogZipEmbeddedManifestRead(packageArtifact.RelativePath);
             await using (var embeddedManifestContent = embeddedManifestEntry.Open())
             using (var buffer = new MemoryStream())
             {

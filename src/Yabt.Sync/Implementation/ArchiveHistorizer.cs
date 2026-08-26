@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Metadata;
@@ -10,7 +11,8 @@ internal sealed class ArchiveHistorizer
 (
     IArchiveMutableObjectStore _store,
     ArchiveLayout _layout,
-    DateTimeOffset historicalTimestamp
+    DateTimeOffset historicalTimestamp,
+    ILogger _logger
 )
 {
     private static readonly IReadOnlyDictionary<string, string> EmptyMetadata =
@@ -32,10 +34,15 @@ internal sealed class ArchiveHistorizer
 
     public async Task InspectRecoveryStateAsync(CancellationToken cancellationToken)
     {
+        _logger.LogTrace(nameof(InspectRecoveryStateAsync));
+
         if (_recoveryStateInspected) { return; }
 
         var invalidationMarkerKey = _layout.ToHistoryObjectKey(
             ArchiveHistoryManifest.InvalidationMarkerFileName);
+        _logger.LogControlMetadataOperation(
+            "Checking",
+            invalidationMarkerKey);
         _cleanupRequired = await _store.ExistsAsync(
             invalidationMarkerKey,
             cancellationToken);
@@ -49,6 +56,8 @@ internal sealed class ArchiveHistorizer
         CancellationToken cancellationToken
     )
     {
+        _logger.LogTrace(nameof(MoveObjectAsync));
+
         await PrepareMutationAsync(cancellationToken);
         var sourceKey = _layout.ToLiveObjectKey(relativePath);
         var destinationKey = await _historyKeyAllocator.CreateHistoricalKeyAsync(
@@ -74,6 +83,8 @@ internal sealed class ArchiveHistorizer
         CancellationToken cancellationToken
     )
     {
+        _logger.LogTrace(nameof(MoveRootObjectAsync));
+
         await PrepareMutationAsync(cancellationToken);
         var sourceKey = ArchiveLayout.NormalizeObjectKey(rootRelativePath);
         var destinationKey = await _historyKeyAllocator.CreateHistoricalKeyAsync(
@@ -99,6 +110,8 @@ internal sealed class ArchiveHistorizer
         CancellationToken cancellationToken
     )
     {
+        _logger.LogTrace(nameof(MoveFolderAsync));
+
         await PrepareMutationAsync(cancellationToken);
         var sourcePrefix = _layout.ToLiveObjectKey(relativePath);
         var destinationPrefix = await _historyKeyAllocator.CreateHistoricalKeyAsync(
@@ -122,6 +135,8 @@ internal sealed class ArchiveHistorizer
 
     public async Task CompleteAsync(CancellationToken cancellationToken)
     {
+        _logger.LogTrace(nameof(CompleteAsync));
+
         await InspectRecoveryStateAsync(cancellationToken);
         if (!_cleanupRequired) { return; }
 
@@ -141,6 +156,8 @@ internal sealed class ArchiveHistorizer
 
     private async Task PrepareMutationAsync(CancellationToken cancellationToken)
     {
+        _logger.LogTrace(nameof(PrepareMutationAsync));
+
         if (_mutationPrepared) { return; }
 
         await InspectRecoveryStateAsync(cancellationToken);
@@ -150,9 +167,11 @@ internal sealed class ArchiveHistorizer
         var manifestExists = await _store.ExistsAsync(
             manifestKey,
             cancellationToken);
+        _logger.LogControlMetadataOperation("Checked", manifestKey);
         var markerExists = await _store.ExistsAsync(
             markerKey,
             cancellationToken);
+        _logger.LogControlMetadataOperation("Checked", markerKey);
         if (manifestExists && !markerExists)
         {
             await using var markerContent = new MemoryStream(
@@ -164,6 +183,7 @@ internal sealed class ArchiveHistorizer
                 "application/json",
                 EmptyMetadata,
                 cancellationToken);
+            _logger.LogControlMetadataOperation("Wrote", markerKey);
             markerExists = true;
         }
 
@@ -178,10 +198,15 @@ internal sealed class ArchiveHistorizer
         CancellationToken cancellationToken
     )
     {
+        _logger.LogTrace(nameof(DeleteInternalObjectAsync));
+
         try
         {
             if (!await _store.ExistsAsync(key, cancellationToken)) { return; }
 
+            _logger.LogControlMetadataOperation(
+                "Reading for guarded deletion",
+                key);
             var expectedContentHash = await ComputeStoredObjectHashAsync(
                 key,
                 cancellationToken);
@@ -194,6 +219,8 @@ internal sealed class ArchiveHistorizer
                 throw new YabtSyncException(
                     $"{description} changed before it could be deleted.");
             }
+
+            _logger.LogControlMetadataOperation("Deleted", key);
         }
         catch (Exception ex)
         {
@@ -209,6 +236,8 @@ internal sealed class ArchiveHistorizer
         CancellationToken cancellationToken
     )
     {
+        _logger.LogTrace(nameof(ComputeStoredObjectHashAsync));
+
         await using var content = await _store.OpenReadAsync(key, cancellationToken);
         using var hashingContent = new ContentHashingReadStream(content.Content);
         await hashingContent.CopyToAsync(Stream.Null, cancellationToken);

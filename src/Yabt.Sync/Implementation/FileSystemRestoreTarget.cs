@@ -57,6 +57,7 @@ internal sealed class FileSystemRestoreTarget
         (
             () =>
             {
+                _logger.LogObjectRead(".", "restore destination root inspection");
                 if (File.Exists(_fullRootPath))
                 {
                     throw new YabtSyncException(
@@ -69,10 +70,22 @@ internal sealed class FileSystemRestoreTarget
                 pendingDirectories.Push(_fullRootPath);
                 while (pendingDirectories.TryPop(out var directoryPath))
                 {
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        var directoryRelativePath = Path.GetRelativePath(
+                            _fullRootPath,
+                            directoryPath);
+                        _logger.LogObjectRead(
+                            ToArchiveRelativePath(directoryRelativePath),
+                            "restore destination directory enumeration");
+                    }
                     foreach (var itemPath in Directory.EnumerateFileSystemEntries(directoryPath))
                     {
                         var relativePath = ToArchiveRelativePath(
                             Path.GetRelativePath(_fullRootPath, itemPath));
+                        _logger.LogObjectRead(
+                            relativePath,
+                            "restore destination attribute inspection");
                         var attributes = File.GetAttributes(itemPath);
                         if ((attributes & FileAttributes.ReparsePoint) != 0)
                         {
@@ -169,6 +182,9 @@ internal sealed class FileSystemRestoreTarget
 
             var hash = new XxHash128();
             long contentLength = 0;
+            _logger.LogControlMetadataOperation(
+                "Creating temporary restore file",
+                temporaryPath);
             await using (var destination = new FileStream
             (
                 temporaryPath,
@@ -179,6 +195,9 @@ internal sealed class FileSystemRestoreTarget
                 FileOptions.Asynchronous | FileOptions.SequentialScan
             ))
             {
+                _logger.LogObjectRead(
+                    relativePath,
+                    "temporary restore staging copy");
                 var buffer = new byte[BufferSize];
                 while (true)
                 {
@@ -193,6 +212,9 @@ internal sealed class FileSystemRestoreTarget
                 }
 
                 await destination.FlushAsync(cancellationToken);
+                _logger.LogControlMetadataOperation(
+                    "Finished writing temporary restore file",
+                    temporaryPath);
             }
 
             var actualContentHash = ArchiveHash.Format(hash.GetHashAndReset());
@@ -223,6 +245,9 @@ internal sealed class FileSystemRestoreTarget
                             lastModifiedUtc.Value.UtcDateTime);
                     }
 
+                    _logger.LogControlMetadataOperation(
+                        "Moving completed temporary restore file into place",
+                        temporaryPath);
                     File.Move(temporaryPath, destinationPath);
                 },
                 cancellationToken: cancellationToken
@@ -240,7 +265,16 @@ internal sealed class FileSystemRestoreTarget
         {
             try
             {
-                if (File.Exists(temporaryPath)) { File.Delete(temporaryPath); }
+                _logger.LogControlMetadataOperation(
+                    "Checking temporary restore file",
+                    temporaryPath);
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                    _logger.LogControlMetadataOperation(
+                        "Deleted temporary restore file",
+                        temporaryPath);
+                }
             }
             catch (Exception ex)
             {
@@ -296,6 +330,12 @@ internal sealed class FileSystemRestoreTarget
         while (currentPath.StartsWith(_fullRootPath, GetPathComparison()) &&
             !string.Equals(currentPath, _fullRootPath, GetPathComparison()))
         {
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogObjectRead(
+                    ToArchiveRelativePath(Path.GetRelativePath(_fullRootPath, currentPath)),
+                    "restore destination reparse-point inspection");
+            }
             if (Directory.Exists(currentPath) &&
                 (File.GetAttributes(currentPath) & FileAttributes.ReparsePoint) != 0)
             {

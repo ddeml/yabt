@@ -19,6 +19,7 @@ Runtime state is:
 - Runtime credentials.
 - Temporary files used while creating packages.
 - Scan or reconciliation working data held only for the current command.
+- Optional per-command diagnostic log files stored outside synchronized roots.
 
 Do not introduce a metadata cache initially. If a cache is added later, it must remain disposable and rebuildable from durable metadata, manifests, and object-store contents.
 

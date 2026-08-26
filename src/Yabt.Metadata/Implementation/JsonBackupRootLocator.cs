@@ -1,6 +1,12 @@
+using Microsoft.Extensions.Logging;
+
 namespace Yabt.Metadata.Implementation;
 
-internal sealed class JsonBackupRootLocator(IBackupRootSerializer _serializer) : IBackupRootLocator
+internal sealed class JsonBackupRootLocator
+(
+    IBackupRootSerializer _serializer,
+    ILogger<JsonBackupRootLocator> _logger
+) : IBackupRootLocator
 {
     public async Task<BackupRootLocation> LocateRootAsync
     (
@@ -8,6 +14,8 @@ internal sealed class JsonBackupRootLocator(IBackupRootSerializer _serializer) :
         CancellationToken cancellationToken = default
     )
     {
+        _logger.LogTrace(nameof(LocateRootAsync));
+
         if (string.IsNullOrWhiteSpace(startPath))
         {
             throw new YabtMetadataException("Backup root lookup requires a start path.");
@@ -19,8 +27,10 @@ internal sealed class JsonBackupRootLocator(IBackupRootSerializer _serializer) :
             cancellationToken.ThrowIfCancellationRequested();
 
             var descriptorPath = Path.Combine(currentPath, BackupRootFileNames.Primary);
+            _logger.LogBackupRootDescriptorCheck(descriptorPath);
             if (File.Exists(descriptorPath))
             {
+                _logger.LogBackupRootDescriptorRead(descriptorPath);
                 await using var stream = File.OpenRead(descriptorPath);
                 var document = await _serializer.ReadDocumentAsync(stream, cancellationToken);
                 return new(currentPath, document);
@@ -33,9 +43,12 @@ internal sealed class JsonBackupRootLocator(IBackupRootSerializer _serializer) :
             $"Backup root JSON '{BackupRootFileNames.Primary}' could not be found in '{startPath}' or any parent folder.");
     }
 
-    private static string GetInitialDirectory(string startPath)
+    private string GetInitialDirectory(string startPath)
     {
+        _logger.LogTrace(nameof(GetInitialDirectory));
+
         var fullPath = Path.GetFullPath(startPath);
+        _logger.LogBackupRootStartPathCheck(fullPath);
         return File.Exists(fullPath) ?
             Path.GetDirectoryName(fullPath) ?? fullPath :
             fullPath;

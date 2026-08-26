@@ -112,6 +112,10 @@ internal sealed class HistoryDeduplicator
                 scan.StoredRelativePaths,
                 tinyFileMaximumBytes,
                 operationCancellationToken);
+            LogUnchangedHistoryOccurrences(
+                scan.Occurrences,
+                plans,
+                tinyFileMaximumBytes);
 
             var nextEntries = scan.Occurrences.ToDictionary(
                 occurrence => occurrence.Entry.RelativePath,
@@ -131,6 +135,21 @@ internal sealed class HistoryDeduplicator
 
             if (request.DryRun)
             {
+                foreach (var plan in plans)
+                {
+                    _logger.LogHistoryWouldDeduplicateObject(
+                        plan.Original.Entry.RelativePath,
+                        plan.Canonical.Entry.RelativePath,
+                        plan.BytesSaved);
+                }
+
+                foreach (var orphanReference in scan.OrphanReferences)
+                {
+                    _logger.LogHistoryControlMetadataOperation(
+                        "Would delete orphan reference",
+                        orphanReference.Entry.StoredRelativePath);
+                }
+
                 return CreateResult(
                     dryRun: true,
                     scan,
@@ -161,6 +180,12 @@ internal sealed class HistoryDeduplicator
                     plans,
                     scan.OrphanReferences,
                     operationCancellationToken);
+            }
+            else
+            {
+                _logger.LogHistoryControlMetadataOperation(
+                    "Determined unchanged",
+                    manifestKey);
             }
 
             return CreateResult(
@@ -245,6 +270,7 @@ internal sealed class HistoryDeduplicator
 
         var historyPrefix = ArchiveLayout.NormalizeObjectKey(layout.HistPrefix);
         var listedObjects = new List<ArchiveObjectInfo>();
+        _logger.LogHistoryObjectRead(historyPrefix, "history enumeration");
         var folderItems = targetStore.GetFolderItemsAsync(
             historyPrefix,
             recursive: true,
@@ -364,6 +390,9 @@ internal sealed class HistoryDeduplicator
             return null;
         }
 
+        _logger.LogHistoryControlMetadataOperation(
+            "Reading",
+            storedRelativePath);
         await using var content = await targetStore.OpenReadAsync(
             archiveObject.Key,
             cancellationToken);
@@ -416,7 +445,7 @@ internal sealed class HistoryDeduplicator
         }
     }
 
-    private static async Task<HistoryOccurrence> ReadMaterializedOccurrenceAsync
+    private async Task<HistoryOccurrence> ReadMaterializedOccurrenceAsync
     (
         IObjectStore targetStore,
         ArchiveObjectInfo archiveObject,
@@ -424,6 +453,7 @@ internal sealed class HistoryDeduplicator
         CancellationToken cancellationToken
     )
     {
+        _logger.LogHistoryObjectRead(relativePath, "history scan");
         await using var content = await targetStore.OpenReadAsync(
             archiveObject.Key,
             cancellationToken);
@@ -502,6 +532,12 @@ internal sealed class HistoryDeduplicator
             for (var index = 1; index < materialized.Length; index++)
             {
                 var duplicate = materialized[index];
+                _logger.LogHistoryObjectRead(
+                    canonical.Entry.RelativePath,
+                    "byte-for-byte deduplication comparison");
+                _logger.LogHistoryObjectRead(
+                    duplicate.Entry.RelativePath,
+                    "byte-for-byte deduplication comparison");
                 if (!await HaveSameBytesAsync(
                         targetStore,
                         canonical.PhysicalKey,
@@ -603,6 +639,12 @@ internal sealed class HistoryDeduplicator
     {
         _logger.LogTrace(nameof(ApplyPlansAsync));
 
+        if (markerExists)
+        {
+            _logger.LogHistoryControlMetadataOperation(
+                "Reading",
+                invalidationMarkerKey);
+        }
         var markerHash = markerExists ?
             await ComputeObjectHashAsync(targetStore, invalidationMarkerKey, cancellationToken) :
             ArchiveHash.Compute(InvalidationMarkerContent);
@@ -614,6 +656,9 @@ internal sealed class HistoryDeduplicator
                 "application/json",
                 EmptyMetadata,
                 cancellationToken);
+            _logger.LogHistoryControlMetadataOperation(
+                "Wrote",
+                invalidationMarkerKey);
         }
 
         foreach (var plan in plans)
@@ -625,6 +670,9 @@ internal sealed class HistoryDeduplicator
                 "application/json",
                 EmptyMetadata,
                 cancellationToken);
+            _logger.LogHistoryControlMetadataOperation(
+                "Wrote",
+                plan.Reference.Entry.StoredRelativePath);
         }
 
         using var serializedManifest = new MemoryStream();
@@ -648,6 +696,8 @@ internal sealed class HistoryDeduplicator
                 throw new YabtSyncException(
                     "History manifest changed while the replacement was being published.");
             }
+
+            _logger.LogHistoryControlMetadataOperation("Replaced", manifestKey);
         }
         else
         {
@@ -657,6 +707,7 @@ internal sealed class HistoryDeduplicator
                 "application/json",
                 EmptyMetadata,
                 cancellationToken);
+            _logger.LogHistoryControlMetadataOperation("Wrote", manifestKey);
         }
 
         await EnsureCanonicalBackingsStillMatchAsync(
@@ -679,6 +730,10 @@ internal sealed class HistoryDeduplicator
                 throw new YabtSyncException(
                     $"Orphan history reference '{orphanReference.Entry.StoredRelativePath}' changed before cleanup.");
             }
+
+            _logger.LogHistoryControlMetadataOperation(
+                "Deleted",
+                orphanReference.Entry.StoredRelativePath);
         }
 
         foreach (var plan in plans)
@@ -692,6 +747,11 @@ internal sealed class HistoryDeduplicator
                 throw new YabtSyncException(
                     $"Historical object '{plan.Original.Entry.RelativePath}' changed before it could be replaced.");
             }
+
+            _logger.LogHistoryObjectDeduplicated(
+                plan.Original.Entry.RelativePath,
+                plan.Canonical.Entry.RelativePath,
+                plan.BytesSaved);
         }
 
         var markerDeleted = await targetStore.TryDeleteIfContentHashMatchesAsync(
@@ -703,6 +763,9 @@ internal sealed class HistoryDeduplicator
             throw new YabtSyncException(
                 "History manifest invalidation marker changed before it could be cleared.");
         }
+        _logger.LogHistoryControlMetadataOperation(
+            "Deleted",
+            invalidationMarkerKey);
     }
 
     private async Task<ExistingManifest> ReadExistingManifestAsync
@@ -720,6 +783,7 @@ internal sealed class HistoryDeduplicator
             return new(false, null, null);
         }
 
+        _logger.LogHistoryControlMetadataOperation("Reading", manifestKey);
         await using var content = await targetStore.OpenReadAsync(manifestKey, cancellationToken);
         using var serializedManifest = new MemoryStream();
         await content.Content.CopyToAsync(serializedManifest, cancellationToken);
@@ -736,6 +800,9 @@ internal sealed class HistoryDeduplicator
             }
             catch (Exception)
             {
+                _logger.LogHistoryControlMetadataOperation(
+                    "Ignored invalid or unreadable; scan will rebuild",
+                    manifestKey);
                 manifest = null;
             }
         }
@@ -756,7 +823,7 @@ internal sealed class HistoryDeduplicator
         return hashingContent.CompleteHash();
     }
 
-    private static async Task EnsureCanonicalBackingsStillMatchAsync
+    private async Task EnsureCanonicalBackingsStillMatchAsync
     (
         IObjectStore targetStore,
         IEnumerable<ReferencePlan> plans,
@@ -768,6 +835,9 @@ internal sealed class HistoryDeduplicator
             .DistinctBy(occurrence => occurrence.PhysicalKey, StringComparer.Ordinal);
         foreach (var canonicalOccurrence in canonicalOccurrences)
         {
+            _logger.LogHistoryObjectRead(
+                canonicalOccurrence.Entry.RelativePath,
+                "deduplication backing validation");
             var currentHash = await ComputeObjectHashAsync(
                 targetStore,
                 canonicalOccurrence.PhysicalKey,
@@ -1038,6 +1108,53 @@ internal sealed class HistoryDeduplicator
             referenceEntry.Representation).LongLength;
         return referenceStoredPathLength - materializedStoredPathLength +
             referenceRepresentationLength - materializedRepresentationLength;
+    }
+
+    private void LogUnchangedHistoryOccurrences
+    (
+        IEnumerable<HistoryOccurrence> occurrences,
+        IEnumerable<ReferencePlan> plans,
+        long tinyFileMaximumBytes
+    )
+    {
+        if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+
+        var plannedPaths = plans
+            .Select(plan => plan.Original.Entry.RelativePath)
+            .ToHashSet(StringComparer.Ordinal);
+        var canonicalPaths = plans
+            .Select(plan => plan.Canonical.Entry.RelativePath)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var occurrence in occurrences)
+        {
+            if (plannedPaths.Contains(occurrence.Entry.RelativePath))
+            {
+                continue;
+            }
+
+            if (!occurrence.IsDeduplicationEligible)
+            {
+                _logger.LogHistoryControlMetadataOperation(
+                    "Left unchanged",
+                    occurrence.Entry.RelativePath);
+                continue;
+            }
+
+            var reason = canonicalPaths.Contains(occurrence.Entry.RelativePath) ?
+                "it is the stable materialized backing for a deduplicated content group" :
+                string.Equals(
+                    occurrence.Entry.Representation,
+                    ArchiveHistoryEntryRepresentation.Reference,
+                    StringComparison.Ordinal) ?
+                "it is already represented by a deduplication reference" :
+                occurrence.Entry.ContentLength <= tinyFileMaximumBytes ?
+                    $"its length is at or below the {tinyFileMaximumBytes}-byte threshold" :
+                    "no space-saving duplicate was selected";
+            _logger.LogHistoryObjectUnchanged(
+                occurrence.Entry.RelativePath,
+                reason);
+        }
     }
 
     private static void EnsureReferencesDescribeSameContent

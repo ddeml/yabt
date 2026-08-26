@@ -32,6 +32,7 @@ internal sealed class WebDavObjectStore
     public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogTrace(nameof(EnsureReadyAsync));
+        _logger.LogWebDavStoreReady();
 
         try
         {
@@ -59,6 +60,7 @@ internal sealed class WebDavObjectStore
         _ = metadata;
 
         var normalizedKey = NormalizeObjectKey(key);
+        _logger.LogWebDavObjectUpload(normalizedKey);
         try
         {
             var pathContext = GetPathContext();
@@ -110,6 +112,7 @@ internal sealed class WebDavObjectStore
         _logger.LogTrace(nameof(OpenReadAsync));
 
         var normalizedKey = NormalizeObjectKey(key);
+        _logger.LogWebDavObjectRead(normalizedKey);
         HttpResponseMessage? response = null;
 
         try
@@ -168,9 +171,11 @@ internal sealed class WebDavObjectStore
         _ = metadata;
 
         var normalizedKey = NormalizeObjectKey(key);
+        _logger.LogWebDavObjectConditionalReplace(normalizedKey);
         try
         {
             var objectUri = GetObjectUri(normalizedKey);
+            _logger.LogWebDavConditionalMutationRead(normalizedKey);
             var current = await TryReadCurrentHashAndEntityTagAsync(
                 objectUri,
                 cancellationToken);
@@ -227,9 +232,11 @@ internal sealed class WebDavObjectStore
         ValidateExpectedContentHash(expectedContentHash);
 
         var normalizedKey = NormalizeObjectKey(key);
+        _logger.LogWebDavObjectConditionalDelete(normalizedKey);
         try
         {
             var objectUri = GetObjectUri(normalizedKey);
+            _logger.LogWebDavConditionalMutationRead(normalizedKey);
             var current = await TryReadCurrentHashAndEntityTagAsync(
                 objectUri,
                 cancellationToken);
@@ -281,6 +288,7 @@ internal sealed class WebDavObjectStore
         _logger.LogTrace(nameof(ExistsAsync));
 
         var normalizedKey = NormalizeObjectKey(key);
+        _logger.LogWebDavObjectExists(normalizedKey);
         try
         {
             var objectUri = GetObjectUri(normalizedKey);
@@ -436,6 +444,10 @@ internal sealed class WebDavObjectStore
 
         var normalizedSource = NormalizeObjectKey(source);
         var normalizedDestination = NormalizeObjectKey(destination);
+        _logger.LogWebDavPathMove(
+            isFolder ? "folder" : "object",
+            normalizedSource,
+            normalizedDestination);
         try
         {
             var pathContext = GetPathContext();
@@ -476,6 +488,7 @@ internal sealed class WebDavObjectStore
     )
     {
         var normalizedPrefix = NormalizeObjectPrefix(folderPrefix);
+        _logger.LogWebDavFolderList(normalizedPrefix);
         try
         {
             var pathContext = GetPathContext();

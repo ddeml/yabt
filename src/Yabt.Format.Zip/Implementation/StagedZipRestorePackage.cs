@@ -15,6 +15,7 @@ internal sealed class StagedZipRestorePackage
     public FileStream OpenPackage()
     {
         _logger.LogTrace(nameof(OpenPackage));
+        _logger.LogZipPackageRead(_artifactRelativePath);
 
         ObjectDisposedException.ThrowIf(_disposed, this);
         return new
@@ -35,6 +36,7 @@ internal sealed class StagedZipRestorePackage
     )
     {
         _logger.LogTrace(nameof(OpenEntryAsync));
+        _logger.LogZipEntryRead(_artifactRelativePath, entryFullName);
 
         ObjectDisposedException.ThrowIf(_disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
@@ -99,6 +101,9 @@ internal sealed class StagedZipRestorePackage
         if (_disposed) { return ValueTask.CompletedTask; }
 
         _disposed = true;
+        _logger.LogZipTemporaryPlumbingOperation(
+            "Deleting restore staging file",
+            _path);
         try
         {
             File.Delete(_path);

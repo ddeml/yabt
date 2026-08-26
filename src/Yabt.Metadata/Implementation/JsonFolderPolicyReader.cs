@@ -1,14 +1,15 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Yabt.Core.Models;
 
 namespace Yabt.Metadata.Implementation;
 
-internal sealed class JsonFolderPolicyReader(JsonSerializerOptions _jsonOptions) : IFolderPolicyReader
+internal sealed class JsonFolderPolicyReader
+(
+    ILogger<JsonFolderPolicyReader> _logger
+) : IFolderPolicyReader
 {
-    public JsonFolderPolicyReader()
-        : this(JsonMetadataOptions.Create())
-    {
-    }
+    private readonly JsonSerializerOptions _jsonOptions = JsonMetadataOptions.Create();
 
     public async Task<FolderPolicy> ReadPolicyAsync
     (
@@ -16,12 +17,17 @@ internal sealed class JsonFolderPolicyReader(JsonSerializerOptions _jsonOptions)
         CancellationToken cancellationToken = default
     )
     {
+        _logger.LogTrace(nameof(ReadPolicyAsync));
+
         var policyPath = Path.Combine(folderPath, FolderPolicyFileNames.Primary);
+        _logger.LogFolderPolicyCheck(policyPath);
         if (!File.Exists(policyPath))
         {
+            _logger.LogFolderPolicyDefault(policyPath);
             return FolderPolicy.Default;
         }
 
+        _logger.LogFolderPolicyRead(policyPath);
         await using var stream = File.OpenRead(policyPath);
         FolderPolicy? policy;
 

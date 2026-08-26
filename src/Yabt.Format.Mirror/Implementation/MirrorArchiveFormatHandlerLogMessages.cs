@@ -18,7 +18,7 @@ internal static partial class MirrorArchiveFormatHandlerLogMessages
 
     [LoggerMessage(
         EventId = YabtEventIds.MirrorProjectionCompleted,
-        Level = LogLevel.Information,
+        Level = LogLevel.Debug,
         Message = "Mirror projection completed with {ObjectCount} object(s).")]
     public static partial void LogMirrorProjectionCompleted
     (

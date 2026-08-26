@@ -207,6 +207,8 @@ internal sealed class ArchiveSynchronizer
 
         ValidateInternalLayoutPrefixes(destinationLayout);
         ValidateRestoreLayoutPaths(destinationLayout, restoreTarget);
+        var restoreRootNeedsCreation = !Directory.Exists(
+            GetRestoreLiveRootPath(restoreTarget.RootPath, destinationLayout));
         await restoreTarget.EnsureSafeAsync(
             destinationLayout.LivePrefix,
             destinationLayout.HistPrefix,
@@ -317,7 +319,15 @@ internal sealed class ArchiveSynchronizer
             cancellationToken
         );
 
-        if (!request.DryRun)
+        if (request.DryRun)
+        {
+            LogRestoreDryRun(
+                plan,
+                reconciliation,
+                rootDescriptorRestore,
+                restoreRootNeedsCreation);
+        }
+        else
         {
             await ApplyRestorePlanAsync(
                 mutableDestinationStore,
@@ -328,6 +338,7 @@ internal sealed class ArchiveSynchronizer
                 logicalStateManifestLoad,
                 rootDescriptorRestore,
                 context.ArchiveDocument,
+                restoreRootNeedsCreation,
                 cancellationToken);
         }
 
@@ -358,6 +369,7 @@ internal sealed class ArchiveSynchronizer
         var descriptorPath = Path.Combine(
             destinationRootPath,
             BackupRootFileNames.Primary);
+        _logger.LogControlMetadataOperation("Checking", descriptorPath);
         if (Directory.Exists(descriptorPath))
         {
             throw new YabtSyncException(
@@ -456,6 +468,9 @@ internal sealed class ArchiveSynchronizer
         BackupRootDocument archiveDocument;
         try
         {
+            _logger.LogControlMetadataOperation(
+                "Reading",
+                BackupRootFileNames.Primary);
             await using var content = await context.ArchiveStore.OpenReadAsync(
                 BackupRootFileNames.Primary,
                 cancellationToken);
@@ -511,6 +526,7 @@ internal sealed class ArchiveSynchronizer
         var descriptorPath = Path.Combine(
             destinationRootPath,
             BackupRootFileNames.Primary);
+        _logger.LogControlMetadataOperation("Checking", descriptorPath);
         if (Directory.Exists(descriptorPath))
         {
             throw new YabtSyncException(
@@ -525,6 +541,7 @@ internal sealed class ArchiveSynchronizer
         BackupRootDocument destinationDocument;
         try
         {
+            _logger.LogControlMetadataOperation("Reading", descriptorPath);
             await using var content = new FileStream
             (
                 descriptorPath,
@@ -548,6 +565,9 @@ internal sealed class ArchiveSynchronizer
 
         if (archiveDocument.ContentEquals(destinationDocument))
         {
+            _logger.LogControlMetadataOperation(
+                "Determined unchanged",
+                descriptorPath);
             return RootDescriptorRestore.None;
         }
 
@@ -637,7 +657,7 @@ internal sealed class ArchiveSynchronizer
                 "Run backup once with the current YABT version before restoring it.");
     }
 
-    private static void ValidateRestoreLocations
+    private void ValidateRestoreLocations
     (
         string descriptorRootPath,
         string destinationRootPath,
@@ -712,6 +732,9 @@ internal sealed class ArchiveSynchronizer
     {
         var listedObjects = new Dictionary<string, ArchiveObjectInfo>(StringComparer.Ordinal);
         var livePrefix = ArchiveLayout.NormalizeObjectPrefix(context.Descriptor.Layout.LivePrefix);
+        _logger.LogObjectRead(
+            livePrefix ?? ".",
+            "restore archive live-branch enumeration");
         var liveItems = context.ArchiveStore.GetFolderItemsAsync(
             livePrefix,
             recursive: true,
@@ -1171,6 +1194,7 @@ internal sealed class ArchiveSynchronizer
     )
     {
         logger.LogTrace(nameof(TryDeleteRestoreTemporaryPath));
+        logger.LogControlMetadataOperation("Deleting temporary restore path", path);
 
         try
         {
@@ -1266,7 +1290,7 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task<RestoreReconciliation> CreateRestoreReconciliationAsync
+    private async Task<RestoreReconciliation> CreateRestoreReconciliationAsync
     (
         IObjectStore destinationStore,
         ArchiveLayout destinationLayout,
@@ -1398,6 +1422,7 @@ internal sealed class ArchiveSynchronizer
                 return;
             }
 
+            LogObjectReadOperation(relativePath, "restore destination comparison");
             var destinationHash = await ComputeStoredObjectHashAsync(
                 destinationStore,
                 destinationFile.ArchiveKey,
@@ -1468,12 +1493,12 @@ internal sealed class ArchiveSynchronizer
             }
         }
 
-        var newCount = desiredFiles.Keys.Count(path =>
+        var newDesiredPaths = desiredFiles.Keys
+            .Concat(desiredEmptyDirectories)
+            .Where(path =>
                 !changedDesiredPaths.Contains(path) &&
-                !unchangedDesiredPaths.Contains(path)) +
-            desiredEmptyDirectories.Count(path =>
-                !changedDesiredPaths.Contains(path) &&
-                !unchangedDesiredPaths.Contains(path));
+                !unchangedDesiredPaths.Contains(path))
+            .ToHashSet(pathComparer);
 
         return new
         (
@@ -1481,7 +1506,10 @@ internal sealed class ArchiveSynchronizer
                 .OrderBy(file => file.RelativePath, StringComparer.Ordinal)
                 .ToArray(),
             historyMoves,
-            NewCount: newCount,
+            newDesiredPaths,
+            changedDesiredPaths,
+            unchangedDesiredPaths,
+            NewCount: newDesiredPaths.Count,
             ChangedCount: changedDesiredPaths.Count,
             ExtraCount: extraCount,
             UnchangedCount: unchangedDesiredPaths.Count
@@ -1553,9 +1581,10 @@ internal sealed class ArchiveSynchronizer
         restoreTarget.ValidateRelativePath(destinationLayout.HistPrefix);
     }
 
-    private static string ResolvePhysicalPath(string path)
+    private string ResolvePhysicalPath(string path)
     {
         var fullPath = Path.GetFullPath(path);
+        _logger.LogObjectRead(fullPath, "filesystem path resolution");
         try
         {
             var rootPath = Path.GetPathRoot(fullPath) ??
@@ -1605,7 +1634,7 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task<RestoreDestinationState> LoadRestoreDestinationStateAsync
+    private async Task<RestoreDestinationState> LoadRestoreDestinationStateAsync
     (
         IObjectStore destinationStore,
         ArchiveLayout destinationLayout,
@@ -1619,6 +1648,9 @@ internal sealed class ArchiveSynchronizer
         async Task LoadFolderAsync(string relativeFolderPath)
         {
             var folderKey = destinationLayout.ToLiveObjectKey(relativeFolderPath);
+            _logger.LogObjectRead(
+                string.IsNullOrEmpty(relativeFolderPath) ? "." : relativeFolderPath,
+                "restore destination enumeration");
             var folderItems = destinationStore.GetFolderItemsAsync(
                 folderKey,
                 recursive: false,
@@ -1675,6 +1707,9 @@ internal sealed class ArchiveSynchronizer
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
+            _logger.LogControlMetadataOperation(
+                "Creating restore staging directory",
+                stagingRootPath);
             if (OperatingSystem.IsWindows())
             {
                 Directory.CreateDirectory(stagingRootPath);
@@ -1707,6 +1742,9 @@ internal sealed class ArchiveSynchronizer
                 stagedFiles.Add(file.RelativePath, stagingPath);
                 try
                 {
+                    _logger.LogControlMetadataOperation(
+                        "Creating restore staging file",
+                        stagingPath);
                     await using var stagedContent = CreateRestoreStagingFileStream(
                         stagingPath,
                         FileAccess.Write);
@@ -1716,6 +1754,9 @@ internal sealed class ArchiveSynchronizer
                         stagedContent,
                         cancellationToken);
                     await stagedContent.FlushAsync(cancellationToken);
+                    _logger.LogControlMetadataOperation(
+                        "Finished writing restore staging file",
+                        stagingPath);
                 }
                 catch (Exception ex)
                 {
@@ -1732,6 +1773,7 @@ internal sealed class ArchiveSynchronizer
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
+                    LogObjectReadOperation(file.RelativePath, "restore staging");
                     await using var projectedContent = await file.OpenContentAsync(
                         cancellationToken);
                     await StageFileAsync(file, projectedContent.Content);
@@ -1803,6 +1845,7 @@ internal sealed class ArchiveSynchronizer
         LogicalStateManifestLoad logicalStateManifestLoad,
         RootDescriptorRestore rootDescriptorRestore,
         BackupRootDocument? archiveRootDocument,
+        bool restoreRootNeedsCreation,
         CancellationToken cancellationToken
     )
     {
@@ -1831,7 +1874,8 @@ internal sealed class ArchiveSynchronizer
         var historizer = new ArchiveHistorizer(
             destinationStore,
             destinationLayout,
-            _timeProvider.GetUtcNow());
+            _timeProvider.GetUtcNow(),
+            _logger);
         await historizer.InspectRecoveryStateAsync(cancellationToken);
         foreach (var historyMove in reconciliation.HistoryMoves)
         {
@@ -1849,21 +1893,36 @@ internal sealed class ArchiveSynchronizer
                     "Restore",
                     cancellationToken);
             }
+
+            LogRestoreItemHistorized(historyMove);
         }
 
         await restoreTarget.CreateDirectoryAsync(
             destinationLayout.ToLiveObjectKey(string.Empty),
             cancellationToken);
+        if (restoreRootNeedsCreation)
+        {
+            LogRestoreItemWritten("new", "directory", ".");
+        }
         foreach (var directoryPath in plan.EmptyDirectories)
         {
             await restoreTarget.CreateDirectoryAsync(
                 destinationLayout.ToLiveObjectKey(directoryPath),
                 cancellationToken);
+            if (reconciliation.NewDesiredPaths.Contains(directoryPath) ||
+                reconciliation.ChangedDesiredPaths.Contains(directoryPath))
+            {
+                LogRestoreItemWritten(
+                    GetRestoreChangeKind(reconciliation, directoryPath),
+                    "directory",
+                    directoryPath);
+            }
         }
 
         foreach (var file in reconciliation.FilesToWrite)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            LogObjectReadOperation(file.RelativePath, "temporary restore staging");
             await using var stagedContent = stagedFiles.OpenContent(file.RelativePath);
             await restoreTarget.WriteFileAsync
             (
@@ -1874,6 +1933,17 @@ internal sealed class ArchiveSynchronizer
                 file.LastModifiedUtc,
                 cancellationToken
             );
+            LogRestoreItemWritten(
+                GetRestoreChangeKind(reconciliation, file.RelativePath),
+                "file",
+                file.RelativePath);
+        }
+
+        foreach (var directoryPath in reconciliation.ChangedDesiredPaths
+                     .Where(path => plan.Directories.Contains(path, GetRestorePathComparer()) &&
+                         !plan.EmptyDirectories.Contains(path, GetRestorePathComparer())))
+        {
+            LogRestoreItemWritten("changed", "directory", directoryPath);
         }
 
         if (rootDescriptorRestore.NeedsWrite)
@@ -1890,6 +1960,9 @@ internal sealed class ArchiveSynchronizer
                     BackupRootFileNames.Primary,
                     "Restore",
                     cancellationToken);
+                _logger.LogControlMetadataOperation(
+                    "Moved to restore history",
+                    BackupRootFileNames.Primary);
             }
 
             await UploadRootDocumentAsync(
@@ -1957,9 +2030,17 @@ internal sealed class ArchiveSynchronizer
                 "Change manifest invalidation marker",
                 cancellationToken);
         }
+
+        foreach (var relativePath in reconciliation.UnchangedDesiredPaths)
+        {
+            LogRestoreItemUnchanged(
+                GetRestoreItemKind(plan, relativePath),
+                relativePath);
+        }
+
     }
 
-    private static async Task<bool> PrepareRestoreChangeManifestMutationAsync
+    private async Task<bool> PrepareRestoreChangeManifestMutationAsync
     (
         IArchiveMutableObjectStore destinationStore,
         bool liveStateChanged,
@@ -2000,7 +2081,7 @@ internal sealed class ArchiveSynchronizer
         return invalidationMarkerExists;
     }
 
-    private static async Task ValidateRestorePlanContentAsync
+    private async Task ValidateRestorePlanContentAsync
     (
         IEnumerable<ArchiveProjectedObject> files,
         CancellationToken cancellationToken
@@ -2011,6 +2092,7 @@ internal sealed class ArchiveSynchronizer
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                LogObjectReadOperation(file.RelativePath, "restore validation");
                 await using var content = await file.OpenContentAsync(cancellationToken);
                 await CopyRestoreContentToStagingAsync(
                     file,
@@ -2049,6 +2131,9 @@ internal sealed class ArchiveSynchronizer
 
         try
         {
+            _logger.LogControlMetadataOperation(
+                "Reading",
+                ArchiveLogicalStateManifest.FileName);
             await using var content = await destinationStore.OpenReadAsync(
                 ArchiveLogicalStateManifest.FileName,
                 cancellationToken);
@@ -2060,6 +2145,9 @@ internal sealed class ArchiveSynchronizer
         catch (Exception)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            _logger.LogControlMetadataOperation(
+                "Ignored invalid or unreadable; full comparison will replace",
+                ArchiveLogicalStateManifest.FileName);
             return new(manifestExists, markerExists, Manifest: null);
         }
     }
@@ -2127,9 +2215,12 @@ internal sealed class ArchiveSynchronizer
             "application/json",
             EmptyMetadata,
             cancellationToken);
+        _logger.LogControlMetadataOperation(
+            "Wrote",
+            ArchiveLogicalStateManifest.FileName);
     }
 
-    private static async Task UploadLogicalStateManifestInvalidationMarkerAsync
+    private async Task UploadLogicalStateManifestInvalidationMarkerAsync
     (
         IObjectStore destinationStore,
         CancellationToken cancellationToken
@@ -2144,6 +2235,9 @@ internal sealed class ArchiveSynchronizer
             "application/json",
             EmptyMetadata,
             cancellationToken);
+        _logger.LogControlMetadataOperation(
+            "Wrote",
+            ArchiveLogicalStateManifest.InvalidationMarkerFileName);
     }
 
     public Task<SyncRunResult> ScanAsync
@@ -2424,6 +2518,7 @@ internal sealed class ArchiveSynchronizer
             CreateProjectionRequest(context),
             cancellationToken);
         var summary = new ArchiveSyncSummary();
+        var existingNonemptyDirectoryPaths = new HashSet<string>(StringComparer.Ordinal);
         RestoreProjectionKey? rootBackupProjectionKey = null;
         var rootBackupArtifactRoles = new HashSet<string>(StringComparer.Ordinal);
         var backupProjectionGroups = new Dictionary<
@@ -2434,7 +2529,8 @@ internal sealed class ArchiveSynchronizer
             new ArchiveHistorizer(
                 mutableTargetStore,
                 context.TargetDescriptor.Layout,
-                _timeProvider.GetUtcNow());
+                _timeProvider.GetUtcNow(),
+                _logger);
         if (historizer is not null)
         {
             await historizer.InspectRecoveryStateAsync(cancellationToken);
@@ -2471,10 +2567,41 @@ internal sealed class ArchiveSynchronizer
 
                 rootDescriptorNeedsWrite = !context.SourceDocument.ContentEquals(
                     targetRootDocument);
+                if (!rootDescriptorNeedsWrite)
+                {
+                    _logger.LogControlMetadataOperation(
+                        "Determined unchanged",
+                        BackupRootFileNames.Primary);
+                }
             }
             else
             {
                 rootDescriptorNeedsWrite = true;
+            }
+        }
+
+        if (rootDescriptorNeedsWrite && !writeChanges)
+        {
+            if (verifyOnly)
+            {
+                _logger.LogControlMetadataOperation(
+                    "Verify found missing or different",
+                    BackupRootFileNames.Primary);
+            }
+            else
+            {
+                if (rootDescriptorExists)
+                {
+                    _logger.LogControlMetadataOperation(
+                        "Would move to history (replacement)",
+                        BackupRootFileNames.Primary);
+                }
+
+                _logger.LogControlMetadataOperation(
+                    rootDescriptorExists ?
+                        "Would write replacement" :
+                        "Would write missing",
+                    BackupRootFileNames.Primary);
             }
         }
 
@@ -2519,6 +2646,12 @@ internal sealed class ArchiveSynchronizer
                 targetFolders,
                 GetParentPrefix(relativePath),
                 currentCancellationToken);
+
+            if (IsEmptyFolderMarker(relativePath) &&
+                (targetFolder.Objects.Count != 0 || targetFolder.Folders.Count != 0))
+            {
+                existingNonemptyDirectoryPaths.Add(GetParentPrefix(relativePath));
+            }
 
             if (!targetFolder.Objects.Remove(relativePath, out var targetObject) &&
                 IsEmptyFolderMarker(relativePath) &&
@@ -2621,6 +2754,13 @@ internal sealed class ArchiveSynchronizer
                         comparison.ManifestEntry ??
                             throw new YabtSyncException(
                                 $"Content comparison for '{relativePath}' did not produce manifest evidence."));
+                    if (!writeChanges || byteForByte || projectionConsistencyGroup is null)
+                    {
+                        LogBackupObjectUnchanged(
+                            operationName,
+                            relativePath,
+                            projectedObject.Projection);
+                    }
                     return;
                 }
 
@@ -2639,6 +2779,10 @@ internal sealed class ArchiveSynchronizer
                         relativePath,
                         "Backup",
                         currentCancellationToken);
+                    LogBackupObjectHistorized(
+                        relativePath,
+                        "replacement",
+                        projection: previousManifestEntry?.Projection);
 
                     var manifestEntry = await UploadProjectedObjectAsync(
                         context.TargetStore,
@@ -2648,6 +2792,22 @@ internal sealed class ArchiveSynchronizer
                         currentCancellationToken,
                         preparedContent);
                     nextManifestEntries.Add(relativePath, manifestEntry);
+                    LogBackupObjectChanged(relativePath, projectedObject.Projection);
+                }
+                else if (verifyOnly)
+                {
+                    LogVerifyObjectDifference(
+                        relativePath,
+                        "content differs",
+                        projection: projectedObject.Projection);
+                }
+                else
+                {
+                    LogBackupWouldHistorizeObject(
+                        relativePath,
+                        "replacement",
+                        projection: previousManifestEntry?.Projection);
+                    LogBackupWouldChangeObject(relativePath, projectedObject.Projection);
                 }
 
                 return;
@@ -2669,6 +2829,24 @@ internal sealed class ArchiveSynchronizer
                     relativePath,
                     currentCancellationToken);
                 nextManifestEntries.Add(relativePath, manifestEntry);
+                LogBackupObjectAdded(
+                    relativePath,
+                    existingNonemptyDirectoryPaths.Contains(GetParentPrefix(relativePath)),
+                    projectedObject.Projection);
+            }
+            else if (verifyOnly)
+            {
+                LogVerifyObjectDifference(
+                    relativePath,
+                    "missing from the archive",
+                    projection: projectedObject.Projection);
+            }
+            else
+            {
+                LogBackupWouldAddObject(
+                    relativePath,
+                    existingNonemptyDirectoryPaths.Contains(GetParentPrefix(relativePath)),
+                    projectedObject.Projection);
             }
         }
 
@@ -2694,6 +2872,18 @@ internal sealed class ArchiveSynchronizer
 
         if (writeChanges && !byteForByte)
         {
+            foreach (var projectionGroup in backupProjectionGroups.Values
+                         .Where(group => !group.RequiresValidation))
+            {
+                foreach (var matchedObject in projectionGroup.MatchedObjects)
+                {
+                    LogBackupObjectUnchanged(
+                        operationName,
+                        matchedObject.RelativePath,
+                        matchedObject.ProjectedObject.Projection);
+                }
+            }
+
             var groupsRequiringValidation = backupProjectionGroups.Values
                 .Where(group => group.RequiresValidation);
             foreach (var projectionGroup in groupsRequiringValidation)
@@ -2723,6 +2913,11 @@ internal sealed class ArchiveSynchronizer
                                         "manifest evidence.");
                         }
 
+                        LogBackupObjectUnchanged(
+                            operationName,
+                            matchedObject.RelativePath,
+                            matchedObject.ProjectedObject.Projection);
+
                         continue;
                     }
 
@@ -2737,6 +2932,10 @@ internal sealed class ArchiveSynchronizer
                             matchedObject.RelativePath,
                             "Backup",
                             cancellationToken);
+                    LogBackupObjectHistorized(
+                        matchedObject.RelativePath,
+                        "projection consistency replacement",
+                        projection: matchedObject.PreviousManifestEntry?.Projection);
                     var manifestEntry = await UploadProjectedObjectAsync
                     (
                         context.TargetStore,
@@ -2751,6 +2950,9 @@ internal sealed class ArchiveSynchronizer
                                     "validated source snapshot.")
                     );
                     nextManifestEntries[matchedObject.RelativePath] = manifestEntry;
+                    LogBackupObjectChanged(
+                        matchedObject.RelativePath,
+                        matchedObject.ProjectedObject.Projection);
                 }
             }
         }
@@ -2767,8 +2969,11 @@ internal sealed class ArchiveSynchronizer
             historizer,
             context.TargetDescriptor.Layout,
             targetFolders,
+            reconciliationTraversal.DesiredFolderPaths,
+            previousManifestEntries,
             summary,
             writeChanges,
+            verifyOnly,
             EnsureChangeManifestInvalidatedAsync,
             cancellationToken);
 
@@ -2786,6 +2991,9 @@ internal sealed class ArchiveSynchronizer
                             BackupRootFileNames.Primary,
                             "Backup",
                             cancellationToken);
+                    _logger.LogControlMetadataOperation(
+                        "Moved to history (replacement)",
+                        BackupRootFileNames.Primary);
                 }
 
                 await UploadRootDocumentAsync(
@@ -2827,6 +3035,12 @@ internal sealed class ArchiveSynchronizer
                         cancellationToken);
                     changeManifestInvalidationMarkerActive = false;
                 }
+            }
+            else
+            {
+                _logger.LogControlMetadataOperation(
+                    "Determined unchanged",
+                    changeManifestFileName);
             }
 
             if (historizer is not null)
@@ -2934,7 +3148,7 @@ internal sealed class ArchiveSynchronizer
         );
     }
 
-    private static async Task<TargetFolderState> LoadTargetFolderStateAsync
+    private async Task<TargetFolderState> LoadTargetFolderStateAsync
     (
         IObjectStore targetStore,
         ArchiveLayout targetLayout,
@@ -2956,6 +3170,11 @@ internal sealed class ArchiveSynchronizer
         var targetFolder = new TargetFolderState();
         var livePrefix = ArchiveLayout.NormalizeObjectPrefix(targetLayout.LivePrefix);
         var targetFolderPrefix = targetLayout.ToLiveObjectKey(normalizedRelativeFolderPrefix);
+        _logger.LogObjectRead(
+            string.IsNullOrEmpty(normalizedRelativeFolderPrefix) ?
+                "." :
+                normalizedRelativeFolderPrefix,
+            "backup archive target enumeration");
         var folderItems = targetStore.GetFolderItemsAsync(
             targetFolderPrefix,
             recursive: false,
@@ -3020,7 +3239,7 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task ReconcileDesiredTargetStateAsync
+    private async Task ReconcileDesiredTargetStateAsync
     (
         IObjectStore targetStore,
         ArchiveLayout targetLayout,
@@ -3052,14 +3271,17 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task MoveRemainingTargetObjectsToHistoryAsync
+    private async Task MoveRemainingTargetObjectsToHistoryAsync
     (
         IObjectStore targetStore,
         ArchiveHistorizer? historizer,
         ArchiveLayout targetLayout,
         Dictionary<string, TargetFolderState> targetFolders,
+        IReadOnlySet<string> desiredFolderPaths,
+        Dictionary<string, ArchiveChangeManifestEntry> previousManifestEntries,
         ArchiveSyncSummary summary,
         bool writeChanges,
+        bool verifyOnly,
         Func<CancellationToken, Task> beforeFirstWriteAsync,
         CancellationToken cancellationToken
     )
@@ -3083,6 +3305,11 @@ internal sealed class ArchiveSynchronizer
                 }
 
                 summary.AddExtra();
+                var historizationReason = IsEmptyFolderMarker(relativePath) &&
+                    desiredFolderPaths.Contains(GetParentPrefix(relativePath)) ?
+                        "empty directory changed" :
+                        "removed from the source";
+                previousManifestEntries.TryGetValue(relativePath, out var previousManifestEntry);
                 if (writeChanges)
                 {
                     await beforeFirstWriteAsync(cancellationToken);
@@ -3094,6 +3321,29 @@ internal sealed class ArchiveSynchronizer
                         relativePath,
                         "Backup",
                         cancellationToken);
+                    LogBackupObjectHistorized(
+                        relativePath,
+                        historizationReason,
+                        projection: previousManifestEntry?.Projection);
+                }
+                else if (verifyOnly)
+                {
+                    LogVerifyObjectDifference(
+                        relativePath,
+                        string.Equals(
+                            historizationReason,
+                            "empty directory changed",
+                            StringComparison.Ordinal) ?
+                                "the directory is no longer empty" :
+                                "extra in the archive",
+                        projection: previousManifestEntry?.Projection);
+                }
+                else
+                {
+                    LogBackupWouldHistorizeObject(
+                        relativePath,
+                        historizationReason,
+                        projection: previousManifestEntry?.Projection);
                 }
             }
         }
@@ -3105,21 +3355,26 @@ internal sealed class ArchiveSynchronizer
                 historizer,
                 targetLayout,
                 relativeFolderPath,
+                previousManifestEntries,
                 summary,
                 writeChanges,
+                verifyOnly,
                 beforeFirstWriteAsync,
                 cancellationToken);
         }
+
     }
 
-    private static async Task MoveTargetFolderToHistoryAsync
+    private async Task MoveTargetFolderToHistoryAsync
     (
         IObjectStore targetStore,
         ArchiveHistorizer? historizer,
         ArchiveLayout targetLayout,
         string relativeFolderPath,
+        Dictionary<string, ArchiveChangeManifestEntry> previousManifestEntries,
         ArchiveSyncSummary summary,
         bool writeChanges,
+        bool verifyOnly,
         Func<CancellationToken, Task> beforeWriteAsync,
         CancellationToken cancellationToken
     )
@@ -3130,7 +3385,7 @@ internal sealed class ArchiveSynchronizer
             recursive: true,
             cancellationToken);
         var livePrefix = ArchiveLayout.NormalizeObjectPrefix(targetLayout.LivePrefix);
-        var visibleObjectCount = 0;
+        var visibleObjectPaths = new List<string>();
 
         await foreach (var targetItem in targetItems)
         {
@@ -3154,17 +3409,55 @@ internal sealed class ArchiveSynchronizer
                 continue;
             }
 
-            visibleObjectCount++;
+            visibleObjectPaths.Add(relativePath);
             summary.AddExtra();
         }
 
-        if (visibleObjectCount == 0)
+        if (visibleObjectPaths.Count == 0)
         {
             summary.AddExtra();
         }
 
         if (!writeChanges)
         {
+            if (visibleObjectPaths.Count == 0)
+            {
+                if (verifyOnly)
+                {
+                    LogVerifyObjectDifference(
+                        relativeFolderPath,
+                        "extra in the archive",
+                        isDirectory: true);
+                }
+                else
+                {
+                    LogBackupWouldHistorizeObject(
+                        relativeFolderPath,
+                        "removed from the source",
+                        isDirectory: true);
+                }
+
+                return;
+            }
+
+            foreach (var relativePath in visibleObjectPaths)
+            {
+                previousManifestEntries.TryGetValue(relativePath, out var previousManifestEntry);
+                if (verifyOnly)
+                {
+                    LogVerifyObjectDifference(
+                        relativePath,
+                        "extra in the archive",
+                        projection: previousManifestEntry?.Projection);
+                }
+                else
+                {
+                    LogBackupWouldHistorizeObject(
+                        relativePath,
+                        "removed from the source",
+                        projection: previousManifestEntry?.Projection);
+                }
+            }
             return;
         }
 
@@ -3177,9 +3470,27 @@ internal sealed class ArchiveSynchronizer
             relativeFolderPath,
             "Backup",
             cancellationToken);
+
+        if (visibleObjectPaths.Count == 0)
+        {
+            LogBackupObjectHistorized(
+                relativeFolderPath,
+                "removed from the source",
+                isDirectory: true);
+            return;
+        }
+
+        foreach (var relativePath in visibleObjectPaths)
+        {
+            previousManifestEntries.TryGetValue(relativePath, out var previousManifestEntry);
+            LogBackupObjectHistorized(
+                relativePath,
+                "removed from the source",
+                projection: previousManifestEntry?.Projection);
+        }
     }
 
-    private static async Task<ArchiveChangeManifestEntry> UploadProjectedObjectAsync
+    private async Task<ArchiveChangeManifestEntry> UploadProjectedObjectAsync
     (
         IObjectStore targetStore,
         ArchiveLayout targetLayout,
@@ -3198,6 +3509,7 @@ internal sealed class ArchiveSynchronizer
                 var content = preparedContent;
                 if (content is null)
                 {
+                    LogObjectReadOperation(relativePath, "backup upload");
                     openedContent = await projectedObject.OpenContentAsync(cancellationToken);
                     content = openedContent;
                 }
@@ -3324,6 +3636,7 @@ internal sealed class ArchiveSynchronizer
         CancellationToken cancellationToken
     )
     {
+        _logger.LogControlMetadataOperation("Reading", fileName);
         await using var content = await targetStore.OpenReadAsync(
             fileName,
             cancellationToken);
@@ -3394,6 +3707,7 @@ internal sealed class ArchiveSynchronizer
                         "application/json",
                 EmptyMetadata,
                 cancellationToken);
+            _logger.LogControlMetadataOperation("Wrote", fileName);
         }
         catch (Exception ex)
         {
@@ -3403,7 +3717,7 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task UploadChangeManifestInvalidationMarkerAsync
+    private async Task UploadChangeManifestInvalidationMarkerAsync
     (
         IObjectStore targetStore,
         CancellationToken cancellationToken
@@ -3418,6 +3732,9 @@ internal sealed class ArchiveSynchronizer
                 "application/octet-stream",
                 EmptyMetadata,
                 cancellationToken);
+            _logger.LogControlMetadataOperation(
+                "Wrote",
+                ArchiveChangeManifest.InvalidationMarkerFileName);
         }
         catch (Exception ex)
         {
@@ -3428,7 +3745,7 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task DeleteChangeManifestsAsync
+    private async Task DeleteChangeManifestsAsync
     (
         IArchiveMutableObjectStore targetStore,
         IEnumerable<string> fileNames,
@@ -3445,7 +3762,7 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task DeleteInternalObjectAsync
+    private async Task DeleteInternalObjectAsync
     (
         IArchiveMutableObjectStore targetStore,
         string key,
@@ -3460,6 +3777,9 @@ internal sealed class ArchiveSynchronizer
                 return;
             }
 
+            _logger.LogControlMetadataOperation(
+                "Reading for guarded deletion",
+                key);
             var expectedContentHash = await ComputeStoredObjectHashAsync(
                 targetStore,
                 key,
@@ -3473,6 +3793,8 @@ internal sealed class ArchiveSynchronizer
                 throw new YabtSyncException(
                     $"{description} changed before it could be deleted.");
             }
+
+            _logger.LogControlMetadataOperation("Deleted", key);
         }
         catch (Exception ex)
         {
@@ -3495,7 +3817,7 @@ internal sealed class ArchiveSynchronizer
         return hashingContent.CompleteHash();
     }
 
-    private static async Task<ProjectedObjectComparison> CompareProjectedObjectAsync
+    private async Task<ProjectedObjectComparison> CompareProjectedObjectAsync
     (
         ArchiveProjectedObject projectedObject,
         IObjectStore targetStore,
@@ -3531,6 +3853,9 @@ internal sealed class ArchiveSynchronizer
         {
             try
             {
+                LogObjectReadOperation(
+                    projectedObject.RelativePath,
+                    "backup source comparison");
                 sourceContent = await projectedObject.OpenContentAsync(cancellationToken);
                 if (prepareChangedContent)
                 {
@@ -3538,6 +3863,9 @@ internal sealed class ArchiveSynchronizer
                 }
 
                 StreamComparison streamComparison;
+                LogObjectReadOperation(
+                    projectedObject.RelativePath,
+                    "backup target comparison");
                 await using (var targetContent = await targetStore.OpenReadAsync(
                     targetObject.Key,
                     cancellationToken))
@@ -4087,6 +4415,552 @@ internal sealed class ArchiveSynchronizer
             StringComparison.Ordinal);
     }
 
+    private void LogBackupObjectUnchanged
+    (
+        string operationName,
+        string relativePath,
+        ArchiveProjectionProvenance? projection
+    )
+    {
+        if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+
+        if (IsEmptyFolderMarker(relativePath))
+        {
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogControlMetadataOperation(
+                    $"{operationName}: determined unchanged",
+                    relativePath);
+            }
+            _logger.LogEmptyDirectoryUnchanged(
+                operationName,
+                GetLogicalEmptyDirectoryPath(relativePath));
+            return;
+        }
+        else if (IsYabtControlMetadataPath(relativePath, projection: projection))
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+            _logger.LogControlMetadataOperation(
+                $"{operationName}: determined unchanged",
+                relativePath);
+            return;
+        }
+
+        _logger.LogArchiveObjectUnchanged(operationName, relativePath);
+    }
+
+    private void LogBackupObjectAdded
+    (
+        string relativePath,
+        bool existingDirectoryChanged = false,
+        ArchiveProjectionProvenance? projection = null
+    )
+    {
+        if (IsEmptyFolderMarker(relativePath))
+        {
+            _logger.LogControlMetadataOperation("Wrote", relativePath);
+            if (existingDirectoryChanged)
+            {
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogBackupEmptyDirectoryChanged(
+                        GetLogicalEmptyDirectoryPath(relativePath));
+                }
+            }
+            else
+            {
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogBackupEmptyDirectoryCreated(
+                        GetLogicalEmptyDirectoryPath(relativePath));
+                }
+            }
+            return;
+        }
+        else if (IsYabtControlMetadataPath(relativePath, projection: projection))
+        {
+            _logger.LogControlMetadataOperation("Wrote", relativePath);
+            return;
+        }
+
+        _logger.LogBackupObjectAdded(relativePath);
+    }
+
+    private void LogBackupObjectChanged
+    (
+        string relativePath,
+        ArchiveProjectionProvenance? projection
+    )
+    {
+        if (IsEmptyFolderMarker(relativePath))
+        {
+            _logger.LogControlMetadataOperation("Replaced", relativePath);
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogEmptyDirectoryUnchanged(
+                    "backup marker repair",
+                    GetLogicalEmptyDirectoryPath(relativePath));
+            }
+            return;
+        }
+        else if (IsYabtControlMetadataPath(relativePath, projection: projection))
+        {
+            _logger.LogControlMetadataOperation("Replaced", relativePath);
+            return;
+        }
+
+        _logger.LogBackupObjectChanged(relativePath);
+    }
+
+    private void LogBackupObjectHistorized
+    (
+        string relativePath,
+        string reason,
+        bool isDirectory = false,
+        ArchiveProjectionProvenance? projection = null
+    )
+    {
+        if (IsEmptyFolderMarker(relativePath))
+        {
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogControlMetadataOperation(
+                    $"Moved to history ({reason})",
+                    relativePath);
+            }
+            if (string.Equals(
+                    reason,
+                    "empty directory changed",
+                    StringComparison.Ordinal))
+            {
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogBackupEmptyDirectoryChanged(
+                        GetLogicalEmptyDirectoryPath(relativePath));
+                }
+            }
+            else if (string.Equals(
+                         reason,
+                         "removed from the source",
+                         StringComparison.Ordinal))
+            {
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogBackupEmptyDirectoryRemoved(
+                        GetLogicalEmptyDirectoryPath(relativePath));
+                }
+            }
+            return;
+        }
+        else if (IsYabtControlMetadataPath(relativePath, isDirectory, projection))
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+            _logger.LogControlMetadataOperation(
+                $"Moved to history ({reason})",
+                relativePath);
+            return;
+        }
+
+        _logger.LogBackupObjectHistorized(relativePath, reason);
+    }
+
+    private void LogBackupWouldAddObject
+    (
+        string relativePath,
+        bool existingDirectoryChanged = false,
+        ArchiveProjectionProvenance? projection = null
+    )
+    {
+        if (IsEmptyFolderMarker(relativePath))
+        {
+            _logger.LogControlMetadataOperation("Would write", relativePath);
+            if (existingDirectoryChanged)
+            {
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogBackupWouldChangeEmptyDirectory(
+                        GetLogicalEmptyDirectoryPath(relativePath));
+                }
+            }
+            else
+            {
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogBackupWouldCreateEmptyDirectory(
+                        GetLogicalEmptyDirectoryPath(relativePath));
+                }
+            }
+            return;
+        }
+        else if (IsYabtControlMetadataPath(relativePath, projection: projection))
+        {
+            _logger.LogControlMetadataOperation("Would write", relativePath);
+            return;
+        }
+
+        _logger.LogBackupWouldAddObject(relativePath);
+    }
+
+    private void LogBackupWouldChangeObject
+    (
+        string relativePath,
+        ArchiveProjectionProvenance? projection
+    )
+    {
+        if (IsEmptyFolderMarker(relativePath))
+        {
+            _logger.LogControlMetadataOperation("Would replace", relativePath);
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogEmptyDirectoryUnchanged(
+                    "backup dry run marker repair",
+                    GetLogicalEmptyDirectoryPath(relativePath));
+            }
+            return;
+        }
+        else if (IsYabtControlMetadataPath(relativePath, projection: projection))
+        {
+            _logger.LogControlMetadataOperation("Would replace", relativePath);
+            return;
+        }
+
+        _logger.LogBackupWouldChangeObject(relativePath);
+    }
+
+    private void LogBackupWouldHistorizeObject
+    (
+        string relativePath,
+        string reason,
+        bool isDirectory = false,
+        ArchiveProjectionProvenance? projection = null
+    )
+    {
+        if (IsEmptyFolderMarker(relativePath))
+        {
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogControlMetadataOperation(
+                    $"Would move to history ({reason})",
+                    relativePath);
+            }
+            if (string.Equals(
+                    reason,
+                    "empty directory changed",
+                    StringComparison.Ordinal))
+            {
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogBackupWouldChangeEmptyDirectory(
+                        GetLogicalEmptyDirectoryPath(relativePath));
+                }
+            }
+            else if (string.Equals(
+                         reason,
+                         "removed from the source",
+                         StringComparison.Ordinal))
+            {
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogBackupWouldRemoveEmptyDirectory(
+                        GetLogicalEmptyDirectoryPath(relativePath));
+                }
+            }
+            return;
+        }
+        else if (IsYabtControlMetadataPath(relativePath, isDirectory, projection))
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+            _logger.LogControlMetadataOperation(
+                $"Would move to history ({reason})",
+                relativePath);
+            return;
+        }
+
+        _logger.LogBackupWouldHistorizeObject(relativePath, reason);
+    }
+
+    private void LogVerifyObjectDifference
+    (
+        string relativePath,
+        string difference,
+        bool isDirectory = false,
+        ArchiveProjectionProvenance? projection = null
+    )
+    {
+        if (IsEmptyFolderMarker(relativePath))
+        {
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogControlMetadataOperation(
+                    $"Verify found difference ({difference}) for",
+                    relativePath);
+            }
+            if (string.Equals(
+                    difference,
+                    "content differs",
+                    StringComparison.Ordinal))
+            {
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    _logger.LogEmptyDirectoryUnchanged(
+                        "verify marker content",
+                        GetLogicalEmptyDirectoryPath(relativePath));
+                }
+            }
+            else if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogVerifyEmptyDirectoryDifference(
+                    GetLogicalEmptyDirectoryPath(relativePath),
+                    difference);
+            }
+            return;
+        }
+        else if (IsYabtControlMetadataPath(relativePath, isDirectory, projection))
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+            _logger.LogControlMetadataOperation(
+                $"Verify found difference ({difference}) for",
+                relativePath);
+            return;
+        }
+
+        _logger.LogVerifyDifference(relativePath, difference);
+    }
+
+    private void LogRestoreDryRun
+    (
+        RestorePlan plan,
+        RestoreReconciliation reconciliation,
+        RootDescriptorRestore rootDescriptorRestore,
+        bool restoreRootNeedsCreation
+    )
+    {
+        if (restoreRootNeedsCreation)
+        {
+            LogRestoreWouldWriteItem("new", "directory", ".");
+        }
+
+        foreach (var historyMove in reconciliation.HistoryMoves)
+        {
+            LogRestoreWouldHistorizeItem(historyMove);
+        }
+
+        foreach (var relativePath in reconciliation.NewDesiredPaths)
+        {
+            LogRestoreWouldWriteItem(
+                "new",
+                GetRestoreItemKind(plan, relativePath),
+                relativePath);
+        }
+
+        foreach (var relativePath in reconciliation.ChangedDesiredPaths)
+        {
+            LogRestoreWouldWriteItem(
+                "changed",
+                GetRestoreItemKind(plan, relativePath),
+                relativePath);
+        }
+
+        foreach (var relativePath in reconciliation.UnchangedDesiredPaths)
+        {
+            LogRestoreItemUnchanged(
+                GetRestoreItemKind(plan, relativePath),
+                relativePath);
+        }
+
+        if (rootDescriptorRestore.MoveExistingToHistory)
+        {
+            _logger.LogControlMetadataOperation(
+                "Would move to restore history",
+                BackupRootFileNames.Primary);
+        }
+        if (rootDescriptorRestore.NeedsWrite)
+        {
+            _logger.LogControlMetadataOperation(
+                "Would write",
+                BackupRootFileNames.Primary);
+        }
+    }
+
+    private void LogRestoreItemWritten
+    (
+        string changeKind,
+        string itemKind,
+        string relativePath
+    )
+    {
+        if (IsYabtControlMetadataPath(
+                relativePath,
+                string.Equals(itemKind, "directory", StringComparison.Ordinal)))
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+            _logger.LogControlMetadataOperation(
+                $"Restored {changeKind} {itemKind}",
+                relativePath);
+            return;
+        }
+
+        _logger.LogRestoreItemWritten(changeKind, itemKind, relativePath);
+    }
+
+    private void LogRestoreWouldWriteItem
+    (
+        string changeKind,
+        string itemKind,
+        string relativePath
+    )
+    {
+        if (IsYabtControlMetadataPath(
+                relativePath,
+                string.Equals(itemKind, "directory", StringComparison.Ordinal)))
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+            _logger.LogControlMetadataOperation(
+                $"Would restore {changeKind} {itemKind}",
+                relativePath);
+            return;
+        }
+
+        _logger.LogRestoreWouldWriteItem(changeKind, itemKind, relativePath);
+    }
+
+    private void LogRestoreItemHistorized(RestoreHistoryMove historyMove)
+    {
+        var itemKind = historyMove.IsFolder ? "directory" : "file";
+        if (IsYabtControlMetadataPath(
+                historyMove.RelativePath,
+                historyMove.IsFolder))
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+            _logger.LogControlMetadataOperation(
+                $"Moved existing {itemKind} to restore history",
+                historyMove.RelativePath);
+            return;
+        }
+
+        _logger.LogRestoreItemHistorized(itemKind, historyMove.RelativePath);
+    }
+
+    private void LogRestoreWouldHistorizeItem(RestoreHistoryMove historyMove)
+    {
+        var itemKind = historyMove.IsFolder ? "directory" : "file";
+        if (IsYabtControlMetadataPath(
+                historyMove.RelativePath,
+                historyMove.IsFolder))
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+            _logger.LogControlMetadataOperation(
+                $"Would move existing {itemKind} to restore history",
+                historyMove.RelativePath);
+            return;
+        }
+
+        _logger.LogRestoreWouldHistorizeItem(itemKind, historyMove.RelativePath);
+    }
+
+    private void LogRestoreItemUnchanged(string itemKind, string relativePath)
+    {
+        if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+
+        if (IsYabtControlMetadataPath(
+                relativePath,
+                string.Equals(itemKind, "directory", StringComparison.Ordinal)))
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+            _logger.LogControlMetadataOperation(
+                $"Restore determined {itemKind} unchanged",
+                relativePath);
+            return;
+        }
+
+        _logger.LogRestoreItemUnchanged(itemKind, relativePath);
+    }
+
+    private void LogObjectReadOperation(string relativePath, string purpose)
+    {
+        if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+
+        if (IsYabtControlMetadataPath(relativePath))
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
+            _logger.LogControlMetadataOperation(
+                $"Reading for {purpose}",
+                relativePath);
+            return;
+        }
+
+        _logger.LogObjectRead(relativePath, purpose);
+    }
+
+    private static string GetRestoreChangeKind
+    (
+        RestoreReconciliation reconciliation,
+        string relativePath
+    ) => reconciliation.ChangedDesiredPaths.Contains(relativePath) ? "changed" : "new";
+
+    private static string GetRestoreItemKind(RestorePlan plan, string relativePath) =>
+        plan.Directories.Contains(relativePath, GetRestorePathComparer()) ?
+            "directory" :
+            "file";
+
+    private static StringComparer GetRestorePathComparer() => OperatingSystem.IsWindows() ?
+        StringComparer.OrdinalIgnoreCase :
+        StringComparer.Ordinal;
+
+    private static string GetRestoreLiveRootPath
+    (
+        string destinationRootPath,
+        ArchiveLayout destinationLayout
+    )
+    {
+        var liveRootKey = destinationLayout.ToLiveObjectKey(string.Empty);
+        return string.IsNullOrEmpty(liveRootKey) ?
+            destinationRootPath :
+            Path.Combine(
+                destinationRootPath,
+                liveRootKey.Replace('/', Path.DirectorySeparatorChar));
+    }
+
+    private static bool IsYabtControlMetadataPath
+    (
+        string relativePath,
+        bool isDirectory = false,
+        ArchiveProjectionProvenance? projection = null
+    )
+    {
+        if (isDirectory) { return false; }
+
+        if (string.Equals(
+                projection?.ArtifactRole,
+                ArchiveProjectionArtifactRoles.Manifest,
+                StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var normalizedRelativePath = ArchiveLayout.NormalizeObjectKey(relativePath);
+        var separator = normalizedRelativePath.LastIndexOf('/');
+        var name = separator < 0 ?
+            normalizedRelativePath :
+            normalizedRelativePath[(separator + 1)..];
+
+        return ReservedRootObjectKeys.Contains(normalizedRelativePath) ||
+            string.Equals(
+                name,
+                FolderPolicyFileNames.Primary,
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                name,
+                ArchiveFolderMarkerFileNames.EmptyFolder,
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetLogicalEmptyDirectoryPath(string markerRelativePath)
+    {
+        var directoryPath = GetParentPrefix(markerRelativePath);
+        return string.IsNullOrEmpty(directoryPath) ? "." : directoryPath;
+    }
+
     private static string EnsureTrailingDirectorySeparator(string path) =>
         Path.EndsInDirectorySeparator(path) ?
             path :
@@ -4211,6 +5085,9 @@ internal sealed class ArchiveSynchronizer
     (
         IReadOnlyList<ArchiveProjectedObject> FilesToWrite,
         IReadOnlyList<RestoreHistoryMove> HistoryMoves,
+        IReadOnlySet<string> NewDesiredPaths,
+        IReadOnlySet<string> ChangedDesiredPaths,
+        IReadOnlySet<string> UnchangedDesiredPaths,
         int NewCount,
         int ChangedCount,
         int ExtraCount,
@@ -4274,6 +5151,9 @@ internal sealed class ArchiveSynchronizer
 
             try
             {
+                _logger.LogControlMetadataOperation(
+                    "Reading restore staging file",
+                    stagingPath);
                 return OpenRestoreStagingFileStream(stagingPath);
             }
             catch (Exception ex)
@@ -4335,6 +5215,9 @@ internal sealed class ArchiveSynchronizer
     {
         try
         {
+            _logger.LogControlMetadataOperation(
+                "Reading",
+                BackupRootFileNames.Primary);
             await using var storedContent = await store.OpenReadAsync(
                 BackupRootFileNames.Primary,
                 cancellationToken);
@@ -4350,7 +5233,7 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private static async Task UploadRootDocumentAsync
+    private async Task UploadRootDocumentAsync
     (
         IObjectStore store,
         BackupRootDocument document,
@@ -4366,6 +5249,9 @@ internal sealed class ArchiveSynchronizer
                 "application/json",
                 EmptyMetadata,
                 cancellationToken);
+            _logger.LogControlMetadataOperation(
+                "Wrote",
+                BackupRootFileNames.Primary);
         }
         catch (Exception ex)
         {

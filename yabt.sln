@@ -20,6 +20,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Sync", "src\Yabt.Sync\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Cli", "src\Yabt.Cli\Yabt.Cli.csproj", "{59DD2410-A1AC-4833-9C55-361092B06E5F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Cli.Tests", "tests\Yabt.Cli.Tests\Yabt.Cli.Tests.csproj", "{F01D2075-4AE9-4E10-9103-62361303297A}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{C92C132C-6018-4E38-B71B-4F9C64E3D9D7}"
 	ProjectSection(SolutionItems) = preProject
 		.editorconfig = .editorconfig
@@ -123,6 +125,10 @@ Global
 		{59DD2410-A1AC-4833-9C55-361092B06E5F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{59DD2410-A1AC-4833-9C55-361092B06E5F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{59DD2410-A1AC-4833-9C55-361092B06E5F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F01D2075-4AE9-4E10-9103-62361303297A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F01D2075-4AE9-4E10-9103-62361303297A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F01D2075-4AE9-4E10-9103-62361303297A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F01D2075-4AE9-4E10-9103-62361303297A}.Release|Any CPU.Build.0 = Release|Any CPU
 		{A8CEE945-40EA-4627-AFF6-2BE03B83181C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{A8CEE945-40EA-4627-AFF6-2BE03B83181C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A8CEE945-40EA-4627-AFF6-2BE03B83181C}.Release|Any CPU.ActiveCfg = Release|Any CPU

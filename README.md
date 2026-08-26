@@ -63,6 +63,15 @@ yabt deduplicate [archive-root] --dry-run
 
 `sync` remains available as a compatibility alias for `backup`, but new commands and documentation should use `backup`.
 
+Add `--log-file` to any command to write a uniquely named diagnostic log in the platform's per-user log directory as well as logging to the console. The default directory is `%LOCALAPPDATA%\Yabt\Logs` on Windows, `$XDG_STATE_HOME/yabt/logs` (falling back to `~/.local/state/yabt/logs`) on Linux, and `~/Library/Logs/Yabt` on macOS. Use the equals form `--log-file=<path>` to choose the file explicitly; relative paths use the current working directory, and YABT refuses to overwrite or append to an existing file:
+
+```console
+yabt backup <source-root> --log-file
+yabt backup <source-root> --log-file=D:\Logs\nightly-backup.log
+```
+
+The console defaults to information-level messages. An enabled file log additionally captures debug messages such as reads, comparisons, unchanged files, and YABT metadata operations. YABT creates one new file per command invocation and does not currently delete old log files automatically. It rejects a log path that overlaps the command's source, selected filesystem archive, or restore destination so the growing log cannot become synchronization input or block creation of a root.
+
 If an Azure archive was created by an earlier development build, run one current `backup` before the first restore. This upgrades a schema-version-1 or schema-version-2 live change manifest to version 3 with exact root-descriptor evidence and projection provenance. Unchanged ordinary archive files are not re-uploaded; ZIP projections gain their adjacent and embedded manifests as part of the current durable representation.
 
 `deduplicate` is a separate history maintenance operation so synchronization does not pay the cost of scanning history. It always confirms candidate duplicates byte-for-byte before replacing a historical materialization with a self-describing JSON reference.

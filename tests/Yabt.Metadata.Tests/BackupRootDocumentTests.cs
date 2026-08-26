@@ -1,5 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Metadata;
 
@@ -113,9 +115,20 @@ public sealed class BackupRootDocumentTests
         }
     }
 
+    [TestMethod]
+    public void AddYabtMetadataResolvesFilesystemMetadataReaders()
+    {
+        using var provider = CreateServiceProvider();
+
+        Assert.IsNotNull(provider.GetRequiredService<IBackupRootLocator>());
+        Assert.IsNotNull(provider.GetRequiredService<IBackupRootReader>());
+        Assert.IsNotNull(provider.GetRequiredService<IFolderPolicyReader>());
+    }
+
     private static ServiceProvider CreateServiceProvider()
     {
         var services = new ServiceCollection();
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddYabtMetadata();
         return services.BuildServiceProvider();
     }

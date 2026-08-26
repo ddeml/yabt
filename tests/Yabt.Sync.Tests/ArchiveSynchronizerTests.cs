@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -6,6 +7,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Yabt.Common;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.FileSystem;
@@ -47,6 +49,457 @@ public sealed class ArchiveSynchronizerTests
             Assert.IsTrue(result.Completed);
             Assert.AreEqual(1, result.NewCount);
             AssertTextFile(Path.Combine(targetRoot, "folder", "file.txt"), "source content");
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task BackupAsyncLogsUserDataAtInformationAndControlMetadataAtDebug()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WriteTextFileAsync(
+                Path.Combine(sourceRoot, "folder", "file.txt"),
+                "source content");
+            await WriteTextFileAsync(
+                Path.Combine(sourceRoot, "removed.txt"),
+                "kept in the archive during the dry run");
+            await WriteTextFileAsync(
+                Path.Combine(sourceRoot, ".yabt-notes.txt"),
+                "ordinary user data despite its name");
+            var packagedRoot = Path.Combine(sourceRoot, "packaged");
+            await WritePolicyAsync(packagedRoot, ZipArchiveFormatName.Value);
+            await WriteTextFileAsync(
+                Path.Combine(packagedRoot, "inside.txt"),
+                "packaged user data");
+            Directory.CreateDirectory(Path.Combine(sourceRoot, "empty"));
+
+            var logSink = new CapturingLogSink();
+            using var serviceProvider = CreateServices(loggerSink: logSink)
+                .BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var firstRunEntries = logSink.Entries.ToArray();
+            Assert.IsTrue(firstRunEntries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.BackupObjectAdded &&
+                entry.Message.Contains("folder/file.txt", StringComparison.Ordinal)));
+            Assert.IsTrue(firstRunEntries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.BackupObjectAdded &&
+                entry.Message.Contains(".yabt-notes.txt", StringComparison.Ordinal)));
+            Assert.IsTrue(firstRunEntries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains(BackupRootFileNames.Primary, StringComparison.Ordinal)));
+            Assert.IsTrue(firstRunEntries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.BackupEmptyDirectoryCreated &&
+                entry.Message.Contains("empty", StringComparison.Ordinal)));
+            Assert.IsTrue(firstRunEntries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains(
+                    ArchiveFolderMarkerFileNames.EmptyFolder,
+                    StringComparison.Ordinal)));
+            Assert.IsTrue(firstRunEntries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains(
+                    ArchivePackageManifestFileNames.AdjacentSuffix,
+                    StringComparison.Ordinal)));
+            Assert.IsFalse(firstRunEntries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                (entry.Message.Contains(
+                        BackupRootFileNames.Primary,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    entry.Message.Contains(
+                        ArchiveFolderMarkerFileNames.EmptyFolder,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    entry.Message.Contains(
+                        ArchivePackageManifestFileNames.AdjacentSuffix,
+                        StringComparison.OrdinalIgnoreCase))));
+
+            logSink.Clear();
+            await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ZipTemporaryPlumbingOperation &&
+                entry.Message.Contains("restore staging file", StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains("restore staging", StringComparison.Ordinal)));
+
+            logSink.Clear();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ArchiveObjectUnchanged &&
+                entry.Message.Contains("folder/file.txt", StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.EmptyDirectoryUnchanged &&
+                entry.Message.Contains("empty", StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains("Determined unchanged", StringComparison.Ordinal) &&
+                entry.Message.Contains(BackupRootFileNames.Primary, StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains("Determined unchanged", StringComparison.Ordinal) &&
+                entry.Message.Contains(
+                    ArchiveChangeManifest.BrotliFileName,
+                    StringComparison.Ordinal)));
+
+            await WriteTextFileAsync(
+                Path.Combine(sourceRoot, "folder", "file.txt"),
+                "changed source content");
+            await WriteTextFileAsync(
+                Path.Combine(sourceRoot, "new.txt"),
+                "new content");
+            File.Delete(Path.Combine(sourceRoot, "removed.txt"));
+            Directory.Delete(packagedRoot, recursive: true);
+            logSink.Clear();
+
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot, DryRun: true));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.BackupWouldAddObject &&
+                entry.Message.StartsWith("Would add", StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.BackupWouldChangeObject &&
+                entry.Message.StartsWith("Would change", StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.BackupWouldHistorizeObject &&
+                entry.Message.StartsWith("Would move", StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains("Would move", StringComparison.Ordinal) &&
+                entry.Message.Contains(
+                    ArchivePackageManifestFileNames.AdjacentSuffix,
+                    StringComparison.Ordinal)));
+            Assert.IsFalse(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.Message.Contains(
+                    ArchivePackageManifestFileNames.AdjacentSuffix,
+                    StringComparison.OrdinalIgnoreCase)));
+            AssertTextFile(
+                Path.Combine(targetRoot, "folder", "file.txt"),
+                "source content");
+            AssertTextFile(
+                Path.Combine(targetRoot, "removed.txt"),
+                "kept in the archive during the dry run");
+            Assert.IsFalse(File.Exists(Path.Combine(targetRoot, "new.txt")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task BackupAndRestoreLogNestedReservedNameAndMetadataNamedDirectoryAsUserData()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await WriteTextFileAsync(
+                Path.Combine(sourceRoot, "nested", BackupRootFileNames.Primary),
+                "ordinary nested user data");
+            var metadataLikeUserFileNames = new[]
+            {
+                "report.yabt-manifest.json",
+                "report.yabt-ref.json",
+                ArchiveHistoryFileNames.Manifest,
+                ArchivePackageManifestFileNames.EmbeddedEntryName,
+            };
+            foreach (var fileName in metadataLikeUserFileNames)
+            {
+                await WriteTextFileAsync(
+                    Path.Combine(sourceRoot, "nested", fileName),
+                    "ordinary user data despite its metadata-like name");
+            }
+            Directory.CreateDirectory(Path.Combine(
+                sourceRoot,
+                "nested",
+                FolderPolicyFileNames.Primary));
+
+            var logSink = new CapturingLogSink();
+            using var serviceProvider = CreateServices(loggerSink: logSink)
+                .BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.BackupObjectAdded &&
+                entry.Message.Contains(
+                    $"nested/{BackupRootFileNames.Primary}",
+                    StringComparison.Ordinal)));
+            foreach (var fileName in metadataLikeUserFileNames)
+            {
+                Assert.IsTrue(logSink.Entries.Any(entry =>
+                    entry.Level == LogLevel.Information &&
+                    entry.EventId.Id == YabtEventIds.BackupObjectAdded &&
+                    entry.Message.Contains($"nested/{fileName}", StringComparison.Ordinal)));
+            }
+
+            logSink.Clear();
+            await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.RestoreItemWritten &&
+                entry.Message.Contains(
+                    $"nested/{BackupRootFileNames.Primary}",
+                    StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.RestoreItemWritten &&
+                entry.Message.Contains(
+                    $"nested/{FolderPolicyFileNames.Primary}",
+                    StringComparison.Ordinal)));
+            foreach (var fileName in metadataLikeUserFileNames)
+            {
+                Assert.IsTrue(logSink.Entries.Any(entry =>
+                    entry.Level == LogLevel.Information &&
+                    entry.EventId.Id == YabtEventIds.RestoreItemWritten &&
+                    entry.Message.Contains($"nested/{fileName}", StringComparison.Ordinal)));
+            }
+
+            var changedFileName = metadataLikeUserFileNames[0];
+            var deletedFileName = metadataLikeUserFileNames[1];
+            await WriteTextFileAsync(
+                Path.Combine(sourceRoot, "nested", changedFileName),
+                "changed ordinary user data");
+            File.Delete(Path.Combine(sourceRoot, "nested", deletedFileName));
+            logSink.Clear();
+
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.BackupObjectChanged &&
+                entry.Message.Contains($"nested/{changedFileName}", StringComparison.Ordinal)));
+            foreach (var fileName in new[] { changedFileName, deletedFileName })
+            {
+                Assert.IsTrue(logSink.Entries.Any(entry =>
+                    entry.Level == LogLevel.Information &&
+                    entry.EventId.Id == YabtEventIds.BackupObjectHistorized &&
+                    entry.Message.Contains($"nested/{fileName}", StringComparison.Ordinal)));
+            }
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task BackupAsyncRepairsCorruptedEmptyFolderMarkerAtDebugOnly()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            Directory.CreateDirectory(Path.Combine(sourceRoot, "empty"));
+
+            var logSink = new CapturingLogSink();
+            using var serviceProvider = CreateServices(loggerSink: logSink)
+                .BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var markerPath = Path.Combine(
+                archiveRoot,
+                "empty",
+                ArchiveFolderMarkerFileNames.EmptyFolder);
+            await File.WriteAllBytesAsync(markerPath, [1]);
+            logSink.Clear();
+
+            await synchronizer.BackupAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                ByteForByte: true
+            ));
+
+            Assert.IsFalse(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id is
+                    YabtEventIds.BackupEmptyDirectoryCreated or
+                    YabtEventIds.BackupEmptyDirectoryChanged or
+                    YabtEventIds.BackupEmptyDirectoryRemoved));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains(
+                    ArchiveFolderMarkerFileNames.EmptyFolder,
+                    StringComparison.Ordinal) &&
+                entry.Message.Contains("Replaced", StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.EmptyDirectoryUnchanged &&
+                entry.Message.Contains("empty", StringComparison.Ordinal)));
+            Assert.AreEqual(0, new FileInfo(markerPath).Length);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncLogsUnchangedDescriptorAndInvalidLogicalStateRecoveryAtDebug()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
+
+            var logSink = new CapturingLogSink();
+            using var serviceProvider = CreateServices(loggerSink: logSink)
+                .BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+            await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            logSink.Clear();
+            await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains("Determined unchanged", StringComparison.Ordinal) &&
+                entry.Message.Contains(BackupRootFileNames.Primary, StringComparison.Ordinal)));
+
+            await File.WriteAllTextAsync(
+                Path.Combine(destinationRoot, ArchiveLogicalStateManifest.FileName),
+                "not valid JSON",
+                Encoding.UTF8);
+            logSink.Clear();
+
+            await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains(
+                    "Ignored invalid or unreadable",
+                    StringComparison.Ordinal) &&
+                entry.Message.Contains(
+                    ArchiveLogicalStateManifest.FileName,
+                    StringComparison.Ordinal)));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncLogsMissingEmptyDestinationRootWithoutChangingSummaryCounts()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            var dryRunDestinationRoot = Path.Combine(workspace, "dry-run-restored");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+
+            var logSink = new CapturingLogSink();
+            using var serviceProvider = CreateServices(loggerSink: logSink)
+                .BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            logSink.Clear();
+            var result = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(result.Completed);
+            Assert.AreEqual(0, result.NewCount);
+            Assert.AreEqual(0, result.ChangedCount);
+            Assert.AreEqual(0, result.ExtraCount);
+            Assert.AreEqual(0, result.UnchangedCount);
+            Assert.IsTrue(Directory.Exists(destinationRoot));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.RestoreItemWritten &&
+                entry.Message.Contains("new directory .", StringComparison.Ordinal)));
+
+            logSink.Clear();
+            var dryRunResult = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: dryRunDestinationRoot,
+                DryRun: true
+            ));
+
+            Assert.IsTrue(dryRunResult.Completed);
+            Assert.AreEqual(0, dryRunResult.NewCount);
+            Assert.AreEqual(0, dryRunResult.ChangedCount);
+            Assert.AreEqual(0, dryRunResult.ExtraCount);
+            Assert.AreEqual(0, dryRunResult.UnchangedCount);
+            Assert.IsFalse(Directory.Exists(dryRunDestinationRoot));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.RestoreWouldWriteItem &&
+                entry.Message.Contains("new directory .", StringComparison.Ordinal)));
         }
         finally
         {
@@ -173,7 +626,9 @@ public sealed class ArchiveSynchronizerTests
             await WriteRootDescriptorBytesAsync(sourceRoot, initialDescriptorBytes);
             await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
 
-            using var serviceProvider = CreateServices().BuildServiceProvider();
+            var logSink = new CapturingLogSink();
+            using var serviceProvider = CreateServices(loggerSink: logSink)
+                .BuildServiceProvider();
             var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
             await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
 
@@ -193,6 +648,7 @@ public sealed class ArchiveSynchronizerTests
                 sourceRoot,
                 reconfiguredSourceDescriptorBytes);
 
+            logSink.Clear();
             var verifyResult = await synchronizer.VerifyAsync(new SyncRunRequest(sourceRoot));
 
             Assert.IsFalse(verifyResult.Completed);
@@ -206,6 +662,7 @@ public sealed class ArchiveSynchronizerTests
                 changeManifestBytes,
                 await File.ReadAllBytesAsync(changeManifestPath));
 
+            logSink.Clear();
             var dryRunResult = await synchronizer.BackupAsync(new SyncRunRequest
             (
                 sourceRoot,
@@ -226,6 +683,18 @@ public sealed class ArchiveSynchronizerTests
                 changeManifestBytes,
                 await File.ReadAllBytesAsync(changeManifestPath));
             Assert.IsFalse(Directory.Exists(Path.Combine(archiveRoot, ".yabt-hist")));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains(
+                    "Would move to history (replacement)",
+                    StringComparison.Ordinal) &&
+                entry.Message.Contains(BackupRootFileNames.Primary, StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
+                entry.Message.Contains("Would write replacement", StringComparison.Ordinal) &&
+                entry.Message.Contains(BackupRootFileNames.Primary, StringComparison.Ordinal)));
         }
         finally
         {
@@ -4644,10 +5113,22 @@ public sealed class ArchiveSynchronizerTests
         }
     }
 
-    private static ServiceCollection CreateServices(TimeProvider? timeProvider = default)
+    private static ServiceCollection CreateServices
+    (
+        TimeProvider? timeProvider = default,
+        CapturingLogSink? loggerSink = default
+    )
     {
         var services = new ServiceCollection();
-        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        if (loggerSink is null)
+        {
+            services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        }
+        else
+        {
+            services.AddSingleton(loggerSink);
+            services.AddSingleton(typeof(ILogger<>), typeof(CapturingLogger<>));
+        }
         if (timeProvider is not null)
         {
             services.AddSingleton(timeProvider);
@@ -4660,6 +5141,54 @@ public sealed class ArchiveSynchronizerTests
         services.AddYabtSync();
 
         return services;
+    }
+
+    private sealed class CapturingLogSink
+    {
+        public ConcurrentQueue<CapturedLogEntry> Entries { get; } = new();
+
+        public void Clear()
+        {
+            while (Entries.TryDequeue(out _))
+            {
+            }
+        }
+    }
+
+    private sealed class CapturingLogger<T>(CapturingLogSink sink) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
+
+        public void Log<TState>
+        (
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        ) => sink.Entries.Enqueue(new(
+            logLevel,
+            eventId,
+            formatter(state, exception)));
+    }
+
+    private sealed record CapturedLogEntry
+    (
+        LogLevel Level,
+        EventId EventId,
+        string Message
+    );
+
+    private sealed class NullScope : IDisposable
+    {
+        public static NullScope Instance { get; } = new();
+
+        public void Dispose()
+        {
+        }
     }
 
     private static ServiceCollection CreateCustomFormatServices

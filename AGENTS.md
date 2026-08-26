@@ -215,6 +215,14 @@ Normal restore may trust a valid destination logical-state entry without opening
 
 The current root-wide manifest avoids repeated byte scans but still performs metadata traversal and O(total objects) manifest work. Architecture should allow future folder-local or sharded manifests, Synology btrfs snapshot diffing, filesystem event monitoring, and incremental reconciliation for millions of files. Any cache remains disposable and non-authoritative.
 
+## Logging
+
+Log each logical user-data creation, change, live removal or historization, restore write, and history deduplication at information level. Dry runs use the same level with wording that clearly says the action would occur. Log unchanged decisions and every object-store read, existence check, or folder listing at debug level. Physical reads, writes, moves, and deletes of YABT-owned metadata and plumbing, including descriptors, policies, manifests, references, invalidation markers, `.yabt-empty`, and `.yabt-tmp`, also belong at debug level. Important metadata validation or recovery problems may still be warnings.
+
+Emit information-level action messages from the synchronization or maintenance layer that understands the logical operation. Keep raw provider operations at debug level so one logical change does not produce duplicate information messages. Trace remains appropriate for method entry and lower-level control flow.
+
+The CLI writes information and higher messages to the console. Opt-in file logging additionally captures debug and higher messages in one unique new file per command invocation. The default directory is `%LOCALAPPDATA%\Yabt\Logs` on Windows, `$XDG_STATE_HOME/yabt/logs` or `~/.local/state/yabt/logs` on Linux, and `~/Library/Logs/Yabt` on macOS. A caller may choose another path. Resolve the command's local roots before opening the log and reject any path overlap with the command source, selected filesystem archive, or restore destination, so logging cannot become synchronization input, mutate archive data, or block creation of a root. Do not implement automatic log retention unless explicitly requested.
+
 ## Initial Technical Stack
 
 - .NET 10

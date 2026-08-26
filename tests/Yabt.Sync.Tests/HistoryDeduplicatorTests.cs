@@ -1,8 +1,10 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Yabt.Common;
 using Yabt.Core.Models;
 using Yabt.Metadata;
 
@@ -158,6 +160,88 @@ public sealed class HistoryDeduplicatorTests
                 ".yabt-hist",
                 ArchiveHistoryFileNames.Manifest)));
             Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, ".yabt-tmp")));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task DeduplicateAsyncLogsCanonicalManifestRecoveryAndDryRunOrphanCleanupAtDebug()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var targetRoot = Path.Combine(workspace, "target");
+            await InitializeArchiveRootAsync(archiveRoot, targetRoot);
+            var content = CreateContent(6_000);
+            var canonicalPath = Path.Combine(targetRoot, ".yabt-hist", "one", "file.bin");
+            var duplicatePath = Path.Combine(targetRoot, ".yabt-hist", "two", "file.bin");
+            await WriteBytesAsync(canonicalPath, content);
+            await WriteBytesAsync(duplicatePath, content);
+            var duplicateLastWriteTimeUtc = File.GetLastWriteTimeUtc(duplicatePath);
+
+            var logSink = new CapturingLogSink();
+            using var services = CreateServices(loggerSink: logSink).BuildServiceProvider();
+            var deduplicator = services.GetRequiredService<IHistoryDeduplicator>();
+
+            await deduplicator.DeduplicateAsync(new HistoryDeduplicationRequest(archiveRoot));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.HistoryObjectUnchanged &&
+                entry.Message.Contains("one/file.bin", StringComparison.Ordinal) &&
+                entry.Message.Contains("stable materialized backing", StringComparison.Ordinal)));
+
+            logSink.Clear();
+            await deduplicator.DeduplicateAsync(new HistoryDeduplicationRequest(archiveRoot));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.HistoryControlMetadataOperation &&
+                entry.Message.Contains("Determined unchanged", StringComparison.Ordinal) &&
+                entry.Message.Contains(
+                    ArchiveHistoryFileNames.Manifest,
+                    StringComparison.Ordinal)));
+
+            var manifestPath = Path.Combine(
+                targetRoot,
+                ".yabt-hist",
+                ArchiveHistoryFileNames.Manifest);
+            await File.WriteAllTextAsync(manifestPath, "not valid JSON", Encoding.UTF8);
+            logSink.Clear();
+
+            await deduplicator.DeduplicateAsync(new HistoryDeduplicationRequest(archiveRoot));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.HistoryControlMetadataOperation &&
+                entry.Message.Contains(
+                    "Ignored invalid or unreadable",
+                    StringComparison.Ordinal) &&
+                entry.Message.Contains(
+                    ArchiveHistoryFileNames.Manifest,
+                    StringComparison.Ordinal)));
+
+            await WriteBytesAsync(duplicatePath, content);
+            File.SetLastWriteTimeUtc(duplicatePath, duplicateLastWriteTimeUtc);
+            logSink.Clear();
+
+            await deduplicator.DeduplicateAsync(new HistoryDeduplicationRequest
+            (
+                archiveRoot,
+                DryRun: true
+            ));
+
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == YabtEventIds.HistoryControlMetadataOperation &&
+                entry.Message.Contains("Would delete orphan reference", StringComparison.Ordinal) &&
+                entry.Message.Contains(
+                    ArchiveHistoryFileNames.ReferenceSuffix,
+                    StringComparison.Ordinal)));
         }
         finally
         {
@@ -664,10 +748,22 @@ public sealed class HistoryDeduplicatorTests
         }
     }
 
-    private static ServiceCollection CreateServices(bool includeMirrorFormatHandler = false)
+    private static ServiceCollection CreateServices
+    (
+        bool includeMirrorFormatHandler = false,
+        CapturingLogSink? loggerSink = default
+    )
     {
         var services = new ServiceCollection();
-        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        if (loggerSink is null)
+        {
+            services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        }
+        else
+        {
+            services.AddSingleton(loggerSink);
+            services.AddSingleton(typeof(ILogger<>), typeof(CapturingLogger<>));
+        }
         services.AddYabtFileSystemObjectStore();
         services.AddYabtMetadata();
         services.AddYabtSync();
@@ -677,6 +773,54 @@ public sealed class HistoryDeduplicatorTests
         }
 
         return services;
+    }
+
+    private sealed class CapturingLogSink
+    {
+        public ConcurrentQueue<CapturedLogEntry> Entries { get; } = new();
+
+        public void Clear()
+        {
+            while (Entries.TryDequeue(out _))
+            {
+            }
+        }
+    }
+
+    private sealed class CapturingLogger<T>(CapturingLogSink sink) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
+
+        public void Log<TState>
+        (
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        ) => sink.Entries.Enqueue(new(
+            logLevel,
+            eventId,
+            formatter(state, exception)));
+    }
+
+    private sealed record CapturedLogEntry
+    (
+        LogLevel Level,
+        EventId EventId,
+        string Message
+    );
+
+    private sealed class NullScope : IDisposable
+    {
+        public static NullScope Instance { get; } = new();
+
+        public void Dispose()
+        {
+        }
     }
 
     private static async Task InitializeArchiveRootAsync

@@ -28,6 +28,7 @@ internal sealed class AzureBlobObjectStore
         try
         {
             var context = GetContext();
+            _logger.LogAzureBlobStoreReady(context.ContainerClient.Name);
             await context.ContainerClient.CreateIfNotExistsAsync
             (
                 PublicAccessType.None,
@@ -54,6 +55,7 @@ internal sealed class AzureBlobObjectStore
         _logger.LogTrace(nameof(UploadAsync));
 
         var normalizedKey = NormalizeObjectKey(key);
+        _logger.LogAzureBlobObjectUpload(normalizedKey);
         try
         {
             var context = GetContext();
@@ -92,6 +94,7 @@ internal sealed class AzureBlobObjectStore
         _logger.LogTrace(nameof(OpenReadAsync));
 
         var normalizedKey = NormalizeObjectKey(key);
+        _logger.LogAzureBlobObjectRead(normalizedKey);
         try
         {
             var context = GetContext();
@@ -135,10 +138,12 @@ internal sealed class AzureBlobObjectStore
         ValidateExpectedContentHash(expectedContentHash);
 
         var normalizedKey = NormalizeObjectKey(key);
+        _logger.LogAzureBlobObjectConditionalReplace(normalizedKey);
         try
         {
             var context = GetContext();
             var blob = GetBlobClient(context, normalizedKey);
+            _logger.LogAzureBlobConditionalMutationRead(normalizedKey);
             var current = await ReadCurrentHashAndETagAsync(blob, cancellationToken);
             if (!string.Equals(
                     current.ContentHash,
@@ -196,10 +201,12 @@ internal sealed class AzureBlobObjectStore
         ValidateExpectedContentHash(expectedContentHash);
 
         var normalizedKey = NormalizeObjectKey(key);
+        _logger.LogAzureBlobObjectConditionalDelete(normalizedKey);
         try
         {
             var context = GetContext();
             var blob = GetBlobClient(context, normalizedKey);
+            _logger.LogAzureBlobConditionalMutationRead(normalizedKey);
             var current = await ReadCurrentHashAndETagAsync(blob, cancellationToken);
             if (!string.Equals(
                     current.ContentHash,
@@ -268,6 +275,7 @@ internal sealed class AzureBlobObjectStore
         var container = context.ContainerClient;
         var objectStorePrefix = context.ObjectStorePrefix;
         var requestedPrefix = NormalizeObjectPrefix(folderPrefix);
+        _logger.LogAzureBlobFolderList(requestedPrefix, recursive);
         var blobPrefix = ToBlobFolderPrefix(CombineBlobNameParts(
             objectStorePrefix,
             requestedPrefix));
@@ -389,6 +397,9 @@ internal sealed class AzureBlobObjectStore
 
         var normalizedSourcePrefix = NormalizeObjectKey(sourcePrefix);
         var normalizedDestinationPrefix = NormalizeObjectKey(destinationPrefix);
+        _logger.LogAzureBlobFolderMove(
+            normalizedSourcePrefix,
+            normalizedDestinationPrefix);
         if (ArchiveLayout.IsUnderPrefix(normalizedDestinationPrefix, normalizedSourcePrefix))
         {
             throw new YabtAzureBlobException(
@@ -402,6 +413,7 @@ internal sealed class AzureBlobObjectStore
             var objectStorePrefix = context.ObjectStorePrefix;
             var blobPrefix = ToBlobFolderPrefix(GetBlobName(context, normalizedSourcePrefix));
             var moves = new List<(string Source, string Destination)>();
+            _logger.LogAzureBlobFolderList(normalizedSourcePrefix, recursive: true);
             var blobs = container.GetBlobsAsync
             (
                 BlobTraits.None,
@@ -439,6 +451,7 @@ internal sealed class AzureBlobObjectStore
             (
                 GetBlobName(context, normalizedDestinationPrefix)
             );
+            _logger.LogAzureBlobFolderList(normalizedDestinationPrefix, recursive: true);
             var destinationBlobs = container.GetBlobsAsync
             (
                 BlobTraits.None,
@@ -477,6 +490,7 @@ internal sealed class AzureBlobObjectStore
     )
     {
         _logger.LogTrace(nameof(MoveAsync));
+        _logger.LogAzureBlobObjectMove(source, destination);
 
         var sourceBlob = GetBlobClient(context, source);
         var destinationBlob = GetBlobClient(context, destination);
@@ -516,6 +530,7 @@ internal sealed class AzureBlobObjectStore
     )
     {
         _logger.LogTrace(nameof(ExistsAsync));
+        _logger.LogAzureBlobObjectExists(key);
 
         var blob = GetBlobClient(context, key);
         var response = await blob.ExistsAsync(cancellationToken);

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -16,7 +17,12 @@ public sealed class FileSystemObjectStoreTests
         var rootPath = CreateTemporaryRoot();
         try
         {
-            using var serviceProvider = CreateServices(rootPath, listChunkSize: 10).BuildServiceProvider();
+            var logSink = new CapturingLogSink();
+            using var serviceProvider = CreateServices(
+                    rootPath,
+                    listChunkSize: 10,
+                    logSink)
+                .BuildServiceProvider();
             var store = serviceProvider.GetRequiredService<IObjectStore>();
             await using var content = new MemoryStream("content"u8.ToArray());
 
@@ -32,6 +38,44 @@ public sealed class FileSystemObjectStoreTests
             var temporaryDirectory = Path.Combine(rootPath, ".yabt-tmp");
             Assert.IsTrue(Directory.Exists(temporaryDirectory));
             Assert.IsFalse(Directory.EnumerateFileSystemEntries(temporaryDirectory).Any());
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.EventId.Id == Yabt.Common.YabtEventIds.FileSystemPlumbingOperation &&
+                entry.Message.Contains("temporary upload file", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ReadOperationsLogAtDebugLevel()
+    {
+        var rootPath = CreateTemporaryRoot();
+        try
+        {
+            await WriteFileAsync(rootPath, "folder/file.txt");
+            var logSink = new CapturingLogSink();
+            using var serviceProvider = CreateServices(
+                    rootPath,
+                    listChunkSize: 10,
+                    logSink)
+                .BuildServiceProvider();
+            var store = serviceProvider.GetRequiredService<IObjectStore>();
+
+            Assert.IsTrue(await store.ExistsAsync("folder/file.txt"));
+            await using (var content = await store.OpenReadAsync("folder/file.txt"))
+            {
+                await content.Content.CopyToAsync(Stream.Null);
+            }
+            await foreach (var _ in store.GetFolderItemsAsync("folder"))
+            {
+            }
+
+            AssertDebugEvent(logSink, Yabt.Common.YabtEventIds.FileSystemObjectExists);
+            AssertDebugEvent(logSink, Yabt.Common.YabtEventIds.FileSystemObjectRead);
+            AssertDebugEvent(logSink, Yabt.Common.YabtEventIds.FileSystemFolderList);
         }
         finally
         {
@@ -381,10 +425,23 @@ public sealed class FileSystemObjectStoreTests
         }
     }
 
-    private static ServiceCollection CreateServices(string rootPath, int listChunkSize)
+    private static ServiceCollection CreateServices
+    (
+        string rootPath,
+        int listChunkSize,
+        CapturingLogSink? logSink = null
+    )
     {
         var services = new ServiceCollection();
-        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        if (logSink is null)
+        {
+            services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        }
+        else
+        {
+            services.AddSingleton(logSink);
+            services.AddSingleton(typeof(ILogger<>), typeof(CapturingLogger<>));
+        }
         services.AddYabtFileSystemObjectStore();
         services.AddSingleton<IOptionsMonitor<FileSystemObjectStoreOptions>>
         (
@@ -399,6 +456,45 @@ public sealed class FileSystemObjectStoreTests
         );
         return services;
     }
+
+    private static void AssertDebugEvent(CapturingLogSink sink, int eventId)
+    {
+        Assert.IsTrue(sink.Entries.Any(entry =>
+            entry.Level == LogLevel.Debug &&
+            entry.EventId.Id == eventId));
+    }
+
+    private sealed class CapturingLogSink
+    {
+        public ConcurrentQueue<CapturedLogEntry> Entries { get; } = new();
+    }
+
+    private sealed class CapturingLogger<T>(CapturingLogSink sink) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
+
+        public void Log<TState>
+        (
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        ) => sink.Entries.Enqueue(new(
+            logLevel,
+            eventId,
+            formatter(state, exception)));
+    }
+
+    private sealed record CapturedLogEntry
+    (
+        LogLevel Level,
+        EventId EventId,
+        string Message
+    );
 
     private static string CreateTemporaryRoot()
     {

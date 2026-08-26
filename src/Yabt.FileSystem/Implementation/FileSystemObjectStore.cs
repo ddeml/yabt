@@ -21,6 +21,7 @@ internal sealed class FileSystemObjectStore
         _logger.LogTrace(nameof(EnsureReadyAsync));
 
         var rootPath = GetRootPath();
+        _logger.LogFileSystemStoreReady(rootPath);
         return YabtTask.Run
         (
             () =>
@@ -50,6 +51,7 @@ internal sealed class FileSystemObjectStore
         var normalizedKey = NormalizeObjectKey(key);
         var rootPath = GetRootPath();
         var destinationPath = GetObjectPath(rootPath, normalizedKey);
+        _logger.LogFileSystemObjectUpload(normalizedKey, destinationPath);
         var destinationDirectory = Path.GetDirectoryName(destinationPath) ??
             throw new YabtFileSystemException
             (
@@ -66,6 +68,9 @@ internal sealed class FileSystemObjectStore
         var bufferSize = GetEffectiveBufferSize();
         try
         {
+            _logger.LogFileSystemPlumbingOperation(
+                "Creating temporary upload file",
+                temporaryPath);
             await using (var destination = await YabtTask.Run
             (
                 () =>
@@ -102,6 +107,9 @@ internal sealed class FileSystemObjectStore
             {
                 await content.CopyToAsync(destination, cancellationToken);
             }
+            _logger.LogFileSystemPlumbingOperation(
+                "Finished writing temporary upload file",
+                temporaryPath);
             await YabtTask.Run
             (
                 () => File.Move(temporaryPath, destinationPath),
@@ -117,6 +125,9 @@ internal sealed class FileSystemObjectStore
                 },
                 cancellationToken
             );
+            _logger.LogFileSystemPlumbingOperation(
+                "Moved completed temporary upload file into place",
+                temporaryPath);
         }
         catch (Exception ex)
         {
@@ -146,6 +157,7 @@ internal sealed class FileSystemObjectStore
         try
         {
             var path = GetObjectPath(GetRootPath(), normalizedKey);
+            _logger.LogFileSystemObjectRead(normalizedKey, path);
             var bufferSize = GetEffectiveBufferSize();
             var stream = await YabtTask.Run
             (
@@ -198,6 +210,7 @@ internal sealed class FileSystemObjectStore
         var normalizedKey = NormalizeObjectKey(key);
         var rootPath = GetRootPath();
         var destinationPath = GetObjectPath(rootPath, normalizedKey);
+        _logger.LogFileSystemObjectConditionalReplace(normalizedKey, destinationPath);
         var temporaryDirectory = GetTemporaryDirectory(rootPath);
         var temporaryPath = Path.Combine(
             temporaryDirectory,
@@ -207,6 +220,9 @@ internal sealed class FileSystemObjectStore
         try
         {
             Directory.CreateDirectory(temporaryDirectory);
+            _logger.LogFileSystemPlumbingOperation(
+                "Creating temporary conditional-replacement file",
+                temporaryPath);
             await using (var temporaryContent = new FileStream
             (
                 temporaryPath,
@@ -219,6 +235,9 @@ internal sealed class FileSystemObjectStore
             {
                 await replacementContent.CopyToAsync(temporaryContent, cancellationToken);
             }
+            _logger.LogFileSystemPlumbingOperation(
+                "Finished writing temporary conditional-replacement file",
+                temporaryPath);
 
             return await RunConditionalMutationAsync
             (
@@ -260,6 +279,7 @@ internal sealed class FileSystemObjectStore
         var normalizedKey = NormalizeObjectKey(key);
         var rootPath = GetRootPath();
         var path = GetObjectPath(rootPath, normalizedKey);
+        _logger.LogFileSystemObjectConditionalDelete(normalizedKey, path);
         try
         {
             return await RunConditionalMutationAsync
@@ -292,7 +312,11 @@ internal sealed class FileSystemObjectStore
         _logger.LogTrace(nameof(AcquireArchiveMutationLockAsync));
 
         var lockPath = GetObjectPath(GetRootPath(), ArchiveInternalObjectKeys.MutationLock);
-        return FileSystemArchiveMutationLock.AcquireAsync(lockPath, cancellationToken);
+        _logger.LogFileSystemArchiveMutationLockAcquire(lockPath);
+        return FileSystemArchiveMutationLock.AcquireAsync(
+            lockPath,
+            _logger,
+            cancellationToken);
     }
 
     public Task<bool> ExistsAsync
@@ -302,7 +326,9 @@ internal sealed class FileSystemObjectStore
     )
     {
         _logger.LogTrace(nameof(ExistsAsync));
-        var path = GetObjectPath(GetRootPath(), NormalizeObjectKey(key));
+        var normalizedKey = NormalizeObjectKey(key);
+        var path = GetObjectPath(GetRootPath(), normalizedKey);
+        _logger.LogFileSystemObjectExists(normalizedKey, path);
         return YabtTask.Run(() => File.Exists(path), cancellationToken: cancellationToken);
     }
 
@@ -321,6 +347,7 @@ internal sealed class FileSystemObjectStore
         var listRootPath = string.IsNullOrEmpty(normalizedPrefix) ?
             rootPath :
             GetObjectPath(rootPath, normalizedPrefix);
+        _logger.LogFileSystemFolderList(normalizedPrefix, listRootPath, recursive);
         var items = new List<ArchiveFolderItem>(chunkSize);
         var enumerator = default(IEnumerator<ArchiveFolderItem>);
         void ReadChunk()
@@ -411,6 +438,7 @@ internal sealed class FileSystemObjectStore
         var rootPath = GetRootPath();
         var sourcePath = GetObjectPath(rootPath, normalizedSource);
         var destinationPath = GetObjectPath(rootPath, normalizedDestination);
+        _logger.LogFileSystemObjectMove(normalizedSource, normalizedDestination);
         var destinationDirectory = Path.GetDirectoryName(destinationPath)
             ?? throw new YabtFileSystemException(
                 "Filesystem object path did not include a directory.",
@@ -455,6 +483,9 @@ internal sealed class FileSystemObjectStore
         var rootPath = GetRootPath();
         var sourcePath = GetObjectPath(rootPath, normalizedSourcePrefix);
         var destinationPath = GetObjectPath(rootPath, normalizedDestinationPrefix);
+        _logger.LogFileSystemFolderMove(
+            normalizedSourcePrefix,
+            normalizedDestinationPrefix);
         var destinationParent = Path.GetDirectoryName(destinationPath)
             ?? throw new YabtFileSystemException(
                 "Filesystem folder path did not include a parent directory.",
@@ -585,6 +616,7 @@ internal sealed class FileSystemObjectStore
     {
         try
         {
+            _logger.LogFileSystemConditionalMutationRead(path);
             using var content = new FileStream
             (
                 path,
@@ -611,7 +643,7 @@ internal sealed class FileSystemObjectStore
         }
     }
 
-    private static T RunWithMutationGuard<T>
+    private T RunWithMutationGuard<T>
     (
         string rootPath,
         Func<T> action,
@@ -619,12 +651,18 @@ internal sealed class FileSystemObjectStore
     )
     {
         var guardPath = GetObjectPath(rootPath, ArchiveInternalObjectKeys.ConditionalMutationLock);
+        _logger.LogFileSystemPlumbingOperation(
+            "Acquiring conditional-mutation guard",
+            guardPath);
         Directory.CreateDirectory(Path.GetDirectoryName(guardPath)!);
         using var guard = AcquireConditionalMutationGuard(guardPath, cancellationToken);
+        _logger.LogFileSystemPlumbingOperation(
+            "Acquired conditional-mutation guard",
+            guardPath);
         return action();
     }
 
-    private static FileStream AcquireConditionalMutationGuard
+    private FileStream AcquireConditionalMutationGuard
     (
         string guardPath,
         CancellationToken cancellationToken
@@ -647,6 +685,9 @@ internal sealed class FileSystemObjectStore
             }
             catch (IOException) when (File.Exists(guardPath))
             {
+                _logger.LogFileSystemPlumbingOperation(
+                    "Found busy conditional-mutation guard",
+                    guardPath);
                 if (cancellationToken.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(50)))
                 {
                     throw new OperationCanceledException(cancellationToken);
@@ -861,7 +902,14 @@ internal sealed class FileSystemObjectStore
     {
         try
         {
-            if (File.Exists(path)) { File.Delete(path); }
+            _logger.LogFileSystemPlumbingOperation(
+                "Checking temporary file for cleanup",
+                path);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                _logger.LogFileSystemPlumbingOperation("Deleted temporary file", path);
+            }
         }
         catch (Exception ex)
         {
