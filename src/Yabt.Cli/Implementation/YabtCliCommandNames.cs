@@ -7,6 +7,7 @@ internal static class YabtCliCommandNames
     public const string Backup = "backup";
     public const string SyncAlias = "sync";
     public const string Restore = "restore";
+    public const string VerifyRestore = "verify-restore";
     public const string Scan = "scan";
     public const string Verify = "verify";
     public const string Pack = "pack";
@@ -17,6 +18,7 @@ internal static class YabtCliCommandNames
     {
         Backup,
         Restore,
+        VerifyRestore,
         Scan,
         Verify,
         Pack,

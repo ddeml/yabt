@@ -1,3 +1,4 @@
+using Azure.Storage;
 using Azure.Storage.Blobs;
 using Yabt.Common;
 
@@ -15,4 +16,7 @@ internal sealed class AzureBlobObjectStoreContext
     public BlobContainerClient ContainerClient { get; } = Check.NotNull(containerClient);
 
     public string ObjectStorePrefix { get; } = Check.NotNull(objectStorePrefix);
+
+    public StorageTransferOptions UploadTransferOptions { get; } =
+        Check.NotNull(options).CreateUploadTransferOptions();
 }

@@ -66,7 +66,11 @@ Azure Blob is configured through the optional `configSectionPath` property inste
 
 Root validation checks every declared Azure store, not only the store selected for the current command. Any `credentialRef` or provider-specific property on an Azure declaration is rejected before backup can copy the descriptor, which prevents a secret-bearing unused declaration from leaking into another archive. Conversely, `configSectionPath` is rejected on non-Azure store declarations.
 
-YABT binds the selected section from the application's merged `IConfiguration`. This allows non-secret values such as `ServiceUri`, `ContainerName`, and `Prefix` to come from `appsettings.json`, while credentials can come from User Secrets, environment variables, or another configuration provider. A nonempty `ConnectionString` takes precedence. Otherwise, YABT requires `ServiceUri` and uses the host's registered Azure `TokenCredential`, which defaults to `DefaultAzureCredential`. A host may register a more specific credential such as `ManagedIdentityCredential`. A token credential authenticates access but does not identify the storage account endpoint.
+YABT binds the selected section from the application's merged `IConfiguration`. This allows non-secret values such as `ServiceUri`, `ContainerName`, `Prefix`, `UploadMaximumConcurrency`, and the nested `Retry` policy to come from `appsettings.json`, while credentials can come from User Secrets, environment variables, or another configuration provider. A nonempty `ConnectionString` takes precedence. Otherwise, YABT requires `ServiceUri` and uses the host's registered Azure `TokenCredential`, which defaults to `DefaultAzureCredential`. A host may register a more specific credential such as `ManagedIdentityCredential`. A token credential authenticates access but does not identify the storage account endpoint.
+
+`UploadMaximumConcurrency` is a positive integer that limits the Azure SDK upload subtransfers that may run in parallel. It defaults to `5`. Set it lower for constrained or unstable network paths, or raise it deliberately after measuring transfer reliability and throughput.
+
+The Azure client uses exponential retries for request failures and resumable streaming reads. `Retry:MaximumRetries` defaults to `8`, `Retry:Delay` to two seconds, `Retry:MaximumDelay` to 30 seconds, and `Retry:NetworkTimeout` to 100 seconds. Durations use normal .NET `TimeSpan` configuration strings. These retries are independent of `Sync:RestoreMaximumConcurrency`: the former controls recovery for one Azure request or stream, while the latter bounds the number of files being restored concurrently.
 
 An Azure `ServiceUri` must be an absolute HTTPS URI and must not contain user information, a query, or a fragment. In particular, do not append a SAS token to this URI; deliver it through an explicitly supported runtime credential mechanism instead.
 
@@ -78,7 +82,14 @@ For a store that selects `ObjectStores:MainAzure`, non-secret `appsettings.json`
     "MainAzure": {
       "ServiceUri": "https://example.blob.core.windows.net",
       "ContainerName": "archive",
-      "Prefix": "personal"
+      "Prefix": "personal",
+      "UploadMaximumConcurrency": 5,
+      "Retry": {
+        "MaximumRetries": 8,
+        "Delay": "00:00:02",
+        "MaximumDelay": "00:00:30",
+        "NetworkTimeout": "00:01:40"
+      }
     }
   }
 }

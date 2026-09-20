@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Yabt.Cli.Implementation;
 using Yabt.Common;
+using Yabt.Sync;
 
 namespace Yabt.Cli;
 
@@ -47,7 +48,7 @@ public static class CliProgram
             .AddYabtZipFormatHandler("Formats:Zip")
             .AddYabtMetadata()
             .AddYabtPackaging()
-            .AddYabtSync()
+            .AddYabtSync(YabtSyncOptions.DefaultConfigurationSectionPath)
             .AddSingleton(TimeProvider.System)
             .AddSingleton(logFileStartup)
             .AddSingleton<LogFilePathGuard>()

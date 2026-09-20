@@ -24,6 +24,10 @@ public sealed class YabtAzureBlobServiceCollectionExtensionsTests
                         "https://default.blob.core.windows.net",
                     [$"{AzureBlobObjectStoreOptions.DefaultConfigurationSectionPath}:ContainerName"] =
                         "history",
+                    [$"{AzureBlobObjectStoreOptions.DefaultConfigurationSectionPath}:UploadMaximumConcurrency"] =
+                        "3",
+                    [$"{AzureBlobObjectStoreOptions.DefaultConfigurationSectionPath}:Retry:MaximumRetries"] =
+                        "4",
                 }
             ).
             Build();
@@ -35,6 +39,8 @@ public sealed class YabtAzureBlobServiceCollectionExtensionsTests
         var options = provider.GetRequiredService<IOptionsMonitor<AzureBlobObjectStoreOptions>>().CurrentValue;
         Assert.AreEqual(new Uri("https://default.blob.core.windows.net"), options.ServiceUri);
         Assert.AreEqual("history", options.ContainerName);
+        Assert.AreEqual(3, options.UploadMaximumConcurrency);
+        Assert.AreEqual(4, options.Retry.MaximumRetries);
     }
 
     [TestMethod]

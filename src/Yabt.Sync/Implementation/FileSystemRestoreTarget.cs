@@ -1,5 +1,4 @@
 using System.Collections.Frozen;
-using System.IO.Hashing;
 using Microsoft.Extensions.Logging;
 using Yabt.Common.Async;
 using Yabt.Core.Models;
@@ -12,8 +11,6 @@ internal sealed class FileSystemRestoreTarget
     ILogger _logger
 )
 {
-    private const int BufferSize = 81_920;
-
     private static readonly FrozenSet<string> WindowsReservedNames = new[]
     {
         "CON",
@@ -145,27 +142,53 @@ internal sealed class FileSystemRestoreTarget
         );
     }
 
-    public async Task WriteFileAsync
+    public Task<string> CreateStagingDirectoryAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogTrace(nameof(CreateStagingDirectoryAsync));
+
+        var stagingRootPath = Path.Combine(
+            _fullRootPath,
+            ArchiveInternalFolderNames.TemporaryUploads,
+            $"restore-{Guid.NewGuid():N}");
+        return YabtTask.Run
+        (
+            () =>
+            {
+                EnsureNoReparsePointInExistingPath(_fullRootPath);
+                _logger.LogControlMetadataOperation(
+                    "Creating restore staging directory",
+                    stagingRootPath);
+                Directory.CreateDirectory(stagingRootPath);
+                EnsureNoReparsePointInExistingPath(stagingRootPath);
+                return stagingRootPath;
+            },
+            cancellationToken: cancellationToken
+        );
+    }
+
+    public async Task CommitStagedFileAsync
     (
         string relativePath,
-        Stream content,
-        string? expectedContentHash,
-        long? expectedLength,
+        string stagingPath,
         DateTimeOffset? lastModifiedUtc,
         CancellationToken cancellationToken
     )
     {
-        _logger.LogTrace(nameof(WriteFileAsync));
+        _logger.LogTrace(nameof(CommitStagedFileAsync));
 
         var destinationPath = ResolvePath(relativePath);
         var destinationDirectory = Path.GetDirectoryName(destinationPath) ??
             throw new YabtSyncException(
                 $"Restore path '{relativePath}' did not have a parent directory.");
-        var temporaryPath = Path.Combine
-        (
-            destinationDirectory,
-            $".yabt-restore-{Guid.NewGuid():N}.tmp"
-        );
+        var fullStagingPath = Path.GetFullPath(stagingPath);
+        var allowedStagingRoot = EnsureTrailingDirectorySeparator(Path.Combine(
+            _fullRootPath,
+            ArchiveInternalFolderNames.TemporaryUploads));
+        if (!fullStagingPath.StartsWith(allowedStagingRoot, GetPathComparison()))
+        {
+            throw new YabtSyncException(
+                $"Restore staging path '{stagingPath}' is outside the destination staging folder.");
+        }
 
         try
         {
@@ -173,82 +196,21 @@ internal sealed class FileSystemRestoreTarget
             (
                 () =>
                 {
+                    EnsureNoReparsePointInExistingPath(fullStagingPath);
                     EnsureNoReparsePointInExistingPath(destinationDirectory);
                     Directory.CreateDirectory(destinationDirectory);
                     EnsureNoReparsePointInExistingPath(destinationDirectory);
-                },
-                cancellationToken: cancellationToken
-            );
-
-            var hash = new XxHash128();
-            long contentLength = 0;
-            _logger.LogControlMetadataOperation(
-                "Creating temporary restore file",
-                temporaryPath);
-            await using (var destination = new FileStream
-            (
-                temporaryPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                BufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan
-            ))
-            {
-                _logger.LogObjectRead(
-                    relativePath,
-                    "temporary restore staging copy");
-                var buffer = new byte[BufferSize];
-                while (true)
-                {
-                    var bytesRead = await content.ReadAsync(buffer, cancellationToken);
-                    if (bytesRead == 0) { break; }
-
-                    hash.Append(buffer.AsSpan(0, bytesRead));
-                    contentLength += bytesRead;
-                    await destination.WriteAsync(
-                        buffer.AsMemory(0, bytesRead),
-                        cancellationToken);
-                }
-
-                await destination.FlushAsync(cancellationToken);
-                _logger.LogControlMetadataOperation(
-                    "Finished writing temporary restore file",
-                    temporaryPath);
-            }
-
-            var actualContentHash = ArchiveHash.Format(hash.GetHashAndReset());
-            if (expectedLength.HasValue && expectedLength.Value != contentLength)
-            {
-                throw new YabtSyncException(
-                    $"Archive object for restore path '{relativePath}' had an unexpected length.");
-            }
-
-            if (expectedContentHash is not null &&
-                !string.Equals(
-                    expectedContentHash,
-                    actualContentHash,
-                    StringComparison.Ordinal))
-            {
-                throw new YabtSyncException(
-                    $"Archive object for restore path '{relativePath}' failed its content hash check.");
-            }
-
-            await YabtTask.Run
-            (
-                () =>
-                {
                     if (lastModifiedUtc.HasValue)
                     {
                         File.SetLastWriteTimeUtc(
-                            temporaryPath,
+                            fullStagingPath,
                             lastModifiedUtc.Value.UtcDateTime);
                     }
 
                     _logger.LogControlMetadataOperation(
-                        "Moving completed temporary restore file into place",
-                        temporaryPath);
-                    File.Move(temporaryPath, destinationPath);
+                        "Moving validated restore staging file into place",
+                        fullStagingPath);
+                    File.Move(fullStagingPath, destinationPath);
                 },
                 cancellationToken: cancellationToken
             );
@@ -258,30 +220,8 @@ internal sealed class FileSystemRestoreTarget
             if (ex is YabtSyncException) { throw; }
 
             throw new YabtSyncException(
-                $"Restore could not write '{relativePath}' to '{destinationPath}'.",
+                $"Validated restore file '{relativePath}' could not be committed.",
                 ex);
-        }
-        finally
-        {
-            try
-            {
-                _logger.LogControlMetadataOperation(
-                    "Checking temporary restore file",
-                    temporaryPath);
-                if (File.Exists(temporaryPath))
-                {
-                    File.Delete(temporaryPath);
-                    _logger.LogControlMetadataOperation(
-                        "Deleted temporary restore file",
-                        temporaryPath);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogIgnoringRestoreTemporaryPathDeleteException(
-                    ex,
-                    temporaryPath);
-            }
         }
     }
 

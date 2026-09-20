@@ -40,6 +40,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{BDA4E899-0
 	ProjectSection(SolutionItems) = preProject
 		docs\yabt-root-format.md = docs\yabt-root-format.md
 		docs\architecture.md = docs\architecture.md
+		docs\after-model-change-review.md = docs\after-model-change-review.md
 		docs\yabt-policy-format.md = docs\yabt-policy-format.md
 		docs\manifest-format.md = docs\manifest-format.md
 		docs\storage-layout.md = docs\storage-layout.md

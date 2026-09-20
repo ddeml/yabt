@@ -52,22 +52,48 @@ internal sealed class ArchiveProjectionObjectStore
             }
         }
 
-        if (projectedObject is null)
-        {
-            return await _inner.OpenReadAsync(
-                normalizedKey,
-                cancellationToken);
-        }
-
         try
         {
-            return await projectedObject.OpenContentAsync(cancellationToken);
+            var openedContent = projectedObject is null ?
+                await _inner.OpenReadAsync(
+                    normalizedKey,
+                    cancellationToken) :
+                await projectedObject.OpenContentAsync(cancellationToken);
+            return openedContent with
+            {
+                Content = new SourceObjectReadTrackingStream
+                (
+                    openedContent.Content,
+                    CreateSourceDisplayName(normalizedKey),
+                    normalizedKey
+                ),
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (SourceObjectReadException.FindAll(exception).Count > 0)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new SourceObjectReadException
+            (
+                CreateSourceDisplayName(normalizedKey),
+                normalizedKey,
+                exception
+            );
         }
         finally
         {
-            lock (_gate)
+            if (projectedObject is not null)
             {
-                _openingProjectedObjectKeys.Remove(normalizedKey);
+                lock (_gate)
+                {
+                    _openingProjectedObjectKeys.Remove(normalizedKey);
+                }
             }
         }
     }

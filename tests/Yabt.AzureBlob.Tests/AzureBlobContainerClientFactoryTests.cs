@@ -160,6 +160,30 @@ public sealed class AzureBlobContainerClientFactoryTests
         StringAssert.Contains(exception.Message, "container name");
     }
 
+    [TestMethod]
+    [DataRow(null)]
+    [DataRow("UseDevelopmentStorage=true")]
+    public void CreateRejectsInvalidRetryConfigurationForEveryAuthenticationPath
+    (
+        string? connectionString
+    )
+    {
+        var factory = CreateFactory();
+        var options = new AzureBlobObjectStoreOptions
+        {
+            ConnectionString = connectionString,
+            ServiceUri = new Uri("https://example.blob.core.windows.net"),
+            Retry = new AzureBlobRetryOptions
+            {
+                MaximumRetries = -1,
+            },
+        };
+
+        var exception = Assert.Throws<YabtAzureBlobException>(() => factory.Create(options));
+
+        StringAssert.Contains(exception.Message, "must not be negative");
+    }
+
     private static AzureBlobContainerClientFactory CreateFactory() =>
         new(new TestTokenCredential());
 }

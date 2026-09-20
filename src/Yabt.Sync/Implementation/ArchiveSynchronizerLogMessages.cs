@@ -16,6 +16,19 @@ internal static partial class ArchiveSynchronizerLogMessages
         bool dryRun);
 
     [LoggerMessage(
+        EventId = YabtEventIds.RestoreRequested,
+        Level = LogLevel.Information,
+        Message = "Restore requested from {SourceRoot} to {DestinationRoot}. DryRun={DryRun}; MaximumConcurrency={MaximumConcurrency}.")]
+    public static partial void LogRestoreRequested
+    (
+        this ILogger logger,
+        string sourceRoot,
+        string destinationRoot,
+        bool dryRun,
+        int maximumConcurrency
+    );
+
+    [LoggerMessage(
         EventId = YabtEventIds.ArchiveSyncCompleted,
         Level = LogLevel.Information,
         Message = "Archive {OperationName} completed. New={NewCount}; Changed={ChangedCount}; Extra={ExtraCount}; Unchanged={UnchangedCount}.")]
@@ -27,6 +40,29 @@ internal static partial class ArchiveSynchronizerLogMessages
         int changedCount,
         int extraCount,
         int unchangedCount
+    );
+
+    [LoggerMessage(
+        EventId = YabtEventIds.ArchiveSyncIncomplete,
+        Level = LogLevel.Warning,
+        Message = "Archive {OperationName} was incomplete because {FailureCount} item(s) could not be read safely.")]
+    public static partial void LogArchiveSyncIncomplete
+    (
+        this ILogger logger,
+        string operationName,
+        int failureCount
+    );
+
+    [LoggerMessage(
+        EventId = YabtEventIds.SyncItemReadFailed,
+        Level = LogLevel.Warning,
+        Message = "Could not read {RelativePath} during {Operation}: {Reason}")]
+    public static partial void LogSyncItemReadFailed
+    (
+        this ILogger logger,
+        string relativePath,
+        string operation,
+        string reason
     );
 
     [LoggerMessage(

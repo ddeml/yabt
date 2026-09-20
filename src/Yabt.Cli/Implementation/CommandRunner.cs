@@ -9,6 +9,7 @@ namespace Yabt.Cli.Implementation;
 internal sealed class CommandRunner
 (
     IArchiveSynchronizer _archiveSynchronizer,
+    IRestorePathVerifier _restorePathVerifier,
     IHistoryDeduplicator _historyDeduplicator,
     ILogger<CommandRunner> _logger,
     LogFileStartup _logFileStartup,
@@ -80,9 +81,12 @@ internal sealed class CommandRunner
 
         foreach (var command in YabtCliCommandNames.Known.Order(StringComparer.OrdinalIgnoreCase))
         {
-            var archiveCommand = command == YabtCliCommandNames.Deduplicate ?
-                CreateDeduplicateCommand() :
-                CreateArchiveCommand(command);
+            var archiveCommand = command switch
+            {
+                YabtCliCommandNames.Deduplicate => CreateDeduplicateCommand(),
+                YabtCliCommandNames.VerifyRestore => CreateVerifyRestoreCommand(),
+                _ => CreateArchiveCommand(command),
+            };
             rootCommand.Subcommands.Add(archiveCommand);
         }
 
@@ -228,6 +232,54 @@ internal sealed class CommandRunner
         return command;
     }
 
+    private Command CreateVerifyRestoreCommand()
+    {
+        _logger.LogTrace(nameof(CreateVerifyRestoreCommand));
+
+        var sourceRootArgument = new Argument<string>("source-root")
+        {
+            Description = "Original filesystem folder to compare.",
+            DefaultValueFactory = _ => Directory.GetCurrentDirectory(),
+        };
+        var destinationRootOption = new Option<string?>("--destination-root")
+        {
+            Description = "Restored filesystem folder to compare byte-for-byte; " +
+                "relative paths use the current working directory.",
+            Required = true,
+        };
+        var command = new Command
+        (
+            YabtCliCommandNames.VerifyRestore,
+            GetCommandDescription(YabtCliCommandNames.VerifyRestore)
+        )
+        {
+            Arguments = { sourceRootArgument },
+            Options = { destinationRootOption },
+        };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var sourceRoot = parseResult.GetValue(sourceRootArgument) ??
+                Directory.GetCurrentDirectory();
+            var destinationRoot = parseResult.GetValue(destinationRootOption);
+            await EnsureFileLoggingStartedAsync(
+                YabtCliCommandNames.VerifyRestore,
+                sourceRoot,
+                targetStoreId: null,
+                destinationRoot,
+                cancellationToken);
+            var request = new RestorePathVerificationRequest(
+                sourceRoot,
+                destinationRoot ?? string.Empty);
+            var result = await _restorePathVerifier.VerifyAsync(request, cancellationToken);
+
+            Console.WriteLine(result.Message);
+            return result.Identical ? 0 : 1;
+        });
+
+        return command;
+    }
+
     private async Task EnsureFileLoggingStartedAsync
     (
         string commandName,
@@ -299,6 +351,8 @@ internal sealed class CommandRunner
         {
             YabtCliCommandNames.Backup => "Back up a folder to the archive.",
             YabtCliCommandNames.Restore => "Restore from an archive.",
+            YabtCliCommandNames.VerifyRestore =>
+                "Compare a restored filesystem folder with its original source byte-for-byte.",
             YabtCliCommandNames.Scan => "Scan a folder for future synchronization planning.",
             YabtCliCommandNames.Verify =>
                 "Quickly verify a folder from metadata fingerprints; use --byte-for-byte for full comparison.",

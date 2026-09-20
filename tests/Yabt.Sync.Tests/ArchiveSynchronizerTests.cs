@@ -5,8 +5,10 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Yabt.Common;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
@@ -137,6 +139,14 @@ public sealed class ArchiveSynchronizerTests
                 DestinationRoot: destinationRoot
             ));
 
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.RestoreRequested &&
+                entry.Message.Contains("MaximumConcurrency=5", StringComparison.Ordinal)));
+            Assert.IsTrue(logSink.Entries.Any(entry =>
+                entry.Level == LogLevel.Information &&
+                entry.EventId.Id == YabtEventIds.ArchiveSyncCompleted &&
+                entry.Message.StartsWith("Archive Restore completed", StringComparison.Ordinal)));
             Assert.IsTrue(logSink.Entries.Any(entry =>
                 entry.Level == LogLevel.Debug &&
                 entry.EventId.Id == YabtEventIds.ZipTemporaryPlumbingOperation &&
@@ -1053,14 +1063,15 @@ public sealed class ArchiveSynchronizerTests
             Assert.AreEqual(0, normalResult.ChangedCount);
             Assert.AreEqual(1, normalResult.UnchangedCount);
 
-            var byteForByteException = await Assert.ThrowsAsync<YabtFileSystemException>(
-                () => synchronizer.RestoreAsync(new SyncRunRequest
-                (
-                    sourceRoot,
-                    ByteForByte: true,
-                    DestinationRoot: destinationRoot
-                )));
-            StringAssert.Contains(byteForByteException.Message, "file.txt");
+            var byteForByteResult = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                ByteForByte: true,
+                DestinationRoot: destinationRoot
+            ));
+            Assert.IsFalse(byteForByteResult.Completed);
+            Assert.AreEqual(1, byteForByteResult.FailedCount);
+            StringAssert.Contains(byteForByteResult.Message, "file.txt");
         }
         finally
         {
@@ -2610,7 +2621,7 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
-    public async Task RestoreAsyncRejectsArchiveObjectThatFailsManifestHash()
+    public async Task RestoreAsyncReportsArchiveObjectThatFailsManifestHash()
     {
         var workspace = CreateWorkspacePath();
         try
@@ -2636,14 +2647,16 @@ public sealed class ArchiveSynchronizerTests
             await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
             await File.WriteAllTextAsync(Path.Combine(archiveRoot, "file.txt"), "tampered");
 
-            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
-                () => synchronizer.RestoreAsync(new SyncRunRequest
-                (
-                    sourceRoot,
-                    DestinationRoot: destinationRoot
-                )));
+            var result = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
 
-            StringAssert.Contains(exception.Message, "failed its content hash check");
+            Assert.IsFalse(result.Completed);
+            Assert.AreEqual(1, result.FailedCount);
+            StringAssert.Contains(result.Message, "file.txt");
+            StringAssert.Contains(result.Message, "failed its content hash check");
             AssertTextFile(
                 Path.Combine(destinationRoot, "file.txt"),
                 "destination content");
@@ -2660,7 +2673,137 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
-    public async Task RestoreAsyncStagesEveryWriteBeforeMutatingDestination()
+    public async Task RestoreAsyncContinuesAfterMultipleUnreadableArchiveFiles()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "a.txt"), "archive a");
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "m.txt"), "archive m");
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "z.txt"), "archive z");
+            await WriteTextFileAsync(Path.Combine(destinationRoot, "a.txt"), "destination a");
+            await WriteTextFileAsync(Path.Combine(destinationRoot, "m.txt"), "destination m");
+            await WriteTextFileAsync(Path.Combine(destinationRoot, "z.txt"), "destination z");
+            await WriteTextFileAsync(Path.Combine(destinationRoot, "extra.txt"), "extra");
+
+            using var serviceProvider = CreateServices(syncOptions: new YabtSyncOptions
+            {
+                RestoreMaximumConcurrency = 1,
+            }).BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+            await File.WriteAllTextAsync(Path.Combine(archiveRoot, "a.txt"), "tampered a");
+            await File.WriteAllTextAsync(Path.Combine(archiveRoot, "m.txt"), "tampered m");
+
+            var result = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsFalse(result.Completed);
+            Assert.AreEqual(2, result.FailedCount);
+            CollectionAssert.AreEqual(
+                new[] { "a.txt", "m.txt" },
+                result.Failures?.Select(failure => failure.RelativePath).ToArray());
+            StringAssert.Contains(result.Message, "a.txt");
+            StringAssert.Contains(result.Message, "m.txt");
+            StringAssert.Contains(result.Message, "failed its content hash check");
+            AssertTextFile(Path.Combine(destinationRoot, "a.txt"), "destination a");
+            AssertTextFile(Path.Combine(destinationRoot, "m.txt"), "destination m");
+            AssertTextFile(Path.Combine(destinationRoot, "z.txt"), "archive z");
+            AssertTextFile(Path.Combine(destinationRoot, "extra.txt"), "extra");
+            Assert.IsFalse(File.Exists(Path.Combine(
+                destinationRoot,
+                ArchiveChangeManifest.InvalidationMarkerFileName)));
+            Assert.IsFalse(File.Exists(Path.Combine(
+                destinationRoot,
+                ArchiveLogicalStateManifest.FileName)));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncContinuesAfterMultipleUnreadableDestinationFiles()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            await InitializeSourceRootAsync(sourceRoot, archiveRoot);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "a.txt"), "archive a");
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "m.txt"), "archive m");
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "z.txt"), "archive z");
+            await WriteTextFileAsync(Path.Combine(destinationRoot, "a.txt"), "destination a");
+            await WriteTextFileAsync(Path.Combine(destinationRoot, "m.txt"), "destination m");
+            await WriteTextFileAsync(Path.Combine(destinationRoot, "z.txt"), "destination z");
+            await WriteTextFileAsync(Path.Combine(destinationRoot, "extra.txt"), "extra");
+
+            var services = CreateServices(syncOptions: new YabtSyncOptions
+            {
+                RestoreMaximumConcurrency = 1,
+            });
+            var sourceResolverDescriptor = services.Last(descriptor =>
+                descriptor.ServiceType == typeof(ISourceRootObjectStoreResolver));
+            var sourceResolverFactory = sourceResolverDescriptor.ImplementationFactory ??
+                throw new InvalidOperationException("Filesystem source resolver factory is missing.");
+            services.Remove(sourceResolverDescriptor);
+            services.AddSingleton<ISourceRootObjectStoreResolver>(provider =>
+                new SelectiveReadFailureSourceRootObjectStoreResolver
+                (
+                    (ISourceRootObjectStoreResolver)sourceResolverFactory(provider),
+                    destinationRoot,
+                    key => key switch
+                    {
+                        "a.txt" => new IOException("Destination a.txt is unavailable."),
+                        "m.txt" => new UnauthorizedAccessException(
+                            "Destination m.txt access was denied."),
+                        _ => null,
+                    }
+                ));
+            using var serviceProvider = services.BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+            var result = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsFalse(result.Completed);
+            Assert.AreEqual(2, result.FailedCount);
+            Assert.IsNotNull(result.Failures);
+            CollectionAssert.AreEqual(
+                new[] { "a.txt", "m.txt" },
+                result.Failures.Select(failure => failure.RelativePath).ToArray());
+            StringAssert.Contains(result.Message, "Destination a.txt is unavailable");
+            StringAssert.Contains(result.Message, "Destination m.txt access was denied");
+            AssertTextFile(Path.Combine(destinationRoot, "a.txt"), "destination a");
+            AssertTextFile(Path.Combine(destinationRoot, "m.txt"), "destination m");
+            AssertTextFile(Path.Combine(destinationRoot, "z.txt"), "archive z");
+            AssertTextFile(Path.Combine(destinationRoot, "extra.txt"), "extra");
+            Assert.IsFalse(File.Exists(Path.Combine(
+                destinationRoot,
+                ArchiveLogicalStateManifest.FileName)));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncCommitsValidatedFilesAsRerunCheckpoints()
     {
         var workspace = CreateWorkspacePath();
         try
@@ -2685,26 +2828,139 @@ public sealed class ArchiveSynchronizerTests
                 ArchiveChangeManifest.UncompressedFileName);
             await WriteTextFileAsync(destinationManifestPath, "destination manifest");
 
-            using var serviceProvider = CreateServices().BuildServiceProvider();
-            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
-            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
-            await File.WriteAllTextAsync(Path.Combine(archiveRoot, "z.txt"), "tampered z");
+            var syncOptions = new YabtSyncOptions
+            {
+                RestoreMaximumConcurrency = 1,
+            };
+            using (var serviceProvider = CreateServices(
+                syncOptions: syncOptions).BuildServiceProvider())
+            {
+                var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+                await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+                await File.WriteAllTextAsync(Path.Combine(archiveRoot, "z.txt"), "tampered z");
 
-            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
-                () => synchronizer.RestoreAsync(new SyncRunRequest
+                var result = await synchronizer.RestoreAsync(new SyncRunRequest
                 (
                     sourceRoot,
                     DestinationRoot: destinationRoot
-                )));
+                ));
 
-            StringAssert.Contains(exception.Message, "failed its content hash check");
-            AssertTextFile(Path.Combine(destinationRoot, "a.txt"), "destination a");
+                Assert.IsFalse(result.Completed);
+                Assert.AreEqual(1, result.FailedCount);
+                StringAssert.Contains(result.Message, "z.txt");
+                StringAssert.Contains(result.Message, "failed its content hash check");
+            }
+
+            AssertTextFile(Path.Combine(destinationRoot, "a.txt"), "archive a");
             AssertTextFile(Path.Combine(destinationRoot, "z.txt"), "destination z");
             AssertTextFile(
                 Path.Combine(destinationRoot, "extra.txt"),
                 "extra content");
-            AssertTextFile(destinationManifestPath, "destination manifest");
-            Assert.IsFalse(Directory.Exists(Path.Combine(destinationRoot, ".yabt-hist")));
+            Assert.IsFalse(File.Exists(destinationManifestPath));
+            Assert.IsTrue(File.Exists(Path.Combine(
+                destinationRoot,
+                ArchiveChangeManifest.InvalidationMarkerFileName)));
+            var historyRoot = Path.Combine(destinationRoot, ".yabt-hist");
+            Assert.AreEqual(
+                1,
+                Directory.GetFiles(historyRoot, "a.txt", SearchOption.AllDirectories).Length);
+            Assert.AreEqual(
+                0,
+                Directory.GetFiles(historyRoot, "z.txt", SearchOption.AllDirectories).Length);
+            Assert.AreEqual(
+                0,
+                Directory.GetFiles(historyRoot, "extra.txt", SearchOption.AllDirectories).Length);
+            Assert.IsFalse(Directory.EnumerateDirectories(
+                Path.Combine(destinationRoot, ArchiveInternalFolderNames.TemporaryUploads),
+                "restore-*",
+                SearchOption.TopDirectoryOnly).Any());
+
+            await File.WriteAllTextAsync(Path.Combine(archiveRoot, "a.txt"), "tampered!");
+            await File.WriteAllTextAsync(Path.Combine(archiveRoot, "z.txt"), "archive z");
+            var logSink = new CapturingLogSink();
+            using (var serviceProvider = CreateServices(
+                loggerSink: logSink,
+                syncOptions: syncOptions).BuildServiceProvider())
+            {
+                var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+                var result = await synchronizer.RestoreAsync(new SyncRunRequest
+                (
+                    sourceRoot,
+                    DestinationRoot: destinationRoot
+                ));
+
+                Assert.IsTrue(result.Completed);
+            }
+
+            Assert.IsFalse(logSink.Entries.Any(entry =>
+                entry.EventId.Id == YabtEventIds.ObjectRead &&
+                entry.Message.Contains("a.txt", StringComparison.Ordinal) &&
+                entry.Message.Contains("restore staging", StringComparison.Ordinal)));
+            AssertTextFile(Path.Combine(destinationRoot, "a.txt"), "archive a");
+            AssertTextFile(Path.Combine(destinationRoot, "z.txt"), "archive z");
+            Assert.IsFalse(File.Exists(Path.Combine(destinationRoot, "extra.txt")));
+            Assert.IsFalse(File.Exists(Path.Combine(
+                destinationRoot,
+                ArchiveChangeManifest.InvalidationMarkerFileName)));
+            Assert.IsFalse(File.Exists(Path.Combine(
+                destinationRoot,
+                ArchiveLogicalStateManifest.InvalidationMarkerFileName)));
+            Assert.IsTrue(File.Exists(Path.Combine(
+                destinationRoot,
+                ArchiveLogicalStateManifest.FileName)));
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    [TestMethod]
+    public async Task RestoreAsyncDoesNotExceedConfiguredFileConcurrency()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            await InitializeSourceRootAsync(
+                sourceRoot,
+                [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+            for (var index = 0; index < 12; index++)
+            {
+                await WriteTextFileAsync(
+                    Path.Combine(sourceRoot, "data", $"file-{index:D2}.txt"),
+                    $"content {index:D2}");
+            }
+
+            var archiveStore = new MemoryObjectStore();
+            var trackingStore = new ConcurrentReadTrackingObjectStore(
+                archiveStore,
+                key => key.StartsWith("data/", StringComparison.Ordinal));
+            var services = CreateServices(syncOptions: new YabtSyncOptions
+            {
+                RestoreMaximumConcurrency = 3,
+            });
+            services.RemoveAll<IBackupRootStoreResolver>();
+            services.AddSingleton<IBackupRootStoreResolver>(
+                new FixedBackupRootStoreResolver(trackingStore));
+            using var serviceProvider = services.BuildServiceProvider();
+            var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+            await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+            trackingStore.ResetMaximumConcurrentReads();
+
+            var result = await synchronizer.RestoreAsync(new SyncRunRequest
+            (
+                sourceRoot,
+                DestinationRoot: destinationRoot
+            ));
+
+            Assert.IsTrue(result.Completed);
+            Assert.AreEqual(3, trackingStore.MaximumConcurrentReads);
+            Assert.AreEqual(0, trackingStore.CurrentConcurrentReads);
+            AssertTextFile(
+                Path.Combine(destinationRoot, "data", "file-11.txt"),
+                "content 11");
         }
         finally
         {
@@ -3654,12 +3910,18 @@ public sealed class ArchiveSynchronizerTests
         Assert.IsTrue(verifyResult.Completed);
         Assert.AreEqual(2, verifyResult.UnchangedCount);
 
-        await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.VerifyAsync(
-            new SyncRunRequest(sourceRoot, ByteForByte: true)));
+        var byteForByteResult = await synchronizer.VerifyAsync(
+            new SyncRunRequest(sourceRoot, ByteForByte: true));
+        Assert.IsFalse(byteForByteResult.Completed);
+        Assert.AreEqual(1, byteForByteResult.FailedCount);
+        StringAssert.Contains(byteForByteResult.Message, "file.txt");
 
         guardedTargetStore.HideContentLengths = true;
-        await Assert.ThrowsExactlyAsync<YabtSyncException>(() => synchronizer.VerifyAsync(
-            new SyncRunRequest(sourceRoot)));
+        var incompleteEvidenceResult = await synchronizer.VerifyAsync(
+            new SyncRunRequest(sourceRoot));
+        Assert.IsFalse(incompleteEvidenceResult.Completed);
+        Assert.AreEqual(1, incompleteEvidenceResult.FailedCount);
+        StringAssert.Contains(incompleteEvidenceResult.Message, "file.txt");
 
         guardedTargetStore.HideContentLengths = false;
         await targetStore.MoveAsync(
@@ -4500,6 +4762,126 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
+    public async Task BackupAsyncContinuesAfterMultipleUnreadableSourceFiles()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-unreadable-source-test-{Guid.NewGuid():N}");
+        var innerSourceStore = new MemoryObjectStore();
+        var sourceStore = new DataReadGuardObjectStore(innerSourceStore);
+        var targetStore = new MemoryObjectStore();
+        await UploadObjectAsync(innerSourceStore, "a.txt", "old a"u8.ToArray());
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var initialResult = await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+        Assert.IsTrue(initialResult.Completed);
+        await using (var replacementContent = new MemoryStream(
+            "new source a"u8.ToArray(),
+            writable: false))
+        {
+            var replaced = await innerSourceStore.TryReplaceIfContentHashMatchesAsync(
+                "a.txt",
+                ArchiveHash.Compute("old a"u8),
+                replacementContent,
+                "application/octet-stream",
+                new Dictionary<string, string>(StringComparer.Ordinal));
+            Assert.IsTrue(replaced);
+        }
+        await UploadObjectAsync(innerSourceStore, "m.txt", "new source m"u8.ToArray());
+        await UploadObjectAsync(innerSourceStore, "z.txt", "readable z"u8.ToArray());
+        await UploadObjectAsync(targetStore, "extra.txt", "keep extra"u8.ToArray());
+        sourceStore.OpenReadExceptionFactory = key => key switch
+        {
+            "a.txt" => new IOException("Defender blocked a.txt."),
+            "m.txt" => new UnauthorizedAccessException("Access denied to m.txt."),
+            _ => null,
+        };
+
+        var result = await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsFalse(result.Completed);
+        Assert.AreEqual(2, result.FailedCount);
+        Assert.IsNotNull(result.Failures);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                Path.Combine(sourceRoot, "a.txt"),
+                Path.Combine(sourceRoot, "m.txt"),
+            },
+            result.Failures.Select(failure => failure.RelativePath).ToArray());
+        StringAssert.Contains(result.Message, "Defender blocked a.txt");
+        StringAssert.Contains(result.Message, "Access denied to m.txt");
+        Assert.IsTrue(targetStore.TryGetObject("a.txt", out var oldTargetObject));
+        CollectionAssert.AreEqual("old a"u8.ToArray(), oldTargetObject.Content.ToArray());
+        Assert.IsFalse(targetStore.TryGetObject("m.txt", out _));
+        Assert.IsTrue(targetStore.TryGetObject("z.txt", out var readableTargetObject));
+        CollectionAssert.AreEqual("readable z"u8.ToArray(), readableTargetObject.Content.ToArray());
+        Assert.IsTrue(targetStore.TryGetObject("extra.txt", out _));
+        Assert.IsFalse(targetStore.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
+        Assert.IsTrue(targetStore.TryGetObject(
+            ArchiveChangeManifest.InvalidationMarkerFileName,
+            out _));
+        Assert.IsFalse(targetStore.Snapshot().Any(item =>
+            item.Key.StartsWith(".yabt-hist/", StringComparison.Ordinal) &&
+            item.Key.EndsWith("/a.txt", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task BackupAsyncReportsEveryUnreadableSourceInsideZipProjection()
+    {
+        var sourceRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"yabt-unreadable-zip-source-test-{Guid.NewGuid():N}");
+        var innerSourceStore = new MemoryObjectStore();
+        var sourceStore = new DataReadGuardObjectStore(innerSourceStore);
+        var targetStore = new MemoryObjectStore();
+        await UploadObjectAsync(innerSourceStore, "a.bin", "source a"u8.ToArray());
+        await UploadObjectAsync(innerSourceStore, "m.bin", "source m"u8.ToArray());
+        await UploadObjectAsync(innerSourceStore, "z.bin", "source z"u8.ToArray());
+        sourceStore.OpenReadExceptionFactory = key => key switch
+        {
+            "a.bin" => new IOException("Scanner rejected a.bin."),
+            "m.bin" => new IOException("Scanner rejected m.bin."),
+            _ => null,
+        };
+        var descriptor = CreateRootDescriptor(
+            [new BackupRootStore("target", FixedBackupRootStoreResolver.StoreKindValue)]);
+
+        using var serviceProvider = CreateStreamingServices(
+            sourceRoot,
+            descriptor,
+            sourceStore,
+            targetStore,
+            folderPolicy: new FolderPolicy(ZipArchiveFormatName.Value)).BuildServiceProvider();
+        var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
+
+        var result = await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
+
+        Assert.IsFalse(result.Completed);
+        Assert.AreEqual(2, result.FailedCount);
+        Assert.IsNotNull(result.Failures);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                Path.Combine(sourceRoot, "a.bin"),
+                Path.Combine(sourceRoot, "m.bin"),
+            },
+            result.Failures.Select(failure => failure.RelativePath).ToArray());
+        StringAssert.Contains(result.Message, "Scanner rejected a.bin");
+        StringAssert.Contains(result.Message, "Scanner rejected m.bin");
+        Assert.IsFalse(targetStore.Snapshot().Any(item =>
+            !item.Key.StartsWith(ArchiveInternalFolderNames.TemporaryUploads, StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
     public async Task SyncAsyncRejectsComparedSourceLengthMismatchBeforeTargetMutation()
     {
         var sourceRoot = Path.Combine(
@@ -5116,7 +5498,8 @@ public sealed class ArchiveSynchronizerTests
     private static ServiceCollection CreateServices
     (
         TimeProvider? timeProvider = default,
-        CapturingLogSink? loggerSink = default
+        CapturingLogSink? loggerSink = default,
+        YabtSyncOptions? syncOptions = default
     )
     {
         var services = new ServiceCollection();
@@ -5139,8 +5522,22 @@ public sealed class ArchiveSynchronizerTests
         services.AddYabtZipFormatHandler();
         services.AddYabtMetadata();
         services.AddYabtSync();
+        if (syncOptions is not null)
+        {
+            services.AddSingleton<IOptionsMonitor<YabtSyncOptions>>(
+                new StaticOptionsMonitor<YabtSyncOptions>(syncOptions));
+        }
 
         return services;
+    }
+
+    private sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
+    {
+        public T CurrentValue => value;
+
+        public T Get(string? name) => value;
+
+        public IDisposable? OnChange(Action<T, string?> listener) => null;
     }
 
     private sealed class CapturingLogSink
@@ -5611,6 +6008,237 @@ public sealed class ArchiveSynchronizerTests
         }
     }
 
+    private sealed class ConcurrentReadTrackingObjectStore
+    (
+        IObjectStore _innerStore,
+        Func<string, bool> _shouldTrack
+    ) : IArchiveMutableObjectStore
+    {
+        private int _currentConcurrentReads;
+        private int _maximumConcurrentReads;
+
+        public int CurrentConcurrentReads => Volatile.Read(ref _currentConcurrentReads);
+
+        public int MaximumConcurrentReads => Volatile.Read(ref _maximumConcurrentReads);
+
+        public void ResetMaximumConcurrentReads()
+        {
+            Assert.AreEqual(0, CurrentConcurrentReads);
+            Volatile.Write(ref _maximumConcurrentReads, 0);
+        }
+
+        public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
+            _innerStore.EnsureReadyAsync(cancellationToken);
+
+        public Task UploadAsync
+        (
+            string key,
+            Stream content,
+            string contentType,
+            IReadOnlyDictionary<string, string> metadata,
+            CancellationToken cancellationToken = default
+        ) => _innerStore.UploadAsync(
+            key,
+            content,
+            contentType,
+            metadata,
+            cancellationToken);
+
+        public async Task<ArchiveObjectContent> OpenReadAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var content = await _innerStore.OpenReadAsync(key, cancellationToken);
+            if (!_shouldTrack(ArchiveLayout.NormalizeObjectKey(key)))
+            {
+                return content;
+            }
+
+            var current = Interlocked.Increment(ref _currentConcurrentReads);
+            UpdateMaximumConcurrentReads(current);
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+                return new ArchiveObjectContent(
+                    new CompletionCallbackStream(
+                        content.Content,
+                        () => Interlocked.Decrement(ref _currentConcurrentReads)),
+                    content.ContentType,
+                    content.Metadata);
+            }
+            catch (Exception)
+            {
+                await content.DisposeAsync();
+                Interlocked.Decrement(ref _currentConcurrentReads);
+                throw;
+            }
+        }
+
+        public Task<bool> ExistsAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => _innerStore.ExistsAsync(key, cancellationToken);
+
+        public IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
+        (
+            string? folderPrefix,
+            bool recursive = false,
+            CancellationToken cancellationToken = default
+        ) => _innerStore.GetFolderItemsAsync(
+            folderPrefix,
+            recursive,
+            cancellationToken);
+
+        public Task MoveAsync
+        (
+            string source,
+            string destination,
+            CancellationToken cancellationToken = default
+        ) => _innerStore.MoveAsync(source, destination, cancellationToken);
+
+        public Task MoveFolderAsync
+        (
+            string sourcePrefix,
+            string destinationPrefix,
+            CancellationToken cancellationToken = default
+        ) => _innerStore.MoveFolderAsync(
+            sourcePrefix,
+            destinationPrefix,
+            cancellationToken);
+
+        public Task<bool> TryReplaceIfContentHashMatchesAsync
+        (
+            string key,
+            string expectedContentHash,
+            Stream replacementContent,
+            string contentType,
+            IReadOnlyDictionary<string, string> metadata,
+            CancellationToken cancellationToken = default
+        ) => ((IArchiveMutableObjectStore)_innerStore)
+            .TryReplaceIfContentHashMatchesAsync(
+                key,
+                expectedContentHash,
+                replacementContent,
+                contentType,
+                metadata,
+                cancellationToken);
+
+        public Task<bool> TryDeleteIfContentHashMatchesAsync
+        (
+            string key,
+            string expectedContentHash,
+            CancellationToken cancellationToken = default
+        ) => ((IArchiveMutableObjectStore)_innerStore)
+            .TryDeleteIfContentHashMatchesAsync(
+                key,
+                expectedContentHash,
+                cancellationToken);
+
+        private void UpdateMaximumConcurrentReads(int candidate)
+        {
+            while (true)
+            {
+                var currentMaximum = Volatile.Read(ref _maximumConcurrentReads);
+                if (candidate <= currentMaximum ||
+                    Interlocked.CompareExchange(
+                        ref _maximumConcurrentReads,
+                        candidate,
+                        currentMaximum) == currentMaximum)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    private sealed class CompletionCallbackStream
+    (
+        Stream _innerStream,
+        Action _onDispose
+    ) : Stream
+    {
+        private int _disposed;
+
+        public override bool CanRead => _innerStream.CanRead;
+
+        public override bool CanSeek => _innerStream.CanSeek;
+
+        public override bool CanWrite => _innerStream.CanWrite;
+
+        public override long Length => _innerStream.Length;
+
+        public override long Position
+        {
+            get => _innerStream.Position;
+            set => _innerStream.Position = value;
+        }
+
+        public override void Flush() => _innerStream.Flush();
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            _innerStream.Read(buffer, offset, count);
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            _innerStream.Seek(offset, origin);
+
+        public override void SetLength(long value) => _innerStream.SetLength(value);
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            _innerStream.Write(buffer, offset, count);
+
+        public override ValueTask<int> ReadAsync
+        (
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default
+        ) => _innerStream.ReadAsync(buffer, cancellationToken);
+
+        public override ValueTask WriteAsync
+        (
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default
+        ) => _innerStream.WriteAsync(buffer, cancellationToken);
+
+        protected override void Dispose(bool disposing)
+        {
+            try
+            {
+                if (disposing)
+                {
+                    _innerStream.Dispose();
+                }
+            }
+            finally
+            {
+                CompleteDispose();
+                base.Dispose(disposing);
+            }
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await _innerStream.DisposeAsync();
+            }
+            finally
+            {
+                CompleteDispose();
+                GC.SuppressFinalize(this);
+            }
+        }
+
+        private void CompleteDispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                _onDispose();
+            }
+        }
+    }
+
     private sealed class DataReadGuardObjectStore(IObjectStore _innerStore) :
         IArchiveMutableObjectStore
     {
@@ -5631,6 +6259,8 @@ public sealed class ArchiveSynchronizerTests
         public string? RejectMoveSource { get; set; }
 
         public string? RejectConditionalDeleteKey { get; set; }
+
+        public Func<string, Exception?>? OpenReadExceptionFactory { get; set; }
 
         public Func<string, string, CancellationToken, Task>? AfterMoveAsync { get; set; }
 
@@ -5674,6 +6304,12 @@ public sealed class ArchiveSynchronizerTests
         )
         {
             var normalizedKey = ArchiveLayout.NormalizeObjectKey(key);
+            var openReadException = OpenReadExceptionFactory?.Invoke(normalizedKey);
+            if (openReadException is not null)
+            {
+                throw openReadException;
+            }
+
             if (RejectDataReads &&
                 !string.Equals(
                     normalizedKey,
@@ -6043,6 +6679,35 @@ public sealed class ArchiveSynchronizerTests
             _ = rootPath;
 
             return _sourceStore;
+        }
+    }
+
+    private sealed class SelectiveReadFailureSourceRootObjectStoreResolver
+    (
+        ISourceRootObjectStoreResolver _innerResolver,
+        string failureRootPath,
+        Func<string, Exception?> _exceptionFactory
+    ) : ISourceRootObjectStoreResolver
+    {
+        private readonly string _failureRootPath = Path.GetFullPath(failureRootPath);
+
+        public IObjectStore ResolveSourceRoot(string rootPath)
+        {
+            var store = _innerResolver.ResolveSourceRoot(rootPath);
+            if (!string.Equals(
+                    Path.GetFullPath(rootPath),
+                    _failureRootPath,
+                    OperatingSystem.IsWindows() ?
+                        StringComparison.OrdinalIgnoreCase :
+                        StringComparison.Ordinal))
+            {
+                return store;
+            }
+
+            return new DataReadGuardObjectStore(store)
+            {
+                OpenReadExceptionFactory = _exceptionFactory,
+            };
         }
     }
 

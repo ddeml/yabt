@@ -14,10 +14,22 @@ public static class YabtSyncServiceCollectionExtensions
         string? configSectionPath = null
     )
     {
-        _ = configSectionPath;
+        if (configSectionPath is not null && string.IsNullOrWhiteSpace(configSectionPath))
+        {
+            throw new ArgumentException(
+                "YABT synchronization configuration section path must not be empty.",
+                nameof(configSectionPath));
+        }
+
+        var optionsBuilder = services.AddOptions<YabtSyncOptions>();
+        if (configSectionPath is not null)
+        {
+            optionsBuilder.BindConfiguration(configSectionPath);
+        }
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IArchiveSynchronizer, ArchiveSynchronizer>();
+        services.AddSingleton<IRestorePathVerifier, RestorePathVerifier>();
         services.AddSingleton<IHistoryDeduplicator, HistoryDeduplicator>();
         return services;
     }

@@ -906,6 +906,7 @@ internal sealed class ZipArchiveFormatHandler
     {
         var package = new MemoryStream();
         var completedSourceObjects = new List<ZipSourceObject>(sourceObjects.Count);
+        var sourceReadFailures = new List<Exception>();
         byte[]? hashBuffer = null;
         try
         {
@@ -925,17 +926,16 @@ internal sealed class ZipArchiveFormatHandler
                             $"'{ArchivePackageManifestFileNames.EmbeddedEntryName}'.");
                     }
 
-                    var entry = archive.CreateEntry
-                    (
-                        sourceObject.RelativePath,
-                        compressionLevel
-                    );
-                    entry.LastWriteTime = ToZipEntryLastModifiedUtc(
-                        sourceObject.LastModifiedUtc);
-
                     if (sourceObject.IsEmptyFolderMarker)
                     {
-                        await using var markerContent = entry.Open();
+                        var markerEntry = archive.CreateEntry
+                        (
+                            sourceObject.RelativePath,
+                            compressionLevel
+                        );
+                        markerEntry.LastWriteTime = ToZipEntryLastModifiedUtc(
+                            sourceObject.LastModifiedUtc);
+                        await using var markerContent = markerEntry.Open();
                         completedSourceObjects.Add(sourceObject with
                         {
                             Length = 0,
@@ -948,33 +948,82 @@ internal sealed class ZipArchiveFormatHandler
                         throw new InvalidOperationException(
                             $"ZIP source object '{sourceObject.RelativePath}' has no source key.");
                     _logger.LogZipSourceObjectRead(sourceKey, sourceObject.RelativePath);
-                    await using var sourceContent = await sourceStore.OpenReadAsync(
-                        sourceKey,
-                        cancellationToken);
-                    await using var entryContent = entry.Open();
-                    var hash = new XxHash128();
-                    hashBuffer ??= new byte[GetEffectiveHashBufferSize()];
-                    long length = 0;
-                    while (true)
+                    ArchiveObjectContent sourceContent;
+                    try
                     {
-                        var bytesRead = await sourceContent.Content.ReadAsync(
-                            hashBuffer,
-                            cancellationToken);
-                        if (bytesRead == 0) { break; }
-
-                        hash.Append(hashBuffer.AsSpan(0, bytesRead));
-                        length += bytesRead;
-                        await entryContent.WriteAsync(
-                            hashBuffer.AsMemory(0, bytesRead),
+                        sourceContent = await sourceStore.OpenReadAsync(
+                            sourceKey,
                             cancellationToken);
                     }
-
-                    completedSourceObjects.Add(sourceObject with
+                    catch (OperationCanceledException)
                     {
-                        Length = length,
-                        ContentHash = ArchiveHash.Format(hash.GetHashAndReset()),
-                    });
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        sourceReadFailures.Add(ex);
+                        continue;
+                    }
+
+                    await using (sourceContent)
+                    {
+                        var entry = archive.CreateEntry
+                        (
+                            sourceObject.RelativePath,
+                            compressionLevel
+                        );
+                        entry.LastWriteTime = ToZipEntryLastModifiedUtc(
+                            sourceObject.LastModifiedUtc);
+                        await using var entryContent = entry.Open();
+                        var hash = new XxHash128();
+                        hashBuffer ??= new byte[GetEffectiveHashBufferSize()];
+                        long length = 0;
+                        var sourceReadFailed = false;
+                        while (true)
+                        {
+                            int bytesRead;
+                            try
+                            {
+                                bytesRead = await sourceContent.Content.ReadAsync(
+                                    hashBuffer,
+                                    cancellationToken);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                throw;
+                            }
+                            catch (Exception ex)
+                            {
+                                sourceReadFailures.Add(ex);
+                                sourceReadFailed = true;
+                                break;
+                            }
+
+                            if (bytesRead == 0) { break; }
+
+                            hash.Append(hashBuffer.AsSpan(0, bytesRead));
+                            length += bytesRead;
+                            await entryContent.WriteAsync(
+                                hashBuffer.AsMemory(0, bytesRead),
+                                cancellationToken);
+                        }
+
+                        if (sourceReadFailed) { continue; }
+
+                        completedSourceObjects.Add(sourceObject with
+                        {
+                            Length = length,
+                            ContentHash = ArchiveHash.Format(hash.GetHashAndReset()),
+                        });
+                    }
                 }
+            }
+
+            if (sourceReadFailures.Count != 0)
+            {
+                throw new AggregateException(
+                    $"ZIP package could not read {sourceReadFailures.Count} source object(s).",
+                    sourceReadFailures);
             }
 
             for (var index = 0; index < completedSourceObjects.Count; index++)
@@ -1964,6 +2013,7 @@ internal sealed class ZipArchiveFormatHandler
     {
         private readonly SemaphoreSlim _gate = new(1, 1);
         private StagedZipRestorePackage? _stagedPackage;
+        private Task<StagedZipRestorePackage>? _materialization;
         private bool _disposed;
 
         public async Task ValidateAsync(CancellationToken cancellationToken)
@@ -2013,7 +2063,8 @@ internal sealed class ZipArchiveFormatHandler
             try
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                _stagedPackage ??= await _factory(cancellationToken);
+                _materialization ??= _factory(cancellationToken);
+                _stagedPackage ??= await _materialization;
                 return _stagedPackage;
             }
             finally

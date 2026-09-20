@@ -8,6 +8,10 @@ public static class YabtEventIds
     public const int MultipleTargetStoresWithoutSelection = 1002;
     public const int InvalidChangeManifestIgnored = 1003;
     public const int IgnoringRestoreTemporaryPathDeleteException = 1004;
+    public const int RestoreRequested = 1005;
+    public const int RestorePathVerificationRequested = 1006;
+    public const int RestorePathVerificationCompleted = 1007;
+    public const int ArchiveSyncIncomplete = 1008;
 
     public const int ArchiveObjectUnchanged = 1100;
     public const int BackupObjectAdded = 1101;
@@ -32,6 +36,9 @@ public static class YabtEventIds
     public const int BackupWouldChangeEmptyDirectory = 1120;
     public const int BackupWouldRemoveEmptyDirectory = 1121;
     public const int VerifyEmptyDirectoryDifference = 1122;
+    public const int RestorePathDifference = 1123;
+    public const int RestorePathItemUnchanged = 1124;
+    public const int SyncItemReadFailed = 1125;
 
     public const int HistoryObjectRead = 1200;
     public const int HistoryWouldDeduplicateObject = 1201;

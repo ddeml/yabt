@@ -20,6 +20,9 @@ public sealed class AzureBlobBackupRootStoreResolverTests
                 [$"{configSectionPath}:ServiceUri"] = "https://main.blob.core.windows.net",
                 [$"{configSectionPath}:ContainerName"] = "history",
                 [$"{configSectionPath}:Prefix"] = "personal",
+                [$"{configSectionPath}:UploadMaximumConcurrency"] = "3",
+                [$"{configSectionPath}:Retry:MaximumRetries"] = "4",
+                [$"{configSectionPath}:Retry:Delay"] = "00:00:03",
             }
         );
         var resolver = CreateResolver(configuration);
@@ -39,6 +42,11 @@ public sealed class AzureBlobBackupRootStoreResolverTests
         );
         Assert.AreEqual("history", context.ContainerClient.Name);
         Assert.AreEqual("personal", context.ObjectStorePrefix);
+        Assert.AreEqual(3, context.Options.UploadMaximumConcurrency);
+        Assert.AreEqual(3, context.UploadTransferOptions.MaximumConcurrency);
+        Assert.AreEqual(4, context.Options.Retry.MaximumRetries);
+        Assert.AreEqual(TimeSpan.FromSeconds(3), context.Options.Retry.Delay);
+        Assert.AreEqual(4, context.Options.CreateClientOptions().Retry.MaxRetries);
     }
 
     [TestMethod]
@@ -62,6 +70,7 @@ public sealed class AzureBlobBackupRootStoreResolverTests
             new Uri("https://default.blob.core.windows.net/archive"),
             context.ContainerClient.Uri
         );
+        Assert.AreEqual(5, context.UploadTransferOptions.MaximumConcurrency);
     }
 
     [TestMethod]

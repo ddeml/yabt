@@ -7,5 +7,9 @@ public sealed record SyncRunResult
     int NewCount = default,
     int ChangedCount = default,
     int ExtraCount = default,
-    int UnchangedCount = default
-);
+    int UnchangedCount = default,
+    IReadOnlyList<SyncItemFailure>? Failures = default
+)
+{
+    public int FailedCount => Failures?.Count ?? 0;
+}

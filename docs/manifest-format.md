@@ -57,7 +57,7 @@ Vacation.xxh128-l4fjobirfl7o15l1ofkd5d7m0s.zip
 Vacation.xxh128-l4fjobirfl7o15l1ofkd5d7m0s.zip.yabt-manifest.json
 ```
 
-The adjacent copy makes the projection understandable and lets restore build a lazy plan without downloading the ZIP. If any payload from that ZIP must be written, the handler validates the complete package, compares the embedded manifest bytes with the adjacent copy, and validates the staged payload bytes against their entries before the synchronizer mutates the destination. A directory-only package is validated eagerly because it has no file stream that could otherwise trigger lazy validation; a zero-entry ZIP manifest is invalid.
+The adjacent copy makes the projection understandable and lets restore build a lazy plan without downloading the ZIP. If any payload from that ZIP must be written, the handler validates the complete package, compares the embedded manifest bytes with the adjacent copy, and validates each staged payload against its entry before that file is committed. Package staging is released when its last dependent output has been prepared. A directory-only package is validated eagerly because it has no file stream that could otherwise trigger lazy validation; a zero-entry ZIP manifest is invalid.
 
 The package and adjacent manifest form one backup consistency unit. If either artifact is new or changed, backup revalidates a sibling that matched only quick evidence against the same materialized projection. The live change manifest is published only after both artifacts describe the same generation.
 
@@ -129,7 +129,7 @@ Each canonical entry contains exactly:
 
 The document has a canonical `manifestHash`. During mutation, `.yabt-logical-state-manifest.invalid` prevents interrupted work from leaving stale evidence that appears trustworthy. Restore publishes the rebuilt manifest only after the live filesystem is correct and removes the marker last.
 
-On a normal later restore, YABT can avoid opening a destination file only when its current stat fingerprint matches the entry and the desired archive content hash matches the entry's hash. Missing, invalid, or invalidated evidence falls back to hashing the destination. `restore --byte-for-byte` bypasses the shortcut and reads every desired archive output before reconciliation, while new or changed outputs are always staged and hash-validated before the first filesystem mutation.
+On a normal later restore, YABT can avoid opening a destination file only when its current stat fingerprint matches the entry and the desired archive content hash matches the entry's hash. Missing, invalid, or invalidated evidence falls back to hashing the destination. `restore --byte-for-byte` bypasses the shortcut and reads every desired archive output through the bounded work pipeline. New or changed output is staged and hash-validated immediately before that file's blocking destination representation is historized and the staged file is atomically committed.
 
 ## History Manifest And References
 

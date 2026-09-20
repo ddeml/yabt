@@ -2,8 +2,8 @@
   "profiles": {
     "backup": {
       "commandName": "Project",
-      "commandLineArgs": "backup \r\n--target-store-id azure-dev",
-      "workingDirectory": "..\\..\\test-fs\\source",
+      "commandLineArgs": "backup \r\n--target-store-id azure-dev --log-file",
+      "workingDirectory": "E:\\",
       "environmentVariables": {
         "DOTNET_ENVIRONMENT": "Development"
       }
@@ -18,8 +18,16 @@
     },
     "restore": {
       "commandName": "Project",
-      "commandLineArgs": "restore \r\n--target-store-id azure-dev\r\n--destination-root ..\\restore",
-      "workingDirectory": "..\\..\\test-fs\\source",
+      "commandLineArgs": "restore \r\n--target-store-id azure-dev --log-file\r\n--destination-root D:\\Temp\\archiveSceneRestore",
+      "workingDirectory": "E:\\archive\\Scene",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    },
+    "verify-restore": {
+      "commandName": "Project",
+      "commandLineArgs": "verify-restore\r\n--log-file\r\n--destination-root D:\\Temp\\archiveSceneRestore",
+      "workingDirectory": "E:\\archive\\Scene",
       "environmentVariables": {
         "DOTNET_ENVIRONMENT": "Development"
       }

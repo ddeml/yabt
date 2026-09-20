@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Azure;
+using Azure.Storage;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
@@ -73,6 +74,7 @@ internal sealed class AzureBlobObjectStore
                 Metadata = metadata.Count == 0 ?
                     null :
                     new Dictionary<string, string>(metadata, StringComparer.Ordinal),
+                TransferOptions = context.UploadTransferOptions,
             };
 
             await blob.UploadAsync(content, uploadOptions, cancellationToken);
@@ -171,6 +173,7 @@ internal sealed class AzureBlobObjectStore
                     Metadata = metadata.Count == 0 ?
                         null :
                         new Dictionary<string, string>(metadata, StringComparer.Ordinal),
+                    TransferOptions = context.UploadTransferOptions,
                 },
                 cancellationToken
             );
@@ -518,6 +521,7 @@ internal sealed class AzureBlobObjectStore
             destinationBlob,
             properties.Value,
             sourceConditions,
+            context.UploadTransferOptions,
             cancellationToken
         );
     }
@@ -599,6 +603,7 @@ internal sealed class AzureBlobObjectStore
         BlobClient destinationBlob,
         BlobProperties properties,
         BlobRequestConditions sourceConditions,
+        StorageTransferOptions uploadTransferOptions,
         CancellationToken cancellationToken
     )
     {
@@ -619,6 +624,7 @@ internal sealed class AzureBlobObjectStore
                     Conditions = destinationConditions,
                     HttpHeaders = ToBlobHttpHeaders(properties),
                     Metadata = ToMetadataDictionary(properties),
+                    TransferOptions = uploadTransferOptions,
                 },
                 cancellationToken);
         }

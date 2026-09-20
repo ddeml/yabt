@@ -26,7 +26,10 @@ internal sealed class AzureBlobContainerClientFactory(TokenCredential credential
 
         if (!string.IsNullOrWhiteSpace(options.ConnectionString))
         {
-            return new BlobContainerClient(options.ConnectionString, containerName);
+            return new BlobContainerClient(
+                options.ConnectionString,
+                containerName,
+                options.CreateClientOptions());
         }
 
         if (serviceUri is null)
@@ -38,7 +41,10 @@ internal sealed class AzureBlobContainerClientFactory(TokenCredential credential
             );
         }
 
-        return new BlobServiceClient(serviceUri, _credential).GetBlobContainerClient(containerName);
+        return new BlobServiceClient(
+            serviceUri,
+            _credential,
+            options.CreateClientOptions()).GetBlobContainerClient(containerName);
     }
 
     private static void ValidateServiceUri(Uri serviceUri)
