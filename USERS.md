@@ -13,9 +13,11 @@ Prefer boring C# here.
 Treat this as a PR review comment and make the smallest fix.
 ```
 
-Give feedback incrementally. Small review comments are ideal because I can make focused changes, verify them, and keep the diff understandable.
+Give feedback incrementally. Small review comments are ideal because I can make
+focused changes, verify them, and keep the diff understandable.
 
-Tell me when something is architectural memory. If a comment should shape future work, say so and I can add it to `AGENTS.md`.
+Tell me when something is architectural memory. If a comment should shape future
+work, say so and I can add it to `AGENTS.md` .
 
 ## Helpful Review Patterns
 
@@ -30,7 +32,8 @@ Explain the tradeoff, then make your recommended change.
 
 ## When To Ask For A Plan
 
-Ask for a plan when the change touches architecture, public formats, or multiple projects.
+Ask for a plan when the change touches architecture, public formats, or multiple
+projects.
 
 Ask me to implement directly when the fix is local and obvious.
 
@@ -51,4 +54,5 @@ Ask me to implement directly when the fix is local and obvious.
 - Hidden coupling between projects.
 - Anything that would make the archive less inspectable.
 
-Those are worth your experienced human eye. I can help carry the details; you keep the taste and direction.
+Those are worth your experienced human eye. I can help carry the details; you
+keep the taste and direction.
