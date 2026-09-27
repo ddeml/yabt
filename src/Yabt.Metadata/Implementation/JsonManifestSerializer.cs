@@ -268,6 +268,7 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
             ExcludePatterns = ValidatePatterns(
                 policy.ExcludePatterns,
                 "exclude"),
+            DirectoryLinks = FolderPolicyDirectoryLinks.Validate(policy.DirectoryLinks),
         };
     }
 
@@ -558,6 +559,21 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
                 policy.Options,
                 _jsonOptions);
             WriteCanonicalJsonValue(writer, options);
+        }
+
+        if (policy.DirectoryLinks is { Count: > 0 } directoryLinks)
+        {
+            writer.WriteStartObject("directoryLinks");
+            var orderedLinks = directoryLinks.OrderBy(pair => pair.Key, StringComparer.Ordinal);
+            foreach (var pair in orderedLinks)
+            {
+                writer.WriteStartObject(pair.Key);
+                writer.WriteString("behavior", pair.Value.Behavior);
+                writer.WriteString("expectedTarget", pair.Value.ExpectedTarget);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndObject();
         }
 
         writer.WriteEndObject();

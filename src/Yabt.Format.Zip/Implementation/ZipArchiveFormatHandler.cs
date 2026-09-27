@@ -1360,12 +1360,25 @@ internal sealed class ZipArchiveFormatHandler
         if (policy.Options is null)
         {
             hash.Append([0]);
-            return;
+        }
+        else
+        {
+            hash.Append([1]);
+            var options = JsonSerializer.SerializeToElement(policy.Options);
+            AppendCanonicalJsonValue(hash, options);
         }
 
-        hash.Append([1]);
-        var options = JsonSerializer.SerializeToElement(policy.Options);
-        AppendCanonicalJsonValue(hash, options);
+        if (policy.DirectoryLinks is not { Count: > 0 } directoryLinks) { return; }
+
+        AppendCanonicalString(hash, "directory-links-v1");
+        AppendCanonicalInt64(hash, directoryLinks.Count);
+        var orderedLinks = directoryLinks.OrderBy(pair => pair.Key, StringComparer.Ordinal);
+        foreach (var pair in orderedLinks)
+        {
+            AppendCanonicalString(hash, pair.Key);
+            AppendCanonicalString(hash, pair.Value.Behavior);
+            AppendCanonicalString(hash, pair.Value.ExpectedTarget);
+        }
     }
 
     private static void AppendCanonicalStrings

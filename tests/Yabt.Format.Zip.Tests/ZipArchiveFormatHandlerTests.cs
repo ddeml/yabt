@@ -353,6 +353,102 @@ public sealed class ZipArchiveFormatHandlerTests
     }
 
     [TestMethod]
+    public async Task ProjectBackupAsyncIncludesCanonicalDirectoryLinksInIdentityAndManifest()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var handler = serviceProvider.GetRequiredService<IArchiveFormatHandler>();
+        var links = new Dictionary<string, DirectoryLinkPolicy>(StringComparer.Ordinal)
+        {
+            ["zeta"] = new("follow", @"D:\Photos"),
+            ["alpha"] = new("follow", "../photos"),
+        };
+        var policy = new FolderPolicy(ZipArchiveFormatName.Value, DirectoryLinks: links);
+        var request = new ArchiveProjectionRequest(new MemoryObjectStore(), Policy: policy, SourceDisplayName: "Links");
+        var first = await CollectProjectedObjectsAsync(handler.ProjectBackupAsync(request));
+        var reordered = await CollectProjectedObjectsAsync(handler.ProjectBackupAsync(request with
+        {
+            Policy = policy with
+            {
+                DirectoryLinks = links.Reverse().ToDictionary(pair => pair.Key, pair => pair.Value),
+            },
+        }));
+        var changed = await CollectProjectedObjectsAsync(handler.ProjectBackupAsync(request with
+        {
+            Policy = policy with
+            {
+                DirectoryLinks = new Dictionary<string, DirectoryLinkPolicy>(links)
+                {
+                    ["alpha"] = new("follow", "../other-photos"),
+                },
+            },
+        }));
+        var renamed = await CollectProjectedObjectsAsync(handler.ProjectBackupAsync(request with
+        {
+            Policy = policy with
+            {
+                DirectoryLinks = new Dictionary<string, DirectoryLinkPolicy>
+                {
+                    ["zeta"] = links["zeta"],
+                    ["Alpha"] = links["alpha"],
+                },
+            },
+        }));
+
+        Assert.AreEqual(GetPackageObject(first).RelativePath, GetPackageObject(reordered).RelativePath);
+        Assert.AreNotEqual(GetPackageObject(first).RelativePath, GetPackageObject(changed).RelativePath);
+        Assert.AreNotEqual(GetPackageObject(first).RelativePath, GetPackageObject(renamed).RelativePath);
+        CollectionAssert.AreEqual(
+            await ReadContentBytesAsync(GetPackageObject(first)),
+            await ReadContentBytesAsync(GetPackageObject(reordered)));
+        var manifestBytes = await ReadContentBytesAsync(GetManifestObject(first));
+        var reorderedManifestBytes = await ReadContentBytesAsync(GetManifestObject(reordered));
+        CollectionAssert.AreEqual(manifestBytes, reorderedManifestBytes);
+        await using var source = new MemoryStream(manifestBytes);
+        var manifest = await serviceProvider.GetRequiredService<IManifestSerializer>().ReadAsync(source);
+        Assert.IsNotNull(manifest.Policy.DirectoryLinks);
+        Assert.AreEqual(links["zeta"], manifest.Policy.DirectoryLinks["zeta"]);
+    }
+
+    [TestMethod]
+    public async Task ProjectBackupAsyncEmptyDirectoryLinksPreserveLegacyPackageBytesAndIdentity()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var handler = serviceProvider.GetRequiredService<IArchiveFormatHandler>();
+        var request = new ArchiveProjectionRequest
+        (
+            new MemoryObjectStore(),
+            Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+            SourceDisplayName: "Legacy"
+        );
+        var legacy = await CollectProjectedObjectsAsync(handler.ProjectBackupAsync(request));
+        var empty = await CollectProjectedObjectsAsync(handler.ProjectBackupAsync(request with
+        {
+            Policy = request.Policy! with
+            {
+                DirectoryLinks = new Dictionary<string, DirectoryLinkPolicy>(),
+            },
+        }));
+
+        // Captured from the pre-directoryLinks Release handler with the same empty source.
+        Assert.AreEqual("Legacy.xxh128-4qf4v1m2jhoh7l7coulojglhro.zip", GetPackageObject(legacy).RelativePath);
+        if (OperatingSystem.IsWindows())
+        {
+            // ZIP creator-platform and external-attribute headers differ across operating systems.
+            Assert.AreEqual("xxh128:oZZliSHL3-FInSCvVmHJLQ", ArchiveHash.Compute(
+                await ReadContentBytesAsync(GetPackageObject(legacy))));
+        }
+        Assert.AreEqual("xxh128:jaST3fDRsAzzPKl0sNIOiQ", ArchiveHash.Compute(
+            await ReadContentBytesAsync(GetManifestObject(legacy))));
+        Assert.AreEqual(GetPackageObject(legacy).RelativePath, GetPackageObject(empty).RelativePath);
+        CollectionAssert.AreEqual(
+            await ReadContentBytesAsync(GetPackageObject(legacy)),
+            await ReadContentBytesAsync(GetPackageObject(empty)));
+        CollectionAssert.AreEqual(
+            await ReadContentBytesAsync(GetManifestObject(legacy)),
+            await ReadContentBytesAsync(GetManifestObject(empty)));
+    }
+
+    [TestMethod]
     public async Task ProjectBackupAsyncReadsSourceToFingerprintWhenMetadataAndContentHashAreIncomplete()
     {
         using var serviceProvider = CreateServices().BuildServiceProvider();

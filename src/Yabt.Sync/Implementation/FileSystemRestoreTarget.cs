@@ -154,7 +154,7 @@ internal sealed class FileSystemRestoreTarget
         (
             () =>
             {
-                EnsureNoReparsePointInExistingPath(_fullRootPath);
+                EnsureNoReparsePointInExistingPath(stagingRootPath);
                 _logger.LogControlMetadataOperation(
                     "Creating restore staging directory",
                     stagingRootPath);
@@ -197,7 +197,7 @@ internal sealed class FileSystemRestoreTarget
                 () =>
                 {
                     EnsureNoReparsePointInExistingPath(fullStagingPath);
-                    EnsureNoReparsePointInExistingPath(destinationDirectory);
+                    EnsureNoReparsePointInExistingPath(destinationPath);
                     Directory.CreateDirectory(destinationDirectory);
                     EnsureNoReparsePointInExistingPath(destinationDirectory);
                     if (lastModifiedUtc.HasValue)
@@ -276,11 +276,28 @@ internal sealed class FileSystemRestoreTarget
                     ToArchiveRelativePath(Path.GetRelativePath(_fullRootPath, currentPath)),
                     "restore destination reparse-point inspection");
             }
-            if (Directory.Exists(currentPath) &&
-                (File.GetAttributes(currentPath) & FileAttributes.ReparsePoint) != 0)
+            FileAttributes attributes;
+            try
+            {
+                attributes = File.GetAttributes(currentPath);
+            }
+            catch (Exception exception)
+            {
+                if (exception is not FileNotFoundException && exception is not DirectoryNotFoundException)
+                {
+                    throw new YabtSyncException(
+                        $"Restore path '{currentPath}' could not be inspected safely.",
+                        exception);
+                }
+
+                currentPath = Path.GetDirectoryName(currentPath) ?? string.Empty;
+                continue;
+            }
+
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
             {
                 throw new YabtSyncException(
-                    $"Restore path '{currentPath}' contains a directory reparse point.");
+                    $"Restore path '{currentPath}' contains a reparse point.");
             }
 
             currentPath = Path.GetDirectoryName(currentPath) ?? string.Empty;

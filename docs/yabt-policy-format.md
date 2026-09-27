@@ -63,6 +63,32 @@ A zip policy with provider options is:
 }
 ```
 
+## Directory Links
+
+The optional `directoryLinks` map authorizes source traversal through explicitly named immediate child directory links. Each key preserves the child's exact spelling and names one directory, without `/`, `\`, `.` or `..` path components. An entry requires both `behavior: "follow"` and a nonempty `expectedTarget`:
+
+```json
+{
+  "format": "mirror",
+  "directoryLinks": {
+    "Photos": {
+      "behavior": "follow",
+      "expectedTarget": "D:\\PhotoArchive"
+    }
+  }
+}
+```
+
+The filesystem source checks that the link resolves to the expected target before following it. Relative expected targets are interpreted relative to the physical folder containing the policy, including when that folder was reached through another approved link. This permission applies only to source traversal; it does not authorize following links in archive targets, history, staging, or restore destinations. Restore materializes the archived contents as ordinary directories rather than recreating links.
+
+Unapproved, mismatched, or unresolved links fail the operation rather than disappearing from its input. Directory identity checks reject ancestor cycles even across nested ZIP projections. Repeated noncyclic aliases in separate branches remain separate logical archive content. Approval cannot override overlap with the selected filesystem archive, source history, or source staging. There is no CLI bypass.
+
+The initial implementation supports local Windows directory identities and Linux `statx` inode/mount identities (Linux 5.8 or later). It refuses approved-link traversal involving Windows UNC storage because share aliases can hide overlapping directories. On Linux it refuses different mounts of the same device relative to protected storage, and ordinary mount transitions beneath an approved link. Unsupported identity APIs also cause refusal. These restrictions apply to approved descendant links; ordinary source trees do not require the native identity APIs.
+
+Directory and link topology must remain unchanged by other programs during the operation. Revalidation detects changes between checks, but path-based filesystem calls are not an adversarial sandbox against concurrent link replacement.
+
+Unknown link-entry properties, duplicate map keys, null entries, unsupported behaviors, and empty expected targets are rejected. An absent, null, or empty map grants no traversal permission. Target strings remain unchanged in archived policy snapshots and are not interpreted on the restore host. ZIP manifests order link names ordinally and include the map in their self-hash and package identity when nonempty. Policies without this field retain their previous canonical bytes and identity.
+
 ## Operational State
 
 Do not store scan cursors, upload checkpoints, cache keys, last successful backup times, or retry state in folder policy files.

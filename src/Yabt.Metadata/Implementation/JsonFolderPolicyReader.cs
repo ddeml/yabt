@@ -9,7 +9,10 @@ internal sealed class JsonFolderPolicyReader
     ILogger<JsonFolderPolicyReader> _logger
 ) : IFolderPolicyReader
 {
-    private readonly JsonSerializerOptions _jsonOptions = JsonMetadataOptions.Create();
+    private readonly JsonSerializerOptions _jsonOptions = new(JsonMetadataOptions.Create())
+    {
+        AllowDuplicateProperties = false,
+    };
 
     public async Task<FolderPolicy> ReadPolicyAsync
     (
@@ -37,6 +40,13 @@ internal sealed class JsonFolderPolicyReader
                 stream,
                 _jsonOptions,
                 cancellationToken);
+            if (policy is not null)
+            {
+                policy = policy with
+                {
+                    DirectoryLinks = FolderPolicyDirectoryLinks.Validate(policy.DirectoryLinks),
+                };
+            }
         }
         catch (Exception ex)
         {

@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Yabt.Common;
 using Yabt.Common.Async;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
@@ -11,10 +12,26 @@ internal sealed class FileSystemObjectStore
 (
     IOptionsMonitor<FileSystemObjectStoreOptions> _options,
     ILogger<FileSystemObjectStore> _logger
-) : IArchiveMutableObjectStore
+) : IArchiveMutableObjectStore, ISourceDirectoryTraversal
 {
     private const int DefaultBufferSize = 81_920;
     private const int DefaultListChunkSize = 1_000;
+    private FileSystemSourceTraversal? _sourceTraversal;
+
+    public void ConfigureSourceTraversal
+    (
+        Func<string, CancellationToken, Task<FolderPolicy>> readFolderPolicyAsync,
+        IEnumerable<string>? forbiddenPhysicalRootPaths = null
+    )
+    {
+        _logger.LogTrace(nameof(ConfigureSourceTraversal));
+        Check.NotNull(readFolderPolicyAsync);
+        var traversal = new FileSystemSourceTraversal(readFolderPolicyAsync, forbiddenPhysicalRootPaths);
+        if (Interlocked.CompareExchange(ref _sourceTraversal, traversal, null) is not null)
+        {
+            throw new YabtFileSystemException("Source directory traversal can be configured only once per store.");
+        }
+    }
 
     public Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
@@ -75,8 +92,12 @@ internal sealed class FileSystemObjectStore
             (
                 () =>
                 {
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
                     Directory.CreateDirectory(destinationDirectory);
                     Directory.CreateDirectory(temporaryDirectory);
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
                     return new FileStream
                     (
                         temporaryPath,
@@ -112,7 +133,12 @@ internal sealed class FileSystemObjectStore
                 temporaryPath);
             await YabtTask.Run
             (
-                () => File.Move(temporaryPath, destinationPath),
+                () =>
+                {
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
+                    File.Move(temporaryPath, destinationPath);
+                },
                 ex =>
                 {
                     TryDeleteFile(temporaryPath);
@@ -156,20 +182,25 @@ internal sealed class FileSystemObjectStore
         var normalizedKey = NormalizeObjectKey(key);
         try
         {
-            var path = GetObjectPath(GetRootPath(), normalizedKey);
+            var rootPath = GetRootPath();
+            var path = await GetReadObjectPathAsync(rootPath, normalizedKey, cancellationToken);
             _logger.LogFileSystemObjectRead(normalizedKey, path);
             var bufferSize = GetEffectiveBufferSize();
-            var stream = await YabtTask.Run
+            var stream = await YabtTask.Run<FileStream>
             (
-                () => new FileStream
-                (
-                    path,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.Read,
-                    bufferSize,
-                    FileOptions.Asynchronous | FileOptions.SequentialScan
-                ),
+                async () =>
+                {
+                    await ValidateReadPathAsync(rootPath, path, cancellationToken);
+                    return new FileStream
+                    (
+                        path,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read,
+                        bufferSize,
+                        FileOptions.Asynchronous | FileOptions.SequentialScan
+                    );
+                },
                 abandonedStream => abandonedStream.Dispose(),
                 ex => _logger.LogAbandonedFileSystemOperationFailed
                 (
@@ -219,7 +250,9 @@ internal sealed class FileSystemObjectStore
 
         try
         {
+            FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
             Directory.CreateDirectory(temporaryDirectory);
+            FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
             _logger.LogFileSystemPlumbingOperation(
                 "Creating temporary conditional-replacement file",
                 temporaryPath);
@@ -244,7 +277,12 @@ internal sealed class FileSystemObjectStore
                 rootPath,
                 destinationPath,
                 expectedContentHash,
-                () => File.Move(temporaryPath, destinationPath, overwrite: true),
+                () =>
+                {
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
+                    File.Move(temporaryPath, destinationPath, overwrite: true);
+                },
                 "Conditionally replace object",
                 cancellationToken
             );
@@ -314,12 +352,13 @@ internal sealed class FileSystemObjectStore
         var lockPath = GetObjectPath(GetRootPath(), ArchiveInternalObjectKeys.MutationLock);
         _logger.LogFileSystemArchiveMutationLockAcquire(lockPath);
         return FileSystemArchiveMutationLock.AcquireAsync(
+            GetRootPath(),
             lockPath,
             _logger,
             cancellationToken);
     }
 
-    public Task<bool> ExistsAsync
+    public async Task<bool> ExistsAsync
     (
         string key,
         CancellationToken cancellationToken = default
@@ -327,9 +366,9 @@ internal sealed class FileSystemObjectStore
     {
         _logger.LogTrace(nameof(ExistsAsync));
         var normalizedKey = NormalizeObjectKey(key);
-        var path = GetObjectPath(GetRootPath(), normalizedKey);
+        var path = await GetReadObjectPathAsync(GetRootPath(), normalizedKey, cancellationToken);
         _logger.LogFileSystemObjectExists(normalizedKey, path);
-        return YabtTask.Run(() => File.Exists(path), cancellationToken: cancellationToken);
+        return await YabtTask.Run(() => File.Exists(path), cancellationToken: cancellationToken);
     }
 
     public async IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
@@ -346,8 +385,17 @@ internal sealed class FileSystemObjectStore
         var normalizedPrefix = NormalizeObjectPrefix(folderPrefix);
         var listRootPath = string.IsNullOrEmpty(normalizedPrefix) ?
             rootPath :
-            GetObjectPath(rootPath, normalizedPrefix);
+            await GetReadObjectPathAsync(rootPath, normalizedPrefix, cancellationToken);
         _logger.LogFileSystemFolderList(normalizedPrefix, listRootPath, recursive);
+        if (_sourceTraversal is not null)
+        {
+            var sourceItems = EnumerateSourceFolderItemsAsync(rootPath, listRootPath, recursive, cancellationToken);
+            await foreach (var item in sourceItems)
+            {
+                yield return item;
+            }
+            yield break;
+        }
         var items = new List<ArchiveFolderItem>(chunkSize);
         var enumerator = default(IEnumerator<ArchiveFolderItem>);
         void ReadChunk()
@@ -364,17 +412,8 @@ internal sealed class FileSystemObjectStore
             (
                 () =>
                 {
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, listRootPath);
                     if (!Directory.Exists(listRootPath)) { return; }
-                    if (!string.IsNullOrEmpty(normalizedPrefix) &&
-                        IsDirectoryReparsePoint(listRootPath))
-                    {
-                        throw new YabtFileSystemException(
-                            $"Filesystem folder prefix '{normalizedPrefix}' is a reparse point " +
-                            "and cannot be traversed safely.",
-                            normalizedPrefix,
-                            listRootPath);
-                    }
-
                     var folderItems = EnumerateFolderItems(
                         rootPath,
                         listRootPath,
@@ -449,7 +488,10 @@ internal sealed class FileSystemObjectStore
         (
             () =>
             {
+                FileSystemPathSafety.RejectDescendantLinks(rootPath, sourcePath);
+                FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
                 Directory.CreateDirectory(destinationDirectory);
+                FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
                 File.Move(sourcePath, destinationPath);
             },
             ex => _logger.LogAbandonedFileSystemOperationFailed
@@ -498,7 +540,10 @@ internal sealed class FileSystemObjectStore
             (
                 () =>
                 {
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, sourcePath);
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
                     Directory.CreateDirectory(destinationParent);
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
                     Directory.Move(sourcePath, destinationPath);
                 },
                 ex => _logger.LogAbandonedFileSystemOperationFailed
@@ -518,6 +563,184 @@ internal sealed class FileSystemObjectStore
                 sourcePath,
                 ex);
         }
+    }
+
+    private async Task<string> GetReadObjectPathAsync
+    (
+        string rootPath,
+        string key,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(GetReadObjectPathAsync));
+        var path = ResolveObjectPath(rootPath, key);
+        await ValidateReadPathAsync(rootPath, path, cancellationToken);
+        return path;
+    }
+
+    private Task ValidateReadPathAsync
+    (
+        string rootPath,
+        string path,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(ValidateReadPathAsync));
+        if (_sourceTraversal is not null)
+        {
+            return _sourceTraversal.ValidatePathAsync(rootPath, path, cancellationToken);
+        }
+        FileSystemPathSafety.RejectDescendantLinks(rootPath, path);
+        return Task.CompletedTask;
+    }
+
+    private async IAsyncEnumerable<ArchiveFolderItem> EnumerateSourceFolderItemsAsync
+    (
+        string rootPath,
+        string directoryPath,
+        bool recursive,
+        [EnumeratorCancellation] CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(EnumerateSourceFolderItemsAsync));
+        await ValidateReadPathAsync(rootPath, directoryPath, cancellationToken);
+        var childDirectories = await ReadSourceEntryPathsAsync(directoryPath, folders: true, cancellationToken);
+        Array.Sort(childDirectories, StringComparer.Ordinal);
+        foreach (var childDirectory in childDirectories)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await ValidateReadPathAsync(rootPath, childDirectory, cancellationToken);
+            if (recursive)
+            {
+                var descendants = EnumerateSourceFolderItemsAsync(rootPath, childDirectory, true, cancellationToken);
+                await foreach (var descendant in descendants)
+                {
+                    yield return descendant;
+                }
+            }
+            else
+            {
+                yield return ArchiveFolderItem.CreateFolder(
+                    Path.GetFileName(childDirectory),
+                    ToArchiveRelativePath(Path.GetRelativePath(rootPath, childDirectory)));
+            }
+        }
+
+        var files = await ReadSourceEntryPathsAsync(directoryPath, folders: false, cancellationToken);
+        Array.Sort(files, StringComparer.Ordinal);
+        var chunkSize = GetEffectiveListChunkSize();
+        for (var offset = 0; offset < files.Length; offset += chunkSize)
+        {
+            var chunk = await ReadSourceFileChunkAsync
+            (
+                rootPath,
+                files,
+                offset,
+                Math.Min(chunkSize, files.Length - offset),
+                cancellationToken
+            );
+            foreach (var item in chunk)
+            {
+                yield return item;
+            }
+        }
+    }
+
+    private async Task<string[]> ReadSourceEntryPathsAsync
+    (
+        string directoryPath,
+        bool folders,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(ReadSourceEntryPathsAsync));
+        try
+        {
+            return await YabtTask.Run
+            (
+                () => folders ? Directory.GetDirectories(directoryPath) : Directory.GetFiles(directoryPath),
+                abandonedExceptionHandler: ex => _logger.LogAbandonedFileSystemOperationFailed
+                (
+                    ex,
+                    "List source directory entries",
+                    directoryPath
+                ),
+                cancellationToken: cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            throw new YabtFileSystemException
+            (
+                $"Source directory '{directoryPath}' could not be listed; it must not be treated as empty.",
+                path: directoryPath,
+                innerException: ex
+            );
+        }
+    }
+
+    private Task<List<ArchiveFolderItem>> ReadSourceFileChunkAsync
+    (
+        string rootPath,
+        string[] files,
+        int offset,
+        int count,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(ReadSourceFileChunkAsync));
+        return YabtTask.Run<List<ArchiveFolderItem>>
+        (
+            async () =>
+            {
+                var items = new List<ArchiveFolderItem>(count);
+                for (var index = offset; index < offset + count; index++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var filePath = files[index];
+                    await ValidateReadPathAsync(rootPath, filePath, cancellationToken);
+                    var name = Path.GetFileName(filePath);
+                    if (string.Equals(name, ArchiveFolderMarkerFileNames.EmptyFolder, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+                    try
+                    {
+                        var info = new FileInfo(filePath);
+                        items.Add
+                        (
+                            ArchiveFolderItem.CreateObject
+                            (
+                                name,
+                                new
+                                (
+                                    ToArchiveRelativePath(Path.GetRelativePath(rootPath, filePath)),
+                                    info.Length,
+                                    new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero)
+                                )
+                            )
+                        );
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new YabtFileSystemException
+                        (
+                            $"Source file metadata could not be read for '{filePath}'.",
+                            path: filePath,
+                            innerException: ex
+                        );
+                    }
+                }
+                return items;
+            },
+            abandonedExceptionHandler: ex => _logger.LogAbandonedFileSystemOperationFailed
+            (
+                ex,
+                "Read source file metadata",
+                rootPath
+            ),
+            cancellationToken: cancellationToken
+        );
     }
 
     private string GetRootPath()
@@ -554,7 +777,9 @@ internal sealed class FileSystemObjectStore
     {
         try
         {
-            return ResolveObjectPath(rootPath, key);
+            var path = ResolveObjectPath(rootPath, key);
+            FileSystemPathSafety.RejectDescendantLinks(rootPath, path);
+            return path;
         }
         catch (Exception ex)
         {
@@ -582,6 +807,7 @@ internal sealed class FileSystemObjectStore
                 rootPath,
                 () =>
                 {
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, path);
                     if (!CurrentContentHashMatches
                         (
                             path,
@@ -592,6 +818,7 @@ internal sealed class FileSystemObjectStore
                         return false;
                     }
 
+                    FileSystemPathSafety.RejectDescendantLinks(rootPath, path);
                     mutation();
                     return true;
                 },
@@ -655,6 +882,7 @@ internal sealed class FileSystemObjectStore
             "Acquiring conditional-mutation guard",
             guardPath);
         Directory.CreateDirectory(Path.GetDirectoryName(guardPath)!);
+        FileSystemPathSafety.RejectDescendantLinks(rootPath, guardPath);
         using var guard = AcquireConditionalMutationGuard(guardPath, cancellationToken);
         _logger.LogFileSystemPlumbingOperation(
             "Acquired conditional-mutation guard",
@@ -696,7 +924,7 @@ internal sealed class FileSystemObjectStore
         }
     }
 
-    private static string GetTemporaryDirectory(string rootPath) => ResolveObjectPath
+    private static string GetTemporaryDirectory(string rootPath) => GetObjectPath
     (
         rootPath,
         ArchiveInternalFolderNames.TemporaryUploads
@@ -727,11 +955,12 @@ internal sealed class FileSystemObjectStore
         string directoryPath
     )
     {
+        FileSystemPathSafety.RejectDescendantLinks(rootPath, directoryPath);
         var childDirectoryPaths = Directory.EnumerateDirectories(directoryPath).
-            Where(childDirectoryPath => !IsDirectoryReparsePoint(childDirectoryPath)).
             OrderBy(childDirectoryPath => childDirectoryPath, StringComparer.Ordinal);
         foreach (var childDirectoryPath in childDirectoryPaths)
         {
+            FileSystemPathSafety.RejectDescendantLinks(rootPath, childDirectoryPath);
             var name = Path.GetFileName(childDirectoryPath);
             var key = ToArchiveRelativePath(Path.GetRelativePath(rootPath, childDirectoryPath));
             yield return ArchiveFolderItem.CreateFolder(name, key);
@@ -741,6 +970,7 @@ internal sealed class FileSystemObjectStore
             OrderBy(filePath => filePath, StringComparer.Ordinal);
         foreach (var filePath in filePaths)
         {
+            FileSystemPathSafety.RejectDescendantLinks(rootPath, filePath);
             var name = Path.GetFileName(filePath);
             if (string.Equals(
                     name,
@@ -769,11 +999,12 @@ internal sealed class FileSystemObjectStore
         string directoryPath
     )
     {
+        FileSystemPathSafety.RejectDescendantLinks(rootPath, directoryPath);
         var childDirectoryPaths = Directory.EnumerateDirectories(directoryPath).
-            Where(childDirectoryPath => !IsDirectoryReparsePoint(childDirectoryPath)).
             OrderBy(childDirectoryPath => childDirectoryPath, StringComparer.Ordinal);
         foreach (var childDirectoryPath in childDirectoryPaths)
         {
+            FileSystemPathSafety.RejectDescendantLinks(rootPath, childDirectoryPath);
             var childItems = EnumerateRecursiveObjectItems(
                 rootPath,
                 childDirectoryPath);
@@ -803,6 +1034,7 @@ internal sealed class FileSystemObjectStore
             OrderBy(filePath => filePath, StringComparer.Ordinal);
         foreach (var filePath in filePaths)
         {
+            FileSystemPathSafety.RejectDescendantLinks(rootPath, filePath);
             var name = Path.GetFileName(filePath);
             if (string.Equals(
                     name,
@@ -838,9 +1070,6 @@ internal sealed class FileSystemObjectStore
 
         return fullPath;
     }
-
-    private static bool IsDirectoryReparsePoint(string directoryPath) =>
-        (File.GetAttributes(directoryPath) & FileAttributes.ReparsePoint) != 0;
 
     private static string NormalizeRelativeObjectPath(string value)
     {
@@ -902,6 +1131,7 @@ internal sealed class FileSystemObjectStore
     {
         try
         {
+            FileSystemPathSafety.RejectDescendantLinks(GetRootPath(), path);
             _logger.LogFileSystemPlumbingOperation(
                 "Checking temporary file for cleanup",
                 path);

@@ -168,7 +168,81 @@ public sealed class JsonManifestSerializerTests
         StringAssert.Contains(exception.Message, "deterministic");
     }
 
-    private static ArchiveManifest CreateSimpleManifest(IManifestSerializer serializer)
+    [TestMethod]
+    public async Task DirectoryLinkPolicyRoundTripsInCanonicalOrderAndProtectsTargetWithSelfHash()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var serializer = serviceProvider.GetRequiredService<IManifestSerializer>();
+        var links = new Dictionary<string, DirectoryLinkPolicy>(StringComparer.Ordinal)
+        {
+            ["zeta"] = new("follow", @"D:\Photos"),
+            [" alpha"] = new("follow", "../photos"),
+        };
+        var policy = new FolderPolicy("zip", DirectoryLinks: links);
+        var first = CreateSimpleManifest(serializer, policy);
+        var reordered = CreateSimpleManifest(serializer, policy with
+        {
+            DirectoryLinks = links.Reverse().ToDictionary(pair => pair.Key, pair => pair.Value),
+        });
+        var json = await WriteAsync(serializer, first);
+
+        CollectionAssert.AreEqual(json, await WriteAsync(serializer, reordered));
+        await using var source = new MemoryStream(json);
+        var restored = await serializer.ReadAsync(source);
+        Assert.IsNotNull(restored.Policy.DirectoryLinks);
+        Assert.AreEqual(links["zeta"], restored.Policy.DirectoryLinks["zeta"]);
+        Assert.AreEqual(links[" alpha"], restored.Policy.DirectoryLinks[" alpha"]);
+        var text = Encoding.UTF8.GetString(json);
+        Assert.IsTrue
+        (
+            text.IndexOf("\" alpha\"", StringComparison.Ordinal) <
+            text.IndexOf("\"zeta\"", StringComparison.Ordinal)
+        );
+        var changed = text.Replace("../photos", "../secret", StringComparison.Ordinal);
+        await using var changedSource = new MemoryStream(Encoding.UTF8.GetBytes(changed));
+
+        await Assert.ThrowsExactlyAsync<YabtMetadataException>(() => serializer.ReadAsync(changedSource));
+    }
+
+    [TestMethod]
+    public async Task EmptyDirectoryLinksPreserveLegacyManifestBytesAndHash()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var serializer = serviceProvider.GetRequiredService<IManifestSerializer>();
+        var legacy = CreateSimpleManifest(serializer);
+        var empty = CreateSimpleManifest
+        (
+            serializer,
+            new("zip", DirectoryLinks: new Dictionary<string, DirectoryLinkPolicy>())
+        );
+        var legacyBytes = await WriteAsync(serializer, legacy);
+
+        // Captured from the pre-directoryLinks Release serializer.
+        Assert.AreEqual("xxh128:YuhG0l_afEWJK9OQq_K_yw", legacy.ManifestHash);
+        CollectionAssert.AreEqual(legacyBytes, await WriteAsync(serializer, empty));
+        Assert.IsFalse(Encoding.UTF8.GetString(legacyBytes).Contains("directoryLinks", StringComparison.Ordinal));
+        await using var source = new MemoryStream(legacyBytes);
+        Assert.IsNull((await serializer.ReadAsync(source)).Policy.DirectoryLinks);
+    }
+
+    [TestMethod]
+    public void CreateRejectsInvalidDirectoryLinkSnapshot()
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var serializer = serviceProvider.GetRequiredService<IManifestSerializer>();
+        var policy = new FolderPolicy("zip", DirectoryLinks: new Dictionary<string, DirectoryLinkPolicy>
+        {
+            ["../link"] = new("follow", "../photos"),
+        });
+
+        Assert.ThrowsExactly<YabtMetadataException>(() => CreateSimpleManifest(serializer, policy));
+    }
+
+    private static ArchiveManifest CreateSimpleManifest
+    (
+        IManifestSerializer serializer,
+        FolderPolicy? policy = null
+    )
     {
         var entry = CreateSimpleEntry();
         return serializer.Create
@@ -179,7 +253,7 @@ public sealed class JsonManifestSerializerTests
             1,
             ArchiveHash.Compute(Encoding.UTF8.GetBytes("projection")),
             "root.xxh128-00000000000000000000000000.zip",
-            new FolderPolicy("zip"),
+            policy ?? new FolderPolicy("zip"),
             [entry]
         );
     }

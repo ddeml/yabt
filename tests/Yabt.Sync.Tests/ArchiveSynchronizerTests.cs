@@ -2521,7 +2521,7 @@ public sealed class ArchiveSynchronizerTests
                 sourceRoot,
                 [CreateFileSystemStore("target", archiveRoot)],
                 layout: destinationLayout);
-            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "live", "file.txt"), "content");
             await WriteTextFileAsync(
                 Path.Combine(destinationRoot, "live"),
                 "not a live folder");
@@ -2564,7 +2564,7 @@ public sealed class ArchiveSynchronizerTests
                 sourceRoot,
                 [CreateFileSystemStore("target", archiveRoot)],
                 layout: destinationLayout);
-            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "branches", "live", "file.txt"), "content");
             await WriteTextFileAsync(
                 Path.Combine(destinationRoot, "branches"),
                 "not a layout folder");

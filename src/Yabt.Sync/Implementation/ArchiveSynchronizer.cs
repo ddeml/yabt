@@ -2691,6 +2691,29 @@ internal sealed class ArchiveSynchronizer
                 $"No object store resolver is registered for store kind '{targetStoreConfiguration.Kind}'.");
         }
 
+        var sourceStore = _sourceRootObjectStoreResolver.ResolveSourceRoot(sourceLocation.RootPath);
+        var targetStore = targetStoreResolver.ResolveStore(
+            targetStoreConfiguration,
+            sourceLocation.RootPath);
+        var sourcePrefix = CreateSourcePrefix(sourceRootPath, sourceLocation);
+        ConfigureSourceDirectoryTraversal
+        (
+            sourceStore,
+            sourceLocation,
+            targetStoreConfiguration
+        );
+
+        // Validate the complete selected path before the metadata reader opens its policy.
+        // This also validates a link that was selected directly rather than reached by listing.
+        if (sourceStore is ISourceDirectoryTraversal)
+        {
+            await sourceStore.ExistsAsync
+            (
+                ArchiveLayout.CombinePrefixAndRelativePath(sourcePrefix, FolderPolicyFileNames.Primary),
+                cancellationToken
+            );
+        }
+
         var policy = await _folderPolicyReader.ReadPolicyAsync(
             sourceRootPath,
             cancellationToken);
@@ -2699,15 +2722,10 @@ internal sealed class ArchiveSynchronizer
             throw new YabtSyncException($"No archive format handler is registered for format '{policy.Format}'.");
         }
 
-        var sourceStore = _sourceRootObjectStoreResolver.ResolveSourceRoot(sourceLocation.RootPath);
-        var targetStore = targetStoreResolver.ResolveStore(
-            targetStoreConfiguration,
-            sourceLocation.RootPath);
-
         return new
         (
             sourceRootPath,
-            CreateSourcePrefix(sourceRootPath, sourceLocation),
+            sourcePrefix,
             sourceStore,
             targetStore,
             sourceDescriptor,
@@ -2715,6 +2733,51 @@ internal sealed class ArchiveSynchronizer
             sourceLocation.Document,
             policy,
             formatHandler
+        );
+    }
+
+    private void ConfigureSourceDirectoryTraversal
+    (
+        IObjectStore sourceStore,
+        BackupRootLocation sourceLocation,
+        BackupRootStore targetStoreConfiguration
+    )
+    {
+        _logger.LogTrace(nameof(ConfigureSourceDirectoryTraversal));
+
+        if (sourceStore is not ISourceDirectoryTraversal sourceTraversal) { return; }
+
+        var forbiddenRoots = new List<string>
+        {
+            Path.Combine(sourceLocation.RootPath, sourceLocation.Descriptor.Layout.HistPrefix),
+            Path.Combine(sourceLocation.RootPath, ArchiveInternalFolderNames.TemporaryUploads),
+        };
+        if (string.Equals(targetStoreConfiguration.Kind, "fileSystem", StringComparison.Ordinal))
+        {
+            var archiveRoot = TryResolveConfiguredLocalArchiveRootPath
+            (
+                targetStoreConfiguration,
+                sourceLocation.RootPath
+            );
+            if (archiveRoot is null)
+            {
+                throw new YabtSyncException
+                (
+                    "The filesystem archive root could not be resolved for source directory-link safety checks."
+                );
+            }
+
+            forbiddenRoots.Add(archiveRoot);
+        }
+
+        sourceTraversal.ConfigureSourceTraversal
+        (
+            (folderPrefix, cancellationToken) => _folderPolicyReader.ReadPolicyAsync
+            (
+                Path.Combine(sourceLocation.RootPath, folderPrefix.Replace('/', Path.DirectorySeparatorChar)),
+                cancellationToken
+            ),
+            forbiddenRoots
         );
     }
 

@@ -17,6 +17,7 @@ internal sealed class FileSystemArchiveMutationLock
 
     public static async Task<IArchiveMutationLock> AcquireAsync
     (
+        string rootPath,
         string lockPath,
         ILogger<FileSystemObjectStore> logger,
         CancellationToken cancellationToken = default
@@ -30,12 +31,15 @@ internal sealed class FileSystemArchiveMutationLock
             throw new YabtFileSystemException(
                 "Filesystem archive mutation lock did not include a parent directory.",
                 path: lockPath);
+        FileSystemPathSafety.RejectDescendantLinks(rootPath, lockPath);
         Directory.CreateDirectory(lockDirectory);
+        FileSystemPathSafety.RejectDescendantLinks(rootPath, lockPath);
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                FileSystemPathSafety.RejectDescendantLinks(rootPath, lockPath);
                 logger.LogFileSystemPlumbingOperation(
                     "Creating or opening archive-mutation lock file",
                     lockPath);

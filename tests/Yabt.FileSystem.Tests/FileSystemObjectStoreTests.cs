@@ -161,7 +161,7 @@ public sealed class FileSystemObjectStoreTests
     }
 
     [TestMethod]
-    public async Task GetFolderItemsAsyncDoesNotTraverseDirectoryReparsePoints()
+    public async Task GetFolderItemsAsyncRefusesDirectoryReparsePoints()
     {
         var rootPath = CreateTemporaryRoot();
         var outsidePath = CreateTemporaryRoot();
@@ -169,28 +169,23 @@ public sealed class FileSystemObjectStoreTests
         try
         {
             await WriteFileAsync(outsidePath, "outside.txt");
-            try
-            {
-                Directory.CreateSymbolicLink(linkPath, outsidePath);
-            }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or
-                PlatformNotSupportedException or IOException)
-            {
-                Assert.Inconclusive($"Directory symbolic links are unavailable: {ex.Message}");
-            }
+            FileSystemLinkFixture.CreateDirectoryLink(linkPath, outsidePath);
 
             using var serviceProvider = CreateServices(rootPath, listChunkSize: 10).BuildServiceProvider();
             var store = serviceProvider.GetRequiredService<IObjectStore>();
             var keys = new List<string>();
             var folderItems = store.GetFolderItemsAsync(null, recursive: true);
 
-            await foreach (var folderItem in folderItems)
+            await Assert.ThrowsExactlyAsync<YabtFileSystemException>(async () =>
             {
-                if (folderItem.Object is not null)
+                await foreach (var folderItem in folderItems)
                 {
-                    keys.Add(folderItem.Object.Key);
+                    if (folderItem.Object is not null)
+                    {
+                        keys.Add(folderItem.Object.Key);
+                    }
                 }
-            }
+            });
 
             Assert.AreEqual(0, keys.Count);
             Assert.IsTrue(File.Exists(Path.Combine(outsidePath, "outside.txt")));

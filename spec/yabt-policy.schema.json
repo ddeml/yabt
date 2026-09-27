@@ -20,6 +20,29 @@
     "options": {
       "type": ["object", "null"],
       "additionalProperties": true
+    },
+    "directoryLinks": {
+      "type": ["object", "null"],
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "not": { "enum": [".", ".."] },
+        "pattern": "^[^/\\\\\\u0000]+$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "behavior": { "const": "follow" },
+          "expectedTarget": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "not": { "pattern": "\\u0000" }
+          }
+        },
+        "required": ["behavior", "expectedTarget"]
+      }
     }
   },
   "required": ["format"]

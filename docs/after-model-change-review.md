@@ -7,7 +7,7 @@ This document preserves the findings discussed with Richard after the model chan
 - Original review: 2026-09-06 on S650A.
 - Handoff documented: 2026-09-20.
 - Reviewed baseline: commit `ca03f9ad21a7587cc6b15ce70f0440084ca87aa4` plus the then-uncommitted working tree, including the bounded restore pipeline, source-read failure handling, `verify-restore`, and Azure transfer/retry configuration. The handoff commit carries those pending changes alongside this document.
-- Status: **all findings below remain open**. Recording and committing the baseline does not implement or approve the proposed fixes.
+- Status: **R02 is implemented for the documented scope; the other findings remain open**. Recording and committing the baseline did not implement the proposed fixes. R09 was added during the follow-up discussion on 2026-09-21.
 - Scope: correctness, archive safety, recovery, and scalability. This was a code review with focused experiments, not an exhaustive audit or an Azure service integration test.
 
 References use repository-relative paths and method names so they remain useful in the VM. Proposals and acceptance checks are discussion starting points; follow the repository's current `AGENTS.md` when implementing them.
@@ -27,13 +27,14 @@ Evidence labels distinguish runtime reproductions from static findings and desig
 | ID | Priority | Finding | Evidence | Status |
 | --- | --- | --- | --- | --- |
 | R01 | P1 | Path normalization silently omits source content | CLI reproduction | Open |
-| R02 | P1 | Deduplication follows a linked ancestor outside the archive | CLI reproduction | Open |
+| R02 | P1 | Deduplication follows a linked ancestor outside the archive | CLI reproduction and junction regression tests | Implemented |
 | R03 | P1 | Missing source becomes a successful empty backup | CLI reproduction | Open |
 | R04 | P1 | Backup accepts overlapping source and target roots | CLI reproduction | Open |
 | R05 | P2 | Filesystem shape/casing changes prevent backup completion | CLI reproductions | Open |
 | R06 | P2 | Folder-policy settings are accepted but ignored | Handler reproduction and inspection | Open |
 | R07 | P2 | Unavailable restore-only entry can crash `verify-restore` | Static control-flow finding | Open |
 | R08 | Investigate | Cancellation may release a lock before mutation finishes | Static concurrency concern | Open |
+| R09 | P1 | Hard-linked archive files share mutable contents and distort deduplication savings | CLI reproduction of shared backing; other branches inspected | Open |
 | I01 | Improvement | ZIP buffers accumulate across a backup | Lifetime inspection | Open |
 | I02 | Improvement | ZIP restore repeatedly parses the central directory | Inspection and isolated probe | Open |
 | I03 | Improvement | Current-live restore traverses history unnecessarily | Traversal inspection | Open |
@@ -66,6 +67,16 @@ P1 means address before relying on the affected archival operation. P2 means a c
 **Proposed direction:** Validate every existing descendant path component consistently for listing, reading, writing, moving, deleting, locking, and staging. Preserve the documented ability to configure a linked directory as the store root itself.
 
 **Acceptance checks:** Test direct and nested linked ancestors in live, history, and `.yabt-tmp` paths. All external fixture contents must remain unchanged after a refused operation. Exercise junctions as well as symbolic links where available; ensure the important Windows case does not disappear behind a skipped test.
+
+**Follow-up scope agreed with Richard:** Junction approval belongs exclusively in the containing folder's `.yabt-policy.json`, naming the exact child link and expected destination. There is no CLI bypass. Unapproved, changed, or unresolved links are errors, not empty or silently omitted branches. Source approval grants read traversal only and does not authorize archive or restore-destination mutation. Archive-side approval remains subject to a separate safe ownership, locking, and same-filesystem staging design. Restoring a policy must not activate destructive external permissions.
+
+Cycle prevention is part of R02: compare each entered directory's physical identity with that logical branch's ancestors, including across folder-local listing and nested ZIP projections. Reject cycles without an override. Preserve legitimate repeated source aliases in distinct branches, and separately reject physical overlap with archive storage, source history, and provider staging. File hard links do not create directory-recursion edges; their handling is tracked in R09.
+
+**Implementation on 2026-09-21:** The filesystem provider checks every existing descendant component at its operation boundaries, including conditional mutation and lock/staging paths. Source traversal has a separate, once-configured read capability; ordinary archive stores and restore destinations do not receive policy approval. The policy format, schema, package self-hash, and ZIP identity preserve the exact child-name/expected-target approvals. Policies without approvals keep their prior canonical identity. Restore produces native directories and preserves policy bytes without activating mutation permissions.
+
+The initial native identity support covers local Windows directories and Linux inode/mount identities. Approved traversal involving UNC storage or ambiguous Linux bind-mount aliases is refused; unsupported native identity support does not affect ordinary trees without links. Concurrent external directory/link topology changes remain outside the safety contract. See [folder policy documentation](yabt-policy-format.md#directory-links) for the supported scope. Linux-specific native paths still require a Linux runtime test run.
+
+**Verification:** `dotnet test yabt.sln --no-restore --configuration Release --verbosity minimal -m:1 --disable-build-servers` completed on CodexSandbox01 with **430 passed, 0 failed, 0 skipped**. Coverage includes 19 junction integration cases, the original external-history deduplication escape, restore staging, direct selected links, relative targets through an external parent, nested ZIP cycles, duplicate noncyclic aliases, archive/history/staging exclusions, and refusal to reuse source approval for restore mutation. Windows fixtures create real junctions without requiring symbolic-link privileges. Policy/manifest/ZIP tests verify validation, canonical identity, and compatibility when the new field is absent. Two existing restore fixtures were corrected to populate their configured source live prefixes; they previously depended on missing source folders being interpreted as empty.
 
 ### R03: A nonexistent source can become a successful empty backup
 
@@ -134,6 +145,18 @@ P1 means address before relying on the affected archival operation. P2 means a c
 **Proposed direction:** Once an irreversible filesystem step starts, retain its staging and lock ownership until it finishes, then observe cancellation at the next safe boundary. Observing an abandoned exception alone does not serialize the mutation.
 
 **Acceptance checks:** Add a controllably delayed mutation, cancel it, and attempt a second writer. Assert that cleanup and lock release cannot overtake the first mutation. Preserve cancellation responsiveness during preparation and between commits.
+
+### R09: Hard-linked archive files need explicit handling
+
+**Code:** [FileSystemObjectStore.cs](../src/Yabt.FileSystem/Implementation/FileSystemObjectStore.cs), file reads and mutations; [HistoryDeduplicator.cs](../src/Yabt.Sync/Implementation/HistoryDeduplicator.cs), candidate selection, backing selection, and savings estimates; [FileSystemArchiveMutationLock.cs](../src/Yabt.FileSystem/Implementation/FileSystemArchiveMutationLock.cs), lock-file writes.
+
+**Evidence:** Added on 2026-09-21 at Richard's request, separately from R02. A disposable Windows fixture reproduced shared backing through the baseline Release CLI: create a 20,000-byte external file, hard-link it into history as `a.bin`, and create an independent identical historical `b.bin`. `deduplicate` retains `a.bin` and replaces `b.bin` with a reference. An in-place write through the external filename then changes the archive's only materialized backing copy. The private copy is gone. Savings accounting for deletion of another hard-link name and control-file writes remain static findings requiring separate reproductions. NTFS hard links share a file identity and contents, are not directory reparse points, and cannot cause folder-recursion cycles.
+
+**Cause and impact:** An archive/history file may share bytes with a live or external filename. An in-place change through either name changes both. Such a file is not an independent historical backing copy for deduplication references. Deleting one hard-link name can free no payload space while the current path-based savings calculation claims a saving. In-place writes to a hard-linked control or lock file can also affect another name outside the archive.
+
+**Proposed direction:** Continue treating source hard links as ordinary logical files, with independent backup materializations and no hard-link-topology restoration. Detect file identity and link count on filesystem archives. Exclude multiply linked history files from deduplication deletion and backing selection; existing references need verified independent backing. Establishing a private copy must be an explicit supported operation. Refuse multiply linked writable control files before truncating or writing them. Junction approval must not waive these rules.
+
+**Acceptance checks:** Reproduce a history/live shared-file mutation, deletion that releases no payload storage, a reference whose only backing is multiply linked, and a multiply linked lock file. Assert correct savings, unchanged external content, stable independent backing, and ordinary source hard-link backup/restore. Do not label this item resolved until those cases are tested.
 
 ## Improvement opportunities
 
