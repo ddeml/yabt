@@ -20,7 +20,7 @@ public sealed class ArchiveProjectionSourceReadTrackingTests
 
         Assert.AreEqual("folder/file.exe", exception.ObjectKey);
         Assert.AreEqual(
-            Path.Combine("source", "folder", "file.exe"),
+            "source/folder/file.exe",
             exception.SourcePath);
         Assert.AreEqual(cause.Message, exception.Reason);
         Assert.AreSame(cause, exception.InnerException);
@@ -37,7 +37,7 @@ public sealed class ArchiveProjectionSourceReadTrackingTests
             content.Content.ReadByte());
 
         Assert.AreEqual("file.bin", exception.ObjectKey);
-        Assert.AreEqual(Path.Combine("source", "file.bin"), exception.SourcePath);
+        Assert.AreEqual("source/file.bin", exception.SourcePath);
         Assert.AreSame(cause, exception.InnerException);
     }
 
@@ -110,7 +110,7 @@ public sealed class ArchiveProjectionSourceReadTrackingTests
             sourceStore,
             "source",
             sourceRootPrefix: null,
-            new FixedFolderPolicyReader(new(handler.FormatName)),
+            (_, _) => Task.FromResult(new FolderPolicy(handler.FormatName)),
             new Dictionary<string, IArchiveFormatHandler>(StringComparer.Ordinal)
             {
                 [handler.FormatName] = handler,
@@ -125,7 +125,7 @@ public sealed class ArchiveProjectionSourceReadTrackingTests
             store.OpenReadAsync("packed.zip"));
 
         Assert.AreEqual("packed.zip", exception.ObjectKey);
-        Assert.AreEqual(Path.Combine("source", "packed.zip"), exception.SourcePath);
+        Assert.AreEqual("source/packed.zip", exception.SourcePath);
         Assert.AreSame(cause, exception.InnerException);
     }
 
@@ -171,18 +171,9 @@ public sealed class ArchiveProjectionSourceReadTrackingTests
             inner,
             "source",
             sourceRootPrefix: null,
-            new FixedFolderPolicyReader(FolderPolicy.Default),
+            (_, _) => Task.FromResult(FolderPolicy.Default),
             new Dictionary<string, IArchiveFormatHandler>(StringComparer.Ordinal)
         );
-
-    private sealed class FixedFolderPolicyReader(FolderPolicy _policy) : IFolderPolicyReader
-    {
-        public Task<FolderPolicy> ReadPolicyAsync
-        (
-            string folderPath,
-            CancellationToken cancellationToken = default
-        ) => Task.FromResult(_policy);
-    }
 
     private sealed class ThrowingOpenReadObjectStore(Exception _exception) : IReadOnlyObjectStore
     {

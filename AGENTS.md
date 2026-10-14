@@ -243,6 +243,28 @@ Initial object store providers:
 
 ## Object Store Traversal
 
+Object keys preserve each name exactly, including leading, trailing, and
+whitespace-only names when the provider can represent them. Only null or an
+empty string denotes the root. Canonical keys use `/` separators and reject
+rooted or drive-prefixed paths, empty segments, `.`/`..` segments, and NUL.
+Logical key inputs reject backslashes; native path selectors are converted only
+at the filesystem boundary. Discovered native names must never be rewritten to
+fit key syntax. In particular, refuse native Unix names
+containing a literal backslash. Filesystem operations refuse Windows aliases
+such as trailing spaces/dots and reserved device names. Restore validates both
+desired paths and existing destination names before mutation. Preserve exact
+names through policies, manifests, ZIP payloads, and provider URI encoding.
+
+Use `ObjectPath` for canonical logical path operations; identity is ordinal and
+independent of the host OS. `IObjectStoreNamespace` owns destination validation
+and comparison, including implicit parent-directory collisions. Filesystem
+comparison must follow actual directory semantics rather than host-wide case
+assumptions. Source location resolution, native overlap checks, restore staging,
+and filesystem commits belong to provider implementations. Mapping failures use
+the existing contextual I/O failure and recovery path; never silently rename or
+omit conflicting desired content. Validate known namespace conflicts before
+live mutation while retaining safe checkpoints after later runtime failures.
+
 `IObjectStore` should expose folder-local traversal rather than recursive flat
 listing. The object store contract should answer "what files and immediate child
 folders are inside this folder prefix?" so backup can compare source and target

@@ -13,7 +13,7 @@ public sealed class JsonHistoryManifestSerializerTests
     {
         var serializer = CreateSerializer();
         var firstEntry = CreateEntry(
-            "2026-08-19\\folder\\b.txt",
+            "2026-08-19/folder/b.txt",
             ArchiveHistoryEntryRepresentation.Reference,
             storedRelativePath: "2026-08-19/folder/b.txt.yabt-ref.json",
             metadata: new Dictionary<string, string>

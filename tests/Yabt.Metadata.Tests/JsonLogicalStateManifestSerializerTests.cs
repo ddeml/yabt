@@ -14,7 +14,7 @@ public sealed class JsonLogicalStateManifestSerializerTests
         var serializer = CreateSerializer();
         var firstEntry = CreateEntry
         (
-            "folder\\b.txt",
+            "folder/b.txt",
             "second",
             new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero)
         );
@@ -228,7 +228,7 @@ public sealed class JsonLogicalStateManifestSerializerTests
     }
 
     [TestMethod]
-    public void CreateRejectsDuplicateNormalizedPaths()
+    public void CreateRejectsDuplicateCanonicalPaths()
     {
         var serializer = CreateSerializer();
         var first = CreateEntry
@@ -239,7 +239,7 @@ public sealed class JsonLogicalStateManifestSerializerTests
         );
         var second = CreateEntry
         (
-            "folder\\file.txt",
+            "folder/file.txt",
             "second",
             new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero)
         );

@@ -160,7 +160,7 @@ internal sealed class LogFilePathGuard(IBackupRootLocator _backupRootLocator)
             var configuredPath = property.Value.ValueKind == JsonValueKind.String ?
                 property.Value.GetString() :
                 property.Value.ToString();
-            if (string.IsNullOrWhiteSpace(configuredPath))
+            if (string.IsNullOrEmpty(configuredPath))
             {
                 return null;
             }

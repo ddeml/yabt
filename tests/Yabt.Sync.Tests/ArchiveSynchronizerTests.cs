@@ -903,7 +903,7 @@ public sealed class ArchiveSynchronizerTests
             await InitializeSourceRootAsync(
                 sourceRoot,
                 [CreateFileSystemStore("target", targetRoot)],
-                layout: new ArchiveLayout(HistPrefix: " "));
+                layout: new ArchiveLayout(HistPrefix: ""));
             await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "content");
 
             using var serviceProvider = CreateServices().BuildServiceProvider();
@@ -1580,14 +1580,14 @@ public sealed class ArchiveSynchronizerTests
             var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
             await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
 
-            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+            var exception = await Assert.ThrowsExactlyAsync<Yabt.Core.YabtCoreException>(
                 () => synchronizer.RestoreAsync(new SyncRunRequest
                 (
                     sourceRoot,
                     DestinationRoot: destinationRoot
                 )));
 
-            StringAssert.Contains(exception.Message, "differ only by case");
+            StringAssert.Contains(exception.Message, "same destination path");
             Assert.IsFalse(Directory.Exists(destinationRoot));
         }
         finally
@@ -2182,7 +2182,7 @@ public sealed class ArchiveSynchronizerTests
             var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
             await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
 
-            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+            var exception = await Assert.ThrowsExactlyAsync<YabtFileSystemException>(
                 () => synchronizer.RestoreAsync(new SyncRunRequest
                 (
                     sourceRoot,
@@ -2214,7 +2214,7 @@ public sealed class ArchiveSynchronizerTests
             var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
             await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
 
-            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+            var exception = await Assert.ThrowsExactlyAsync<YabtFileSystemException>(
                 () => synchronizer.RestoreAsync(new SyncRunRequest
                 (
                     sourceRoot,
@@ -2487,7 +2487,7 @@ public sealed class ArchiveSynchronizerTests
             var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
             await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
 
-            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+            var exception = await Assert.ThrowsExactlyAsync<YabtFileSystemException>(
                 () => synchronizer.RestoreAsync(new SyncRunRequest
                 (
                     sourceRoot,
@@ -2530,7 +2530,7 @@ public sealed class ArchiveSynchronizerTests
             var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
             await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
 
-            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+            var exception = await Assert.ThrowsExactlyAsync<YabtFileSystemException>(
                 () => synchronizer.RestoreAsync(new SyncRunRequest
                 (
                     sourceRoot,
@@ -2573,7 +2573,7 @@ public sealed class ArchiveSynchronizerTests
             var synchronizer = serviceProvider.GetRequiredService<IArchiveSynchronizer>();
             await synchronizer.BackupAsync(new SyncRunRequest(sourceRoot));
 
-            var exception = await Assert.ThrowsExactlyAsync<YabtSyncException>(
+            var exception = await Assert.ThrowsExactlyAsync<YabtFileSystemException>(
                 () => synchronizer.RestoreAsync(new SyncRunRequest
                 (
                     sourceRoot,
@@ -3732,7 +3732,7 @@ public sealed class ArchiveSynchronizerTests
     }
 
     [TestMethod]
-    public async Task SyncAsyncUploadsProjectedObjectsBeforeSourceEnumerationCompletes()
+    public async Task SyncAsyncRefusesToMutateUntilSourceNamespaceEnumerationCompletes()
     {
         var sourceRoot = Path.Combine(
             Path.GetTempPath(),
@@ -3760,10 +3760,8 @@ public sealed class ArchiveSynchronizerTests
         }
 
         Assert.IsTrue(failedAfterFirstObject);
-        Assert.IsTrue(targetStore.TryGetObject("first.txt", out var uploadedObject));
-        Assert.AreEqual(
-            FailingAfterFirstListedObjectStore.FirstContent,
-            Encoding.UTF8.GetString(uploadedObject.Content.Span));
+        Assert.IsFalse(targetStore.TryGetObject("first.txt", out _));
+        Assert.IsFalse(targetStore.Snapshot().Any());
     }
 
     [TestMethod]
@@ -4813,8 +4811,8 @@ public sealed class ArchiveSynchronizerTests
         CollectionAssert.AreEqual(
             new[]
             {
-                Path.Combine(sourceRoot, "a.txt"),
-                Path.Combine(sourceRoot, "m.txt"),
+                $"{Path.GetFileName(sourceRoot)}/a.txt",
+                $"{Path.GetFileName(sourceRoot)}/m.txt",
             },
             result.Failures.Select(failure => failure.RelativePath).ToArray());
         StringAssert.Contains(result.Message, "Defender blocked a.txt");
@@ -4871,8 +4869,8 @@ public sealed class ArchiveSynchronizerTests
         CollectionAssert.AreEqual(
             new[]
             {
-                Path.Combine(sourceRoot, "a.bin"),
-                Path.Combine(sourceRoot, "m.bin"),
+                $"{Path.GetFileName(sourceRoot)}/a.bin",
+                $"{Path.GetFileName(sourceRoot)}/m.bin",
             },
             result.Failures.Select(failure => failure.RelativePath).ToArray());
         StringAssert.Contains(result.Message, "Scanner rejected a.bin");
@@ -5628,6 +5626,7 @@ public sealed class ArchiveSynchronizerTests
             folderPolicy ?? FolderPolicy.Default));
         services.AddSingleton<IBackupRootStoreResolver>(new FixedBackupRootStoreResolver(targetStore));
         services.AddSingleton<ISourceRootObjectStoreResolver>(new FixedSourceRootObjectStoreResolver(sourceStore));
+        services.AddYabtFileSystemArchiveLocations();
         services.AddYabtMirrorFormatHandler();
         services.AddYabtZipFormatHandler();
         services.AddYabtSync();

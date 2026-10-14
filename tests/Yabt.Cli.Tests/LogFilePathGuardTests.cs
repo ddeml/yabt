@@ -46,6 +46,29 @@ public sealed class LogFilePathGuardTests
     }
 
     [TestMethod]
+    public async Task EnsureOutsideOperationRootsRejectsLogInsideWhitespaceNamedArchive()
+    {
+        var descriptorRoot = GetTestRoot("descriptor");
+        var commandRoot = Path.Combine(descriptorRoot, "source");
+        var guard = CreateGuard(descriptorRoot, "\u00a0");
+
+        var exception = await Assert.ThrowsExactlyAsync<YabtCliException>
+        (
+            () => guard.EnsureOutsideOperationRootsAsync
+            (
+                Path.Combine(descriptorRoot, "\u00a0", "run.log"),
+                YabtCliCommandNames.Verify,
+                commandRoot,
+                targetStoreId: null,
+                destinationRoot: null,
+                default
+            )
+        );
+
+        StringAssert.Contains(exception.Message, "filesystem archive store");
+    }
+
+    [TestMethod]
     public async Task EnsureOutsideOperationRootsRejectsLogInsideRestoreDestination()
     {
         var commandRoot = GetTestRoot("descriptor");
@@ -109,7 +132,7 @@ public sealed class LogFilePathGuardTests
             guard.EnsureOutsideOperationRootsAsync(
                 Path.Combine(GetTestRoot("logs"), "run.log"),
                 YabtCliCommandNames.Scan,
-                " ",
+                "\0",
                 targetStoreId: null,
                 destinationRoot: null,
                 CancellationToken.None));

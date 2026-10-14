@@ -177,6 +177,7 @@ public sealed class JsonManifestSerializerTests
         {
             ["zeta"] = new("follow", @"D:\Photos"),
             [" alpha"] = new("follow", "../photos"),
+            [" "] = new("follow", " "),
         };
         var policy = new FolderPolicy("zip", DirectoryLinks: links);
         var first = CreateSimpleManifest(serializer, policy);
@@ -192,6 +193,7 @@ public sealed class JsonManifestSerializerTests
         Assert.IsNotNull(restored.Policy.DirectoryLinks);
         Assert.AreEqual(links["zeta"], restored.Policy.DirectoryLinks["zeta"]);
         Assert.AreEqual(links[" alpha"], restored.Policy.DirectoryLinks[" alpha"]);
+        Assert.AreEqual(links[" "], restored.Policy.DirectoryLinks[" "]);
         var text = Encoding.UTF8.GetString(json);
         Assert.IsTrue
         (

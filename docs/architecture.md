@@ -185,6 +185,49 @@ recursively processes any provenanced artifacts it emits. This turns a ZIP
 nested inside another ZIP back into its original logical folder without guessing
 from a filename.
 
+Object keys preserve exact name components, including whitespace. An empty
+string denotes the root; a whitespace-only name remains a distinct object.
+`ObjectPath` represents canonical keys with ordinal identity and `/` separators.
+It rejects rooted paths, drive prefixes, empty components, `.`/`..`, backslashes,
+and NUL. Native path selectors are converted at the filesystem boundary. Native
+names containing a literal backslash cannot be represented
+and are refused instead of being interpreted as additional folders. Providers
+also reject names their destination cannot represent exactly, including Windows
+trailing-space/dot aliases and device names. WebDAV encodes each exact component
+in the URI and validates decoded listing components. Restore preflight checks
+both desired paths and existing destination entries before mutation.
+
+`IObjectStoreNamespace` owns representability and destination comparison rules.
+Its scoped tree validator includes implicit parent directories, so distinct
+logical paths cannot silently merge under a provider's case or accent rules.
+The filesystem implementation queries native directory semantics rather than
+assuming all Windows volumes ignore case or all Unix volumes are ordinal.
+Unsupported comparison semantics fail explicitly. Shared synchronization and
+format projection code use canonical names and provider capabilities.
+
+The initial native backends query Windows directory case-sensitivity flags and
+accept Linux ext/F2FS without casefold, btrfs, and tmpfs. Other Unix or remote
+filesystem semantics require provider support before namespace validation can
+approve them. Windows insensitive comparisons use ordinal case folding; native
+access also checks existing spelling so aliases cannot overwrite another
+logical name if native Unicode equivalence differs.
+Provider-owned root `.yabt-tmp` plumbing retains its existing case-variant
+handling; that exception does not apply to live data names.
+
+Backup snapshots projected path metadata for namespace preflight before live
+reconciliation; payload openers remain lazy. Restore validates its complete
+expanded plan before committing files. Mapping failures use ordinary contextual
+YABT exceptions and the existing failure/recovery path. They do not authorize
+renaming, skipping desired content, or treating it as removed. Later I/O failures
+retain already committed safe checkpoints; operations are not whole-tree
+transactions.
+
+`IArchiveLocationResolver` prepares the source store, selected canonical prefixes,
+policy reads, and native overlap checks. `IRestoreDestination` owns directory
+creation and commits from opaque staging tokens. Physical restore paths and
+temporary-file operations belong to the filesystem provider. Backup comparison
+replay remains private temporary storage, outside archive `.yabt-tmp`.
+
 Filesystem access validates every existing descendant component, including
 ancestors of an otherwise ordinary file or directory. Mutable archive and
 restore-destination access rejects descendant links, while a configured store

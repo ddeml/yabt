@@ -33,7 +33,7 @@
     "canonicalHistoryPath": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!/)(?!.*//)(?!.*\\\\)(?!.*(?:^|/)(?:\\.|\\.\\.)(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))[^/]+(?:/[^/]+)*$",
+      "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:/|(?![\\s\\S])))[^/\\\\\\u0000]+(?:/(?!\\.{1,2}(?:/|(?![\\s\\S])))[^/\\\\\\u0000]+)*)?(?![\\s\\S])",
       "not": {
         "enum": [
           ".yabt-history-manifest.json",
@@ -65,7 +65,7 @@
               "$ref": "#/$defs/canonicalHistoryPath"
             },
             {
-              "pattern": "\\.yabt-ref\\.json$"
+              "pattern": "\\.yabt-ref\\.json(?![\\s\\S])"
             }
           ]
         },

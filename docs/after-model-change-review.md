@@ -12,9 +12,10 @@ change, for follow-up work in **Codex-Sandbox-01**.
   source-read failure handling, `verify-restore` , and Azure transfer/retry
   configuration. The handoff commit carries those pending changes alongside this
   document.
-- Status: **R02 is implemented for the documented scope; the other findings
-  remain open**. Recording and committing the baseline did not implement the
-  proposed fixes. R09 was added during the follow-up discussion on 2026-09-21.
+- Status: **R01 and R02 are implemented for their documented scopes; the other
+  findings remain open**. Recording and committing the baseline did not implement
+  the proposed fixes. R09 was added during the follow-up discussion on
+  2026-09-21.
 - Scope: correctness, archive safety, recovery, and scalability. This was a code
   review with focused experiments, not an exhaustive audit or an Azure service
   integration test.
@@ -52,7 +53,7 @@ were not claimed as completed runtime reproductions in the review.
 
 | ID | Priority | Finding | Evidence | Status |
 | --- | --- | --- | --- | --- |
-| R01 | P1 | Path normalization silently omits source content | CLI reproduction | Open |
+| R01 | P1 | Path normalization silently omits source content | CLI reproduction and exact-path regression tests | Implemented |
 | R02 | P1 | Deduplication follows a linked ancestor outside the archive | CLI reproduction and junction regression tests | Implemented |
 | R03 | P1 | Missing source becomes a successful empty backup | CLI reproduction | Open |
 | R04 | P1 | Backup accepts overlapping source and target roots | CLI reproduction | Open |
@@ -97,6 +98,69 @@ spaced/unspaced siblings. Cover other platform-representable whitespace names
 and explicitly unsupported names. Assert both payload and restored path
 identity; a successful backup must not replace a nonempty source directory with
 an empty marker.
+
+**Implementation on 2026-09-27:** Shared key validation preserves exact name
+components, including whitespace-only names. Only null and empty input mean the
+root. Empty segments, rooted/drive-prefixed paths, `.`/`..`, and NUL are refused
+instead of collapsed or rewritten. The initial implementation accepted explicit
+backslash separators; the provider-boundary refactor below replaces that shared
+conversion. Native Unix filenames containing a literal backslash are refused
+before they can select a different branch.
+
+Filesystem listing and all key-based operations preserve whitespace and reject
+Windows aliases such as trailing spaces/dots and reserved device names. Restore
+checks both planned paths and existing destination names before mutation. Native
+names are checked before Windows full/relative-path conversion can erase their
+spelling, including when selecting a source folder directly.
+Azure names and WebDAV URI components retain exact identity, with malformed or
+ambiguous provider names refused. Policies, every manifest kind, ZIP entries,
+and package naming preserve exact supported names; schemas follow the same
+canonical path contract.
+
+Regression coverage includes mirror/ZIP backup, repeat backup, byte-for-byte
+verification, restore, directly selected spaced folders with an unspaced decoy,
+distinct spaced/unspaced siblings, whitespace-only and Unicode whitespace names,
+native empty folders, guarded provider mutations, and destination refusal with
+existing contents unchanged. Linux-only native-name cases require a Linux test
+run; the Windows suite exercises real extended-path trailing-space/dot entries.
+Azure and WebDAV coverage here is local path-contract testing, not a live-service
+integration run. R03's independent missing-source behavior remains open.
+
+**Verification:** The following completed on CodexSandbox01 with **514 passed,
+0 failed, and 3 Linux-only tests skipped**:
+
+```powershell
+dotnet test yabt.sln --no-restore --configuration Release `
+  --verbosity minimal -m:1 --disable-build-servers
+```
+
+The skipped cases require native Unix backslash filenames. Windows source
+selection and restore refusal tests use real extended-path fixtures. Schema
+path checks covered 75 valid/invalid cases across the five manifest schemas;
+`git diff --check` also passed.
+
+**Provider-boundary refactor on 2026-10-04:** `ObjectPath` now provides exact,
+ordinal logical identity with canonical `/` separators. Native selectors are
+converted only at the filesystem boundary; logical inputs reject backslashes.
+`IObjectStoreNamespace` supplies destination-specific path validation and
+comparison, including collisions between implicit parent folders. Shared
+synchronization no longer chooses path rules from the host OS.
+
+Filesystem source selection, overlap checks, directory creation, restore
+staging, and commits moved behind provider capabilities. Backup preflights a
+stable snapshot of projected names before reconciliation; content stays lazy.
+Restore validates its expanded desired tree. Mapping failures use the ordinary
+contextual failure/recovery path, with no skip, rename, or override behavior.
+Later runtime failures can still leave validated files as rerun checkpoints.
+
+**Refactor verification:** The full Release suite on CodexSandbox01 completed
+with **580 passed, 0 failed, and 3 Linux-only tests skipped**, using the command
+above. Coverage includes native Windows directories with different case rules,
+synthetic case/accent/Unicode-equivalent namespaces, restore live-prefix scoping,
+layout changes during lock acquisition, alias refusal, and staging ownership.
+`git diff --check` and CRLF checks passed. Linux native execution remains
+unverified; supported filesystem semantics and explicit refusal of unsupported
+namespaces are documented in [architecture.md](architecture.md).
 
 ### R02: Deduplication can mutate files outside the archive
 

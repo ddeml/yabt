@@ -3,7 +3,6 @@ using System.Collections.Frozen;
 using System.IO.Compression;
 using System.IO.Hashing;
 using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Yabt.Core.Abstractions;
@@ -15,11 +14,10 @@ namespace Yabt.Sync.Implementation;
 internal sealed class ArchiveSynchronizer
 (
     ILogger<ArchiveSynchronizer> _logger,
-    IBackupRootLocator _backupRootLocator,
-    IFolderPolicyReader _folderPolicyReader,
+    IArchiveLocationResolver _locationResolver,
+    IRestoreDestinationFactory _restoreDestinationFactory,
     IEnumerable<IArchiveFormatHandler> formatHandlers,
     IEnumerable<IBackupRootStoreResolver> storeResolvers,
-    IEnumerable<ISourceRootObjectStoreResolver> sourceRootObjectStoreResolvers,
     IChangeManifestSerializer _changeManifestSerializer,
     IBackupRootSerializer _backupRootSerializer,
     ILogicalStateManifestSerializer _logicalStateManifestSerializer,
@@ -41,10 +39,6 @@ internal sealed class ArchiveSynchronizer
         resolver => resolver.StoreKind,
         StringComparer.Ordinal
     );
-
-    private readonly ISourceRootObjectStoreResolver _sourceRootObjectStoreResolver =
-        sourceRootObjectStoreResolvers.SingleOrDefault() ??
-        throw new YabtSyncException("Exactly one source root object store resolver must be registered.");
 
     private static readonly IReadOnlyDictionary<string, string> EmptyMetadata =
         new Dictionary<string, string>(StringComparer.Ordinal).ToFrozenDictionary(StringComparer.Ordinal);
@@ -156,7 +150,7 @@ internal sealed class ArchiveSynchronizer
     {
         _logger.LogTrace(nameof(RunRestoreOperationAsync));
 
-        if (string.IsNullOrWhiteSpace(request.DestinationRoot))
+        if (string.IsNullOrEmpty(request.DestinationRoot))
         {
             throw new YabtSyncException(
                 "Restore requires a filesystem destination selected with --destination-root.");
@@ -171,13 +165,12 @@ internal sealed class ArchiveSynchronizer
             restoreMaximumConcurrency);
 
         var context = await CreateRestoreContextAsync(request, cancellationToken);
-        var restoreTarget = new FileSystemRestoreTarget(
-            request.DestinationRoot,
-            _logger);
-        ValidateRestoreLocations(
-            context.DescriptorRootPath,
-            restoreTarget.RootPath,
-            context.LocalArchiveRootPath);
+        var restoreTarget = _restoreDestinationFactory.Create(request.DestinationRoot);
+        var destinationStore = restoreTarget.Store;
+        _locationResolver.ValidateRestoreLocations(
+            context.SourceLocation,
+            restoreTarget,
+            context.ArchiveStore);
 
         var changeManifestLoad = await ReadChangeManifestAsync(
             context.ArchiveStore,
@@ -197,7 +190,7 @@ internal sealed class ArchiveSynchronizer
         {
             rootDescriptorRestore = await InspectDestinationRootDescriptorAsync
             (
-                restoreTarget.RootPath,
+                restoreTarget,
                 context.ArchiveDocument,
                 request.ReplaceRootDescriptor,
                 cancellationToken
@@ -209,7 +202,7 @@ internal sealed class ArchiveSynchronizer
             rootDescriptorRestore = RootDescriptorRestore.None;
             destinationLayout = await GetRestoreDestinationLayoutAsync
             (
-                restoreTarget.RootPath,
+                restoreTarget,
                 context.Descriptor.Layout.HistPrefix,
                 cancellationToken
             );
@@ -217,8 +210,8 @@ internal sealed class ArchiveSynchronizer
 
         ValidateInternalLayoutPrefixes(destinationLayout);
         ValidateRestoreLayoutPaths(destinationLayout, restoreTarget);
-        var restoreRootNeedsCreation = !Directory.Exists(
-            GetRestoreLiveRootPath(restoreTarget.RootPath, destinationLayout));
+        var restoreRootNeedsCreation = !restoreTarget.DirectoryExists(
+            ObjectPath.Parse(destinationLayout.LivePrefix));
         await restoreTarget.EnsureSafeAsync(
             destinationLayout.LivePrefix,
             destinationLayout.HistPrefix,
@@ -241,7 +234,7 @@ internal sealed class ArchiveSynchronizer
         (
             context,
             restoreObjects,
-            restoreTarget,
+            restoreTarget.Namespace.Scope(ObjectPath.Parse(destinationLayout.LivePrefix)),
             useProjectionProvenance:
                 changeManifest.SchemaVersion == ArchiveChangeManifest.ExpectedSchemaVersion,
             cancellationToken
@@ -251,8 +244,6 @@ internal sealed class ArchiveSynchronizer
             destinationLayout,
             restoreTarget);
 
-        var destinationStore = _sourceRootObjectStoreResolver.ResolveSourceRoot(
-            restoreTarget.RootPath);
         if (destinationStore is not IArchiveMutableObjectStore mutableDestinationStore)
         {
             throw new YabtSyncException(
@@ -275,11 +266,12 @@ internal sealed class ArchiveSynchronizer
 
         if (mutationLock is not null)
         {
+            var preflightLayout = destinationLayout;
             if (context.ArchiveDocument is not null)
             {
                 rootDescriptorRestore = await InspectDestinationRootDescriptorAsync
                 (
-                    restoreTarget.RootPath,
+                    restoreTarget,
                     context.ArchiveDocument,
                     request.ReplaceRootDescriptor,
                     cancellationToken
@@ -291,9 +283,18 @@ internal sealed class ArchiveSynchronizer
                 rootDescriptorRestore = RootDescriptorRestore.None;
                 destinationLayout = await GetRestoreDestinationLayoutAsync
                 (
-                    restoreTarget.RootPath,
+                    restoreTarget,
                     context.Descriptor.Layout.HistPrefix,
                     cancellationToken
+                );
+            }
+
+            if (!HaveSameLayout(preflightLayout, destinationLayout))
+            {
+                throw new YabtSyncException
+                (
+                    "The destination layout changed while restore was preparing its plan. " +
+                        "Run restore again so paths are validated against the current destination namespace."
                 );
             }
 
@@ -320,7 +321,7 @@ internal sealed class ArchiveSynchronizer
 
         var blockedRestorePaths = failures
             .Select(failure => failure.RelativePath)
-            .ToHashSet(GetRestorePathComparer());
+            .ToHashSet(plan.Namespace.PathComparer);
 
         var logicalStateManifestLoad = await ReadLogicalStateManifestAsync(
             destinationStore,
@@ -409,39 +410,30 @@ internal sealed class ArchiveSynchronizer
 
     private async Task<ArchiveLayout> GetRestoreDestinationLayoutAsync
     (
-        string destinationRootPath,
+        IRestoreDestination destination,
         string defaultHistoryPrefix,
         CancellationToken cancellationToken
     )
     {
-        var descriptorPath = Path.Combine(
-            destinationRootPath,
-            BackupRootFileNames.Primary);
-        _logger.LogControlMetadataOperation("Checking", descriptorPath);
-        if (Directory.Exists(descriptorPath))
+        _logger.LogTrace(nameof(GetRestoreDestinationLayoutAsync));
+
+        if (destination.DirectoryExists(ObjectPath.Parse(BackupRootFileNames.Primary)))
         {
-            throw new YabtSyncException(
-                $"Restore destination metadata path '{descriptorPath}' must be a file, not a folder.");
+            throw new YabtSyncException("Restore destination metadata path must be a file, not a folder.");
         }
 
-        if (!File.Exists(descriptorPath))
+        if (!await destination.Store.ExistsAsync(BackupRootFileNames.Primary, cancellationToken))
         {
             return new ArchiveLayout(HistPrefix: defaultHistoryPrefix);
         }
 
-        var destinationLocation = await _backupRootLocator.LocateRootAsync(
-            destinationRootPath,
-            cancellationToken);
-        if (!string.Equals(
-                ResolvePhysicalPath(destinationLocation.RootPath),
-                ResolvePhysicalPath(destinationRootPath),
-                GetFileSystemPathComparison()))
-        {
-            throw new YabtSyncException(
-                $"Restore destination descriptor '{descriptorPath}' did not resolve to its own folder.");
-        }
-
-        return destinationLocation.Descriptor.Layout;
+        await using var content = await destination.Store.OpenReadAsync
+        (
+            BackupRootFileNames.Primary,
+            cancellationToken
+        );
+        var document = await _backupRootSerializer.ReadDocumentAsync(content.Content, cancellationToken);
+        return document.Descriptor.Layout;
     }
 
     private async Task<RestoreContext> CreateRestoreContextAsync
@@ -450,23 +442,20 @@ internal sealed class ArchiveSynchronizer
         CancellationToken cancellationToken
     )
     {
-        var descriptorRootPath = Path.GetFullPath(request.SourceRoot);
-        var sourceLocation = await _backupRootLocator.LocateRootAsync(
-            descriptorRootPath,
-            cancellationToken);
-        if (!string.Equals(
-                descriptorRootPath,
-                Path.GetFullPath(sourceLocation.RootPath),
-                GetFileSystemPathComparison()))
-        {
-            throw new YabtSyncException(
-                "Restore currently requires the source-root argument to be the folder containing .yabt-root.json.");
-        }
+        _logger.LogTrace(nameof(CreateRestoreContextAsync));
 
-        ValidateInternalLayoutPrefixes(sourceLocation.Descriptor.Layout);
-        var archiveStoreConfiguration = GetTargetStoreConfiguration(
-            sourceLocation.Descriptor,
-            request.TargetStoreId);
+        var sourceLocation = await _locationResolver.LocateSourceAsync
+        (
+            request.SourceRoot,
+            requireRoot: true,
+            cancellationToken
+        );
+        ValidateInternalLayoutPrefixes(sourceLocation.Root.Descriptor.Layout);
+        var archiveStoreConfiguration = GetTargetStoreConfiguration
+        (
+            sourceLocation.Root.Descriptor,
+            request.TargetStoreId
+        );
         if (!_storeResolvers.TryGetValue(archiveStoreConfiguration.Kind, out var archiveStoreResolver))
         {
             throw new YabtSyncException(
@@ -475,18 +464,13 @@ internal sealed class ArchiveSynchronizer
 
         return new
         (
-            descriptorRootPath,
-            archiveStoreResolver.ResolveStore(
-                archiveStoreConfiguration,
-                sourceLocation.RootPath),
-            sourceLocation.Descriptor,
-            sourceLocation.Document,
+            archiveStoreResolver.ResolveStore(archiveStoreConfiguration, sourceLocation.Root.RootPath),
+            sourceLocation.Root.Descriptor,
+            sourceLocation.Root.Document,
             ArchiveDocument: null,
             RootFormatHandler: null,
             RootIsPackaged: false,
-            TryResolveConfiguredLocalArchiveRootPath(
-                archiveStoreConfiguration,
-                sourceLocation.RootPath)
+            sourceLocation
         );
     }
 
@@ -565,23 +549,21 @@ internal sealed class ArchiveSynchronizer
 
     private async Task<RootDescriptorRestore> InspectDestinationRootDescriptorAsync
     (
-        string destinationRootPath,
+        IRestoreDestination destination,
         BackupRootDocument archiveDocument,
         bool replaceRootDescriptor,
         CancellationToken cancellationToken
     )
     {
-        var descriptorPath = Path.Combine(
-            destinationRootPath,
-            BackupRootFileNames.Primary);
+        var descriptorPath = BackupRootFileNames.Primary;
         _logger.LogControlMetadataOperation("Checking", descriptorPath);
-        if (Directory.Exists(descriptorPath))
+        if (destination.DirectoryExists(ObjectPath.Parse(descriptorPath)))
         {
             throw new YabtSyncException(
                 $"Restore destination metadata path '{descriptorPath}' must be a file, not a folder.");
         }
 
-        if (!File.Exists(descriptorPath))
+        if (!await destination.Store.ExistsAsync(descriptorPath, cancellationToken))
         {
             return new(NeedsWrite: true, MoveExistingToHistory: false);
         }
@@ -590,17 +572,13 @@ internal sealed class ArchiveSynchronizer
         try
         {
             _logger.LogControlMetadataOperation("Reading", descriptorPath);
-            await using var content = new FileStream
+            await using var content = await destination.Store.OpenReadAsync
             (
                 descriptorPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                DefaultBufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan
+                cancellationToken
             );
             destinationDocument = await _backupRootSerializer.ReadDocumentAsync(
-                content,
+                content.Content,
                 cancellationToken);
         }
         catch (Exception ex)
@@ -703,72 +681,6 @@ internal sealed class ArchiveSynchronizer
             "This archive change manifest predates durable root-format evidence, so YABT " +
                 "cannot safely distinguish a packaged root from a sole packaged child folder. " +
                 "Run backup once with the current YABT version before restoring it.");
-    }
-
-    private void ValidateRestoreLocations
-    (
-        string descriptorRootPath,
-        string destinationRootPath,
-        string? localArchiveRootPath
-    )
-    {
-        var descriptorRoot = EnsureTrailingDirectorySeparator(
-            ResolvePhysicalPath(descriptorRootPath));
-        var destinationRoot = EnsureTrailingDirectorySeparator(
-            ResolvePhysicalPath(destinationRootPath));
-        var comparison = GetFileSystemPathComparison();
-        if (!string.Equals(descriptorRoot, destinationRoot, comparison) &&
-            (descriptorRoot.StartsWith(destinationRoot, comparison) ||
-                destinationRoot.StartsWith(descriptorRoot, comparison)))
-        {
-            throw new YabtSyncException(
-                "Restore destination may be the configured source root itself, but it must not be " +
-                    "one of that root's ancestors or descendants. " +
-                    $"The source root resolves to '{descriptorRoot}', and the destination " +
-                    $"resolves to '{destinationRoot}'. Use a separate sibling folder instead.");
-        }
-
-        if (localArchiveRootPath is null) { return; }
-
-        var localArchiveRoot = EnsureTrailingDirectorySeparator(
-            ResolvePhysicalPath(localArchiveRootPath));
-        if (localArchiveRoot.StartsWith(destinationRoot, comparison) ||
-            destinationRoot.StartsWith(localArchiveRoot, comparison))
-        {
-            throw new YabtSyncException(
-                "Restore destination must not be the selected filesystem archive or one of its " +
-                    "ancestors or descendants.");
-        }
-    }
-
-    private static string? TryResolveConfiguredLocalArchiveRootPath
-    (
-        BackupRootStore store,
-        string descriptorRootPath
-    )
-    {
-        if (store.ProviderProperties is null) { return null; }
-
-        foreach (var providerProperty in store.ProviderProperties)
-        {
-            if (!string.Equals(
-                    providerProperty.Key,
-                    "rootPath",
-                    StringComparison.OrdinalIgnoreCase) ||
-                providerProperty.Value.ValueKind != JsonValueKind.String)
-            {
-                continue;
-            }
-
-            var configuredPath = providerProperty.Value.GetString();
-            if (string.IsNullOrWhiteSpace(configuredPath)) { return null; }
-
-            return Path.IsPathRooted(configuredPath) ?
-                Path.GetFullPath(configuredPath) :
-                Path.GetFullPath(configuredPath, descriptorRootPath);
-        }
-
-        return null;
     }
 
     private async Task<IReadOnlyList<ArchiveProjectedObject>> LoadRestoreObjectsAsync
@@ -876,14 +788,12 @@ internal sealed class ArchiveSynchronizer
     (
         RestoreContext context,
         IReadOnlyList<ArchiveProjectedObject> restoreObjects,
-        FileSystemRestoreTarget restoreTarget,
+        IObjectStoreNamespace destinationNamespace,
         bool useProjectionProvenance,
         CancellationToken cancellationToken
     )
     {
-        var pathComparer = OperatingSystem.IsWindows() ?
-            StringComparer.OrdinalIgnoreCase :
-            StringComparer.Ordinal;
+        var pathComparer = StringComparer.Ordinal;
         var filePaths = new HashSet<string>(pathComparer);
         var directoryPaths = new Dictionary<string, string>(pathComparer);
         var files = new List<ArchiveProjectedObject>();
@@ -901,7 +811,7 @@ internal sealed class ArchiveSynchronizer
                 {
                     AddRestoreDirectory(
                         directoryPath,
-                        restoreTarget,
+                        destinationNamespace,
                         filePaths,
                         directoryPaths);
                 }
@@ -925,7 +835,7 @@ internal sealed class ArchiveSynchronizer
                     projectedObject.RelativePath);
                 AddRestoreFilePath(
                     relativePath,
-                    restoreTarget,
+                    destinationNamespace,
                     filePaths,
                     directoryPaths);
                 files.Add(projectedObject with
@@ -1166,12 +1076,18 @@ internal sealed class ArchiveSynchronizer
                 .OrderBy(GetPathDepth)
                 .ThenBy(directoryPath => directoryPath, StringComparer.Ordinal)
                 .ToArray();
+            destinationNamespace.ValidateTree
+            (
+                files.Select(file => ObjectPath.Parse(file.RelativePath)),
+                directories.Select(ObjectPath.Parse)
+            );
             return new(
                 files,
                 directories,
                 emptyDirectories,
                 projections,
-                fileProjectionDependencies);
+                fileProjectionDependencies,
+                destinationNamespace);
         }
         catch (Exception)
         {
@@ -1229,28 +1145,6 @@ internal sealed class ArchiveSynchronizer
         return rootFormatHandler;
     }
 
-    private static FileStream CreateRestoreStagingFileStream
-    (
-        string path,
-        FileAccess access
-    )
-    {
-        var options = new FileStreamOptions
-        {
-            Mode = FileMode.CreateNew,
-            Access = access,
-            Share = FileShare.None,
-            BufferSize = DefaultBufferSize,
-            Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
-        };
-        if (!OperatingSystem.IsWindows())
-        {
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        }
-
-        return new(path, options);
-    }
-
     private static void TryDeleteRestoreTemporaryPath
     (
         ILogger logger,
@@ -1274,12 +1168,12 @@ internal sealed class ArchiveSynchronizer
     private static void AddRestoreFilePath
     (
         string relativePath,
-        FileSystemRestoreTarget restoreTarget,
+        IObjectStoreNamespace destinationNamespace,
         HashSet<string> filePaths,
         Dictionary<string, string> directoryPaths
     )
     {
-        restoreTarget.ValidateRelativePath(relativePath);
+        destinationNamespace.ValidatePath(ObjectPath.Parse(relativePath));
         if (!filePaths.Add(relativePath) || directoryPaths.ContainsKey(relativePath))
         {
             throw new YabtSyncException(
@@ -1303,14 +1197,14 @@ internal sealed class ArchiveSynchronizer
     private static void AddRestoreDirectory
     (
         string relativePath,
-        FileSystemRestoreTarget restoreTarget,
+        IObjectStoreNamespace destinationNamespace,
         HashSet<string> filePaths,
         Dictionary<string, string> directoryPaths
     )
     {
         if (string.IsNullOrEmpty(relativePath)) { return; }
 
-        restoreTarget.ValidateRelativePath(relativePath);
+        destinationNamespace.ValidatePath(ObjectPath.Parse(relativePath));
         if (filePaths.Contains(relativePath))
         {
             throw new YabtSyncException(
@@ -1336,24 +1230,7 @@ internal sealed class ArchiveSynchronizer
     (
         string directoryPath,
         Dictionary<string, string> directoryPaths
-    )
-    {
-        if (!directoryPaths.TryGetValue(directoryPath, out var existingDirectoryPath))
-        {
-            directoryPaths.Add(directoryPath, directoryPath);
-            return;
-        }
-
-        if (!string.Equals(
-                existingDirectoryPath,
-                directoryPath,
-                StringComparison.Ordinal))
-        {
-            throw new YabtSyncException(
-                $"Restore directory paths '{existingDirectoryPath}' and '{directoryPath}' " +
-                    "differ only by case and cannot both be represented on this filesystem.");
-        }
-    }
+    ) => directoryPaths.TryAdd(directoryPath, directoryPath);
 
     private async Task<RestoreReconciliation> CreateRestoreReconciliationAsync
     (
@@ -1366,9 +1243,7 @@ internal sealed class ArchiveSynchronizer
         CancellationToken cancellationToken
     )
     {
-        var pathComparer = OperatingSystem.IsWindows() ?
-            StringComparer.OrdinalIgnoreCase :
-            StringComparer.Ordinal;
+        var pathComparer = restorePlan.Namespace.PathComparer;
         var destinationState = await LoadRestoreDestinationStateAsync
         (
             destinationStore,
@@ -1628,7 +1503,7 @@ internal sealed class ArchiveSynchronizer
     (
         RestorePlan restorePlan,
         ArchiveLayout destinationLayout,
-        FileSystemRestoreTarget restoreTarget
+        IRestoreDestination restoreTarget
     )
     {
         foreach (var file in restorePlan.Files)
@@ -1660,7 +1535,7 @@ internal sealed class ArchiveSynchronizer
     private static void ValidateRestoreLayoutPaths
     (
         ArchiveLayout destinationLayout,
-        FileSystemRestoreTarget restoreTarget
+        IRestoreDestination restoreTarget
     )
     {
         var livePrefix = ArchiveLayout.NormalizeObjectPrefix(destinationLayout.LivePrefix);
@@ -1670,59 +1545,6 @@ internal sealed class ArchiveSynchronizer
         }
 
         restoreTarget.ValidateRelativePath(destinationLayout.HistPrefix);
-    }
-
-    private string ResolvePhysicalPath(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        _logger.LogObjectRead(fullPath, "filesystem path resolution");
-        try
-        {
-            var rootPath = Path.GetPathRoot(fullPath) ??
-                throw new IOException($"Path '{fullPath}' does not have a filesystem root.");
-            var relativePath = Path.GetRelativePath(rootPath, fullPath);
-            var segments = relativePath.Split(
-                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                StringSplitOptions.RemoveEmptyEntries);
-            var currentPath = rootPath;
-            for (var segmentIndex = 0; segmentIndex < segments.Length; segmentIndex++)
-            {
-                var candidatePath = Path.Combine(currentPath, segments[segmentIndex]);
-                FileSystemInfo? fileSystemInfo = Directory.Exists(candidatePath) ?
-                    new DirectoryInfo(candidatePath) :
-                    File.Exists(candidatePath) ?
-                        new FileInfo(candidatePath) :
-                        null;
-                if (fileSystemInfo is null)
-                {
-                    for (; segmentIndex < segments.Length; segmentIndex++)
-                    {
-                        currentPath = Path.Combine(currentPath, segments[segmentIndex]);
-                    }
-
-                    break;
-                }
-
-                if ((fileSystemInfo.Attributes & FileAttributes.ReparsePoint) == 0)
-                {
-                    currentPath = candidatePath;
-                    continue;
-                }
-
-                var linkTarget = fileSystemInfo.ResolveLinkTarget(returnFinalTarget: true) ??
-                    throw new IOException(
-                        $"Reparse point '{candidatePath}' does not expose a resolvable target.");
-                currentPath = Path.GetFullPath(linkTarget.FullName);
-            }
-
-            return Path.GetFullPath(currentPath);
-        }
-        catch (Exception ex)
-        {
-            throw new YabtSyncException(
-                $"Restore could not safely resolve filesystem path '{fullPath}'.",
-                ex);
-        }
     }
 
     private async Task<RestoreDestinationState> LoadRestoreDestinationStateAsync
@@ -1786,37 +1608,33 @@ internal sealed class ArchiveSynchronizer
         return new(files, directories);
     }
 
-    private async Task<RestoreStagingDirectory> CreateRestoreStagingDirectoryAsync
+    private async Task<IObjectStoreStagingArea> CreateRestoreStagingDirectoryAsync
     (
-        FileSystemRestoreTarget restoreTarget,
+        IRestoreDestination restoreTarget,
         CancellationToken cancellationToken
     )
     {
+        _logger.LogTrace(nameof(CreateRestoreStagingDirectoryAsync));
+
         try
         {
-            var stagingRootPath = await restoreTarget.CreateStagingDirectoryAsync(
-                cancellationToken);
-            return new(stagingRootPath, _logger);
+            return await restoreTarget.CreateStagingAreaAsync(cancellationToken);
         }
         catch (Exception ex)
         {
-            if (ex is YabtSyncException) { throw; }
-
-            throw new YabtSyncException(
-                "The restore staging directory could not be created.",
-                ex);
+            throw new YabtSyncException("The restore staging area could not be created.", ex);
         }
     }
 
     private async Task<PreparedRestoreFile> PrepareRestoreFileAsync
     (
         ArchiveProjectedObject file,
-        RestoreStagingDirectory? stagingDirectory,
+        IObjectStoreStagingArea? stagingDirectory,
         bool stageForWrite,
         CancellationToken cancellationToken
     )
     {
-        string? stagingPath = null;
+        string? stagingToken = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1845,19 +1663,17 @@ internal sealed class ArchiveSynchronizer
                         projectedContent.Content,
                         Stream.Null,
                         cancellationToken);
-                    return new(file, stagingPath: null, _logger);
+                    return new(file, stagingToken: null, stagingDirectory, _logger);
                 }
 
-                stagingPath = (stagingDirectory ??
+                stagingToken = (stagingDirectory ??
                     throw new YabtSyncException(
                         "A restore file write requires a staging directory."))
-                    .CreateFilePath();
+                    .CreateFileToken();
                 _logger.LogControlMetadataOperation(
                     "Creating restore staging file",
-                    stagingPath);
-                await using (var stagedContent = CreateRestoreStagingFileStream(
-                    stagingPath,
-                    FileAccess.Write))
+                    stagingToken);
+                await using (var stagedContent = stagingDirectory!.OpenWrite(stagingToken))
                 {
                     await CopyRestoreContentToStagingAsync(
                         file,
@@ -1870,19 +1686,19 @@ internal sealed class ArchiveSynchronizer
 
             _logger.LogControlMetadataOperation(
                 "Finished writing restore staging file",
-                stagingPath);
-            var preparedFile = new PreparedRestoreFile(file, stagingPath, _logger);
-            stagingPath = null;
+                stagingToken);
+            var preparedFile = new PreparedRestoreFile(file, stagingToken, stagingDirectory, _logger);
+            stagingToken = null;
             return preparedFile;
         }
         catch (Exception ex)
         {
-            if (stagingPath is not null)
+            if (stagingToken is not null)
             {
                 TryDeleteRestoreTemporaryPath(
                     _logger,
-                    stagingPath,
-                    () => File.Delete(stagingPath));
+                    stagingToken,
+                    () => stagingDirectory!.DeleteFile(stagingToken));
             }
 
             if (ex is YabtSyncException) { throw; }
@@ -1952,7 +1768,7 @@ internal sealed class ArchiveSynchronizer
         ArchiveLayout destinationLayout,
         RestorePlan plan,
         RestoreReconciliation reconciliation,
-        FileSystemRestoreTarget restoreTarget,
+        IRestoreDestination restoreTarget,
         LogicalStateManifestLoad logicalStateManifestLoad,
         RootDescriptorRestore rootDescriptorRestore,
         BackupRootDocument? archiveRootDocument,
@@ -2038,7 +1854,7 @@ internal sealed class ArchiveSynchronizer
             foreach (var historyMove in reconciliation.HistoryMoves)
             {
                 if (!pendingHistoryMoves.Contains(historyMove) ||
-                    !RestoreHistoryMoveBlocksFile(historyMove, file.RelativePath))
+                    !RestoreHistoryMoveBlocksFile(historyMove, file.RelativePath, plan.Namespace.PathComparer))
                 {
                     continue;
                 }
@@ -2094,8 +1910,8 @@ internal sealed class ArchiveSynchronizer
         }
 
         foreach (var directoryPath in reconciliation.ChangedDesiredPaths
-                     .Where(path => plan.Directories.Contains(path, GetRestorePathComparer()) &&
-                         !plan.EmptyDirectories.Contains(path, GetRestorePathComparer())))
+                     .Where(path => plan.Directories.Contains(path, plan.Namespace.PathComparer) &&
+                         !plan.EmptyDirectories.Contains(path, plan.Namespace.PathComparer)))
         {
             LogRestoreItemWritten("changed", "directory", directoryPath);
         }
@@ -2206,14 +2022,14 @@ internal sealed class ArchiveSynchronizer
         RestorePlan plan,
         RestoreReconciliation reconciliation,
         ArchiveLayout destinationLayout,
-        FileSystemRestoreTarget restoreTarget,
+        IRestoreDestination restoreTarget,
         bool byteForByte,
         int restoreMaximumConcurrency,
         Func<ArchiveProjectedObject, CancellationToken, Task> beforeFileCommitAsync,
         CancellationToken cancellationToken
     )
     {
-        var pathComparer = GetRestorePathComparer();
+        var pathComparer = plan.Namespace.PathComparer;
         var alreadyFailedPaths = reconciliation.Failures
             .Select(failure => failure.RelativePath)
             .ToHashSet(pathComparer);
@@ -2232,7 +2048,7 @@ internal sealed class ArchiveSynchronizer
 
         var failures = new List<SyncItemFailure>();
 
-        RestoreStagingDirectory? stagingDirectory = null;
+        IObjectStoreStagingArea? stagingDirectory = null;
         if (filesToWrite.Count != 0)
         {
             stagingDirectory = await CreateRestoreStagingDirectoryAsync(
@@ -2293,7 +2109,7 @@ internal sealed class ArchiveSynchronizer
                     {
                         await using (preparedFile)
                         {
-                            if (preparedFile.StagingPath is not null)
+                            if (preparedFile.StagingToken is not null)
                             {
                                 await beforeFileCommitAsync(
                                     preparedFile.File,
@@ -2301,7 +2117,7 @@ internal sealed class ArchiveSynchronizer
                                 await restoreTarget.CommitStagedFileAsync(
                                     destinationLayout.ToLiveObjectKey(
                                         preparedFile.File.RelativePath),
-                                    preparedFile.StagingPath,
+                                    preparedFile.StagingToken,
                                     preparedFile.File.LastModifiedUtc,
                                     cancellationToken);
                                 preparedFile.MarkCommitted();
@@ -2358,21 +2174,21 @@ internal sealed class ArchiveSynchronizer
     private static bool RestoreHistoryMoveBlocksFile
     (
         RestoreHistoryMove historyMove,
-        string fileRelativePath
+        string fileRelativePath,
+        StringComparer comparer
     )
     {
-        var comparison = OperatingSystem.IsWindows() ?
-            StringComparison.OrdinalIgnoreCase :
-            StringComparison.Ordinal;
-        var historyPath = ArchiveLayout.NormalizeObjectKey(historyMove.RelativePath);
-        var filePath = ArchiveLayout.NormalizeObjectKey(fileRelativePath);
-        if (string.Equals(historyPath, filePath, comparison))
+        var historyPath = ObjectPath.Parse(historyMove.RelativePath);
+        var filePath = ObjectPath.Parse(fileRelativePath);
+        if (comparer.Equals(historyPath.Value, filePath.Value)) { return true; }
+        if (historyMove.IsFolder) { return false; }
+
+        for (var parent = filePath.Parent; !parent.IsRoot; parent = parent.Parent)
         {
-            return true;
+            if (comparer.Equals(historyPath.Value, parent.Value)) { return true; }
         }
 
-        return !historyMove.IsFolder &&
-            filePath.StartsWith($"{historyPath}/", comparison);
+        return false;
     }
 
     private async Task<bool> PrepareRestoreChangeManifestMutationAsync
@@ -2511,9 +2327,7 @@ internal sealed class ArchiveSynchronizer
         CancellationToken cancellationToken
     )
     {
-        var pathComparer = OperatingSystem.IsWindows() ?
-            StringComparer.OrdinalIgnoreCase :
-            StringComparer.Ordinal;
+        var pathComparer = plan.Namespace.PathComparer;
         var destinationState = await LoadRestoreDestinationStateAsync
         (
             destinationStore,
@@ -2673,50 +2487,35 @@ internal sealed class ArchiveSynchronizer
         CancellationToken cancellationToken
     )
     {
+        _logger.LogTrace(nameof(CreateContextAsync));
+
         ArgumentNullException.ThrowIfNull(request);
-
-        var sourceRootPath = Path.GetFullPath(request.SourceRoot);
-        var sourceLocation = await _backupRootLocator.LocateRootAsync(
-            sourceRootPath,
-            cancellationToken);
-        var sourceDescriptor = sourceLocation.Descriptor;
+        var sourceLocation = await _locationResolver.LocateSourceAsync
+        (
+            request.SourceRoot,
+            cancellationToken: cancellationToken
+        );
+        var sourceDescriptor = sourceLocation.Root.Descriptor;
         ValidateInternalLayoutPrefixes(sourceDescriptor.Layout);
-        var targetStoreConfiguration = GetTargetStoreConfiguration(
-            sourceDescriptor,
-            request.TargetStoreId);
-
+        var targetStoreConfiguration = GetTargetStoreConfiguration(sourceDescriptor, request.TargetStoreId);
         if (!_storeResolvers.TryGetValue(targetStoreConfiguration.Kind, out var targetStoreResolver))
         {
             throw new YabtSyncException(
                 $"No object store resolver is registered for store kind '{targetStoreConfiguration.Kind}'.");
         }
 
-        var sourceStore = _sourceRootObjectStoreResolver.ResolveSourceRoot(sourceLocation.RootPath);
-        var targetStore = targetStoreResolver.ResolveStore(
-            targetStoreConfiguration,
-            sourceLocation.RootPath);
-        var sourcePrefix = CreateSourcePrefix(sourceRootPath, sourceLocation);
-        ConfigureSourceDirectoryTraversal
+        var targetStore = targetStoreResolver.ResolveStore
         (
-            sourceStore,
-            sourceLocation,
-            targetStoreConfiguration
+            targetStoreConfiguration,
+            sourceLocation.Root.RootPath
         );
-
-        // Validate the complete selected path before the metadata reader opens its policy.
-        // This also validates a link that was selected directly rather than reached by listing.
-        if (sourceStore is ISourceDirectoryTraversal)
-        {
-            await sourceStore.ExistsAsync
-            (
-                ArchiveLayout.CombinePrefixAndRelativePath(sourcePrefix, FolderPolicyFileNames.Primary),
-                cancellationToken
-            );
-        }
-
-        var policy = await _folderPolicyReader.ReadPolicyAsync(
-            sourceRootPath,
-            cancellationToken);
+        _locationResolver.ConfigureSourceTraversal(sourceLocation, targetStore);
+        var policy = await _locationResolver.ReadPolicyAsync
+        (
+            sourceLocation,
+            sourceLocation.SelectionPrefix,
+            cancellationToken
+        );
         if (!_formatHandlers.TryGetValue(policy.Format, out var formatHandler))
         {
             throw new YabtSyncException($"No archive format handler is registered for format '{policy.Format}'.");
@@ -2724,60 +2523,16 @@ internal sealed class ArchiveSynchronizer
 
         return new
         (
-            sourceRootPath,
-            sourcePrefix,
-            sourceStore,
+            sourceLocation.DisplayName,
+            sourceLocation.SourcePrefix.Value,
+            sourceLocation.SourceStore,
             targetStore,
             sourceDescriptor,
             sourceDescriptor,
-            sourceLocation.Document,
+            sourceLocation.Root.Document,
             policy,
-            formatHandler
-        );
-    }
-
-    private void ConfigureSourceDirectoryTraversal
-    (
-        IObjectStore sourceStore,
-        BackupRootLocation sourceLocation,
-        BackupRootStore targetStoreConfiguration
-    )
-    {
-        _logger.LogTrace(nameof(ConfigureSourceDirectoryTraversal));
-
-        if (sourceStore is not ISourceDirectoryTraversal sourceTraversal) { return; }
-
-        var forbiddenRoots = new List<string>
-        {
-            Path.Combine(sourceLocation.RootPath, sourceLocation.Descriptor.Layout.HistPrefix),
-            Path.Combine(sourceLocation.RootPath, ArchiveInternalFolderNames.TemporaryUploads),
-        };
-        if (string.Equals(targetStoreConfiguration.Kind, "fileSystem", StringComparison.Ordinal))
-        {
-            var archiveRoot = TryResolveConfiguredLocalArchiveRootPath
-            (
-                targetStoreConfiguration,
-                sourceLocation.RootPath
-            );
-            if (archiveRoot is null)
-            {
-                throw new YabtSyncException
-                (
-                    "The filesystem archive root could not be resolved for source directory-link safety checks."
-                );
-            }
-
-            forbiddenRoots.Add(archiveRoot);
-        }
-
-        sourceTraversal.ConfigureSourceTraversal
-        (
-            (folderPrefix, cancellationToken) => _folderPolicyReader.ReadPolicyAsync
-            (
-                Path.Combine(sourceLocation.RootPath, folderPrefix.Replace('/', Path.DirectorySeparatorChar)),
-                cancellationToken
-            ),
-            forbiddenRoots
+            formatHandler,
+            sourceLocation
         );
     }
 
@@ -2835,40 +2590,6 @@ internal sealed class ArchiveSynchronizer
         }
 
         return firstStore;
-    }
-
-    private static string? CreateSourcePrefix
-    (
-        string sourceRootPath,
-        BackupRootLocation sourceLocation
-    )
-    {
-        var relativePath = ToArchiveRelativePath(
-            Path.GetRelativePath(sourceLocation.RootPath, sourceRootPath));
-        var livePrefix = ArchiveLayout.NormalizeObjectKey(sourceLocation.Descriptor.Layout.LivePrefix);
-
-        if (string.IsNullOrEmpty(relativePath))
-        {
-            return livePrefix;
-        }
-
-        if (string.IsNullOrEmpty(livePrefix) ||
-            ArchiveLayout.IsUnderPrefix(relativePath, livePrefix))
-        {
-            return relativePath;
-        }
-
-        return ArchiveLayout.CombinePrefixAndRelativePath(livePrefix, relativePath);
-    }
-
-    private static string ToArchiveRelativePath(string relativePath)
-    {
-        if (string.Equals(relativePath, ".", StringComparison.Ordinal))
-        {
-            return string.Empty;
-        }
-
-        return ArchiveLayout.NormalizeObjectKey(relativePath);
     }
 
     private async Task<SyncRunResult> ApplyProjectionAsync
@@ -3327,9 +3048,29 @@ internal sealed class ArchiveSynchronizer
         ArchiveReconciliationTraversal reconciliationTraversal;
         try
         {
+            // Validate the entire desired namespace before the reconciler may mutate live data.
+            // Content remains lazy; this snapshot contains only projection metadata and openers.
+            var desiredObjects = new List<ArchiveProjectedObject>();
+            await foreach (var projectedObject in projectedObjects.WithCancellation(cancellationToken))
+            {
+                ValidateProjectedLiveObjectPath
+                (
+                    projectedObject.RelativePath,
+                    context.TargetDescriptor.Layout
+                );
+                desiredObjects.Add(projectedObject);
+            }
+
+            context.TargetStore.Namespace
+                .Scope(ObjectPath.Parse(context.TargetDescriptor.Layout.LivePrefix))
+                .ValidateTree
+                (
+                    desiredObjects.Select(item => ObjectPath.Parse(item.RelativePath)),
+                    []
+                );
             reconciliationTraversal = await ArchiveReconciler.ReconcileAsync
             (
-                projectedObjects,
+                desiredObjects,
                 explicitDirectories: null,
                 StringComparer.Ordinal,
                 relativePath => ValidateProjectedLiveObjectPath(
@@ -3648,6 +3389,8 @@ internal sealed class ArchiveSynchronizer
 
     private ArchiveProjectionRequest CreateProjectionRequest(ArchiveSyncContext context)
     {
+        _logger.LogTrace(nameof(CreateProjectionRequest));
+
         var filteredSourceStore = new ArchiveFilteredObjectStore
         (
             context.SourceStore,
@@ -3657,9 +3400,14 @@ internal sealed class ArchiveSynchronizer
         var projectionSourceStore = new ArchiveProjectionObjectStore
         (
             filteredSourceStore,
-            context.SourceRoot,
+            context.SourceDisplayName,
             context.SourcePrefix,
-            _folderPolicyReader,
+            (prefix, cancellationToken) => _locationResolver.ReadPolicyAsync
+            (
+                context.SourceLocation,
+                ObjectPath.Parse(prefix),
+                cancellationToken
+            ),
             _formatHandlers
         );
 
@@ -3668,7 +3416,7 @@ internal sealed class ArchiveSynchronizer
             projectionSourceStore,
             context.SourcePrefix,
             context.Policy,
-            context.SourceRoot
+            context.SourceDisplayName
         );
     }
 
@@ -4088,12 +3836,12 @@ internal sealed class ArchiveSynchronizer
     )
     {
         ArchiveObjectContent? sourceContent = null;
-        FileStream? replayContent = null;
+        Stream? replayContent = null;
         try
         {
             LogObjectReadOperation(relativePath, purpose);
             sourceContent = await projectedObject.OpenContentAsync(cancellationToken);
-            replayContent = CreateComparisonReplayStream();
+            replayContent = _restoreDestinationFactory.CreateComparisonReplayStream();
             await sourceContent.Content.CopyToAsync(
                 replayContent,
                 DefaultBufferSize,
@@ -4437,7 +4185,7 @@ internal sealed class ArchiveSynchronizer
         }
 
         ArchiveObjectContent? sourceContent = null;
-        FileStream? replayContent = null;
+        Stream? replayContent = null;
         try
         {
             try
@@ -4448,7 +4196,7 @@ internal sealed class ArchiveSynchronizer
                 sourceContent = await projectedObject.OpenContentAsync(cancellationToken);
                 if (prepareChangedContent)
                 {
-                    replayContent = CreateComparisonReplayStream();
+                    replayContent = _restoreDestinationFactory.CreateComparisonReplayStream();
                 }
 
                 StreamComparison streamComparison;
@@ -4721,31 +4469,6 @@ internal sealed class ArchiveSynchronizer
             ArrayPool<byte>.Shared.Return(sourceBuffer);
             ArrayPool<byte>.Shared.Return(targetBuffer);
         }
-    }
-
-    private static FileStream CreateComparisonReplayStream()
-    {
-        // This private local replay is operation-scoped and distinct from a target provider's
-        // .yabt-tmp upload staging. DeleteOnClose removes it on every normal disposal path.
-        var temporaryPath = Path.Combine(
-            Path.GetTempPath(),
-            $"yabt-source-replay-{Guid.NewGuid():N}.tmp");
-        var options = new FileStreamOptions
-        {
-            Mode = FileMode.CreateNew,
-            Access = FileAccess.ReadWrite,
-            Share = FileShare.None,
-            BufferSize = DefaultBufferSize,
-            Options = FileOptions.Asynchronous |
-                FileOptions.SequentialScan |
-                FileOptions.DeleteOnClose,
-        };
-        if (!OperatingSystem.IsWindows())
-        {
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        }
-
-        return new FileStream(temporaryPath, options);
     }
 
     private static async Task<int> FillBufferAsync
@@ -5488,27 +5211,9 @@ internal sealed class ArchiveSynchronizer
     ) => reconciliation.ChangedDesiredPaths.Contains(relativePath) ? "changed" : "new";
 
     private static string GetRestoreItemKind(RestorePlan plan, string relativePath) =>
-        plan.Directories.Contains(relativePath, GetRestorePathComparer()) ?
+        plan.Directories.Contains(relativePath, plan.Namespace.PathComparer) ?
             "directory" :
             "file";
-
-    private static StringComparer GetRestorePathComparer() => OperatingSystem.IsWindows() ?
-        StringComparer.OrdinalIgnoreCase :
-        StringComparer.Ordinal;
-
-    private static string GetRestoreLiveRootPath
-    (
-        string destinationRootPath,
-        ArchiveLayout destinationLayout
-    )
-    {
-        var liveRootKey = destinationLayout.ToLiveObjectKey(string.Empty);
-        return string.IsNullOrEmpty(liveRootKey) ?
-            destinationRootPath :
-            Path.Combine(
-                destinationRootPath,
-                liveRootKey.Replace('/', Path.DirectorySeparatorChar));
-    }
 
     private static bool IsYabtControlMetadataPath
     (
@@ -5549,15 +5254,6 @@ internal sealed class ArchiveSynchronizer
         var directoryPath = GetParentPrefix(markerRelativePath);
         return string.IsNullOrEmpty(directoryPath) ? "." : directoryPath;
     }
-
-    private static string EnsureTrailingDirectorySeparator(string path) =>
-        Path.EndsInDirectorySeparator(path) ?
-            path :
-            $"{path}{Path.DirectorySeparatorChar}";
-
-    private static StringComparison GetFileSystemPathComparison() => OperatingSystem.IsWindows() ?
-        StringComparison.OrdinalIgnoreCase :
-        StringComparison.Ordinal;
 
     private static string BuildSummaryMessage
     (
@@ -5707,14 +5403,13 @@ internal sealed class ArchiveSynchronizer
 
     private sealed record RestoreContext
     (
-        string DescriptorRootPath,
         IObjectStore ArchiveStore,
         BackupRootDescriptor Descriptor,
         BackupRootDocument? SourceDocument,
         BackupRootDocument? ArchiveDocument,
         IArchiveFormatHandler? RootFormatHandler,
         bool RootIsPackaged,
-        string? LocalArchiveRootPath
+        ArchiveSourceLocation SourceLocation
     );
 
     private sealed record RestoreDestinationFile
@@ -5794,9 +5489,12 @@ internal sealed class ArchiveSynchronizer
         IReadOnlyList<string> _emptyDirectories,
         IReadOnlyList<ArchiveRestoreProjection> _projections,
         IReadOnlyDictionary<string, IReadOnlyList<ArchiveRestoreProjection>>
-            _fileProjectionDependencies
+            _fileProjectionDependencies,
+        IObjectStoreNamespace _namespace
     ) : IAsyncDisposable
     {
+        public IObjectStoreNamespace Namespace => _namespace;
+
         public IReadOnlyList<ArchiveProjectedObject> Files => _files;
 
         public IReadOnlyList<string> Directories => _directories;
@@ -5898,63 +5596,39 @@ internal sealed class ArchiveSynchronizer
         }
     }
 
-    private sealed class RestoreStagingDirectory
-    (
-        string _rootPath,
-        ILogger _logger
-    ) : IAsyncDisposable
-    {
-        public string CreateFilePath()
-        {
-            _logger.LogTrace(nameof(CreateFilePath));
-
-            return Path.Combine(_rootPath, $"{Guid.NewGuid():N}.tmp");
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            _logger.LogTrace(nameof(DisposeAsync));
-
-            TryDeleteRestoreTemporaryPath(
-                _logger,
-                _rootPath,
-                () => Directory.Delete(_rootPath));
-            return ValueTask.CompletedTask;
-        }
-    }
-
     private sealed class PreparedRestoreFile
     (
         ArchiveProjectedObject _file,
-        string? stagingPath,
+        string? stagingToken,
+        IObjectStoreStagingArea? _stagingArea,
         ILogger _logger
     ) : IAsyncDisposable
     {
-        private string? _stagingPath = stagingPath;
+        private string? _stagingToken = stagingToken;
 
         public ArchiveProjectedObject File => _file;
 
-        public string? StagingPath => _stagingPath;
+        public string? StagingToken => _stagingToken;
 
         public void MarkCommitted()
         {
             _logger.LogTrace(nameof(MarkCommitted));
 
-            _stagingPath = null;
+            _stagingToken = null;
         }
 
         public ValueTask DisposeAsync()
         {
             _logger.LogTrace(nameof(DisposeAsync));
 
-            if (_stagingPath is not null)
+            if (_stagingToken is not null)
             {
-                var stagingPath = _stagingPath;
+                var stagingToken = _stagingToken;
                 TryDeleteRestoreTemporaryPath(
                     _logger,
-                    stagingPath,
-                    () => System.IO.File.Delete(stagingPath));
-                _stagingPath = null;
+                    stagingToken,
+                    () => _stagingArea!.DeleteFile(stagingToken));
+                _stagingToken = null;
             }
 
             return ValueTask.CompletedTask;

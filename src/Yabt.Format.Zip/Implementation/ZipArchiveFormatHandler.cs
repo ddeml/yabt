@@ -568,7 +568,7 @@ internal sealed class ZipArchiveFormatHandler
                 $"ZIP package '{artifact.RelativePath}' has unsupported format provenance.");
         }
 
-        var packageFileName = Path.GetFileName(artifact.RelativePath);
+        var packageFileName = ObjectPath.Parse(artifact.RelativePath).Name;
         if (!string.Equals(
                 manifest.PackageName,
                 packageFileName,
@@ -717,7 +717,7 @@ internal sealed class ZipArchiveFormatHandler
     {
         packageFolderName = string.Empty;
         packageFingerprintToken = string.Empty;
-        var fileName = Path.GetFileName(relativePath);
+        var fileName = ObjectPath.Parse(relativePath).Name;
         var tokenSeparator = $".{ArchiveHash.AlgorithmName}-";
         var tokenIndex = fileName.LastIndexOf(tokenSeparator, StringComparison.Ordinal);
         if (tokenIndex <= 0 ||
@@ -1923,24 +1923,9 @@ internal sealed class ZipArchiveFormatHandler
         string fileNameHash
     )
     {
-        var sourceName = Path.GetFileName(
-            ArchiveLayout.NormalizeObjectKey(sourceDisplayName ?? sourcePrefix));
-        var safeSourceName = SanitizeFileName(string.IsNullOrWhiteSpace(sourceName) ? "root" : sourceName);
-
-        return $"{safeSourceName}.{fileNameHash}.zip";
-    }
-
-    private static string SanitizeFileName(string value)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var builder = new StringBuilder(value.Length);
-
-        foreach (var character in value)
-        {
-            builder.Append(invalid.Contains(character) ? '_' : character);
-        }
-
-        return builder.ToString();
+        var sourceName = ObjectPath.Parse(sourceDisplayName ?? sourcePrefix).Name;
+        var packageSourceName = string.IsNullOrEmpty(sourceName) ? "root" : sourceName;
+        return $"{packageSourceName}.{fileNameHash}.zip";
     }
 
     private sealed record ZipSourceObject

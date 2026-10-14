@@ -15,6 +15,14 @@ These JSON documents are durable, inspectable evidence. They do not replace the
 actual files and package objects as the source of truth, and their xxHash128
 self-hashes detect accidental damage rather than malicious modification.
 
+Paths preserve exact name components, including leading, trailing, and
+whitespace-only names. Canonical paths use `/` separators; only the empty
+string represents the root where that field allows it. Rooted paths, drive
+prefixes, empty components, `.`/`..`, backslashes, and NUL are invalid in stored
+manifest paths. A provider may reject an otherwise valid name if its filesystem
+or service cannot represent it exactly. Such names are never silently trimmed
+or renamed during backup or restore.
+
 ## Live Change Manifest
 
 The live change manifest is stored at the archive root, outside an explicit

@@ -27,7 +27,7 @@ internal sealed class FileSystemBackupRootStoreResolver
         }
 
         var rootPath = GetStringProviderProperty(store, "rootPath");
-        if (string.IsNullOrWhiteSpace(rootPath))
+        if (string.IsNullOrEmpty(rootPath))
         {
             throw new YabtFileSystemException(
                 $"Filesystem object store '{store.Id}' requires a rootPath provider property.");
@@ -43,10 +43,12 @@ internal sealed class FileSystemBackupRootStoreResolver
 
     public IObjectStore ResolveSourceRoot(string rootPath)
     {
-        if (string.IsNullOrWhiteSpace(rootPath))
+        if (string.IsNullOrEmpty(rootPath))
         {
             throw new YabtFileSystemException("Source root object store requires a root path.");
         }
+
+        FileSystemNativePath.ValidateSpelling(rootPath);
 
         return CreateStore(new FileSystemObjectStoreOptions
         {
@@ -129,6 +131,7 @@ internal sealed class FileSystemBackupRootStoreResolver
         string configuredPath
     )
     {
+        FileSystemNativePath.ValidateSpelling(configuredPath);
         if (Path.IsPathRooted(configuredPath))
         {
             return Path.GetFullPath(configuredPath);

@@ -694,7 +694,7 @@ internal sealed class WebDavObjectStore
         return request;
     }
 
-    private Uri GetObjectUri(string key)
+    internal Uri GetObjectUri(string key)
     {
         var pathContext = GetPathContext();
         return BuildUri(
@@ -761,10 +761,66 @@ internal sealed class WebDavObjectStore
 
     private static List<string> NormalizeUriPathSegments(string value)
     {
-        var segments = SplitPathSegments(value);
-        return segments
-            .Select(Uri.UnescapeDataString)
-            .ToList();
+        if (value is "" or "/") { return []; }
+
+        // The outer slash belongs to the URI/collection syntax, not to an object name.
+        var path = value.StartsWith('/') ? value[1..] : value;
+        if (path.EndsWith('/')) { path = path[..^1]; }
+
+        var result = new List<string>();
+        foreach (var encodedSegment in path.Split('/'))
+        {
+            var segment = Uri.UnescapeDataString(encodedSegment);
+            if (segment is "" or "." or ".." || segment.IndexOfAny(['/', '\\', '\0']) >= 0)
+            {
+                throw new YabtWebDavException
+                (
+                    $"WebDAV URI path '{value}' cannot be represented without changing an object name."
+                );
+            }
+
+            result.Add(segment);
+        }
+
+        return result;
+    }
+
+    private static void ValidateObservedHref(string href)
+    {
+        if (!string.Equals(href, href.Trim(' ', '\t', '\r', '\n'), StringComparison.Ordinal) ||
+            href.IndexOfAny(['\\', '?', '#']) >= 0)
+        {
+            throw new YabtWebDavException
+            (
+                $"WebDAV href '{href}' cannot be represented without changing its resource identity."
+            );
+        }
+
+        var authorityStart = href.StartsWith("//", StringComparison.Ordinal) ? 2 : 0;
+        var schemeSeparator = href.IndexOf(':');
+        if (schemeSeparator >= 0 && Uri.CheckSchemeName(href[..schemeSeparator]))
+        {
+            if (!href[schemeSeparator..].StartsWith("://", StringComparison.Ordinal))
+            {
+                throw new YabtWebDavException
+                (
+                    $"WebDAV href '{href}' must use a complete absolute URI or a relative resource path."
+                );
+            }
+
+            authorityStart = schemeSeparator + 3;
+        }
+
+        var path = href;
+        if (authorityStart != 0)
+        {
+            var pathStart = href.IndexOf('/', authorityStart);
+            path = pathStart < 0 ? string.Empty : href[pathStart..];
+        }
+
+        // System.Uri removes dot segments and rewrites backslashes before exposing AbsolutePath.
+        // Validate the server's original path first so those names can never become another object.
+        _ = NormalizeUriPathSegments(path);
     }
 
     private static string NormalizeObjectKey(string? value)
@@ -792,7 +848,8 @@ internal sealed class WebDavObjectStore
 
     private static string[] NormalizePathSegments(string? value)
     {
-        return SplitPathSegments(NormalizeObjectPrefix(value));
+        var normalized = NormalizeObjectPrefix(value);
+        return string.IsNullOrEmpty(normalized) ? [] : normalized.Split('/');
     }
 
     private static void ValidateExpectedContentHash(string expectedContentHash)
@@ -829,22 +886,7 @@ internal sealed class WebDavObjectStore
         }
     }
 
-    private static string[] SplitPathSegments(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return [];
-        }
-
-        return value
-            .Replace('\\', '/')
-            .Trim('/')
-            .Split(
-                '/',
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-    }
-
-    private static List<ArchiveFolderItem> ToArchiveFolderItems
+    internal static List<ArchiveFolderItem> ToArchiveFolderItems
     (
         WebDavPathContext pathContext,
         XDocument document,
@@ -859,11 +901,12 @@ internal sealed class WebDavObjectStore
         foreach (var response in document.Descendants(DavNamespace + "response"))
         {
             var href = response.Element(DavNamespace + "href")?.Value;
-            if (string.IsNullOrWhiteSpace(href))
+            if (string.IsNullOrEmpty(href))
             {
                 continue;
             }
 
+            ValidateObservedHref(href);
             var hrefSegments = NormalizeUriPathSegments(new Uri(pathContext.Endpoint, href).AbsolutePath);
             if (!StartsWithSegments(hrefSegments, rootSegments) ||
                 hrefSegments.Count == rootSegments.Length)

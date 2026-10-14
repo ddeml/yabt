@@ -12,6 +12,8 @@ internal sealed class ArchiveFilteredObjectStore
     IEnumerable<string>? excludedObjectPrefixes = null
 ) : IReadOnlyObjectStore
 {
+    public IObjectStoreNamespace Namespace => _inner.Namespace;
+
     private readonly FrozenSet<string> _excludedObjectKeys = NormalizeObjectKeys(excludedObjectKeys);
     private readonly FrozenSet<string> _excludedObjectPrefixes = NormalizeObjectPrefixes(excludedObjectPrefixes);
 

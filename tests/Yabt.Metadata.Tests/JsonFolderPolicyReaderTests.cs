@@ -16,15 +16,17 @@ public sealed class JsonFolderPolicyReaderTests
               "format": "zip",
               "directoryLinks": {
                 " photos": { "behavior": "follow", "expectedTarget": "D:\\Photos" },
-                "Photos": { "behavior": "follow", "expectedTarget": "../other/photos" }
+                "Photos": { "behavior": "follow", "expectedTarget": "../other/photos" },
+                " ": { "behavior": "follow", "expectedTarget": " " }
               }
             }
             """);
 
         Assert.IsNotNull(policy.DirectoryLinks);
-        Assert.HasCount(2, policy.DirectoryLinks);
+        Assert.HasCount(3, policy.DirectoryLinks);
         Assert.AreEqual(new DirectoryLinkPolicy("follow", @"D:\Photos"), policy.DirectoryLinks[" photos"]);
         Assert.AreEqual("../other/photos", policy.DirectoryLinks["Photos"].ExpectedTarget);
+        Assert.AreEqual(" ", policy.DirectoryLinks[" "].ExpectedTarget);
     }
 
     [TestMethod]
@@ -51,7 +53,7 @@ public sealed class JsonFolderPolicyReaderTests
     [DataRow("{\"link\":{\"behavior\":\"follow\"}}")]
     [DataRow("{\"link\":{\"behavior\":\"skip\",\"expectedTarget\":\"../photos\"}}")]
     [DataRow("{\"link\":{\"behavior\":\"Follow\",\"expectedTarget\":\"../photos\"}}")]
-    [DataRow("{\"link\":{\"behavior\":\"follow\",\"expectedTarget\":\" \"}}")]
+    [DataRow("{\"link\":{\"behavior\":\"follow\",\"expectedTarget\":\"\"}}")]
     [DataRow("{\"link\":{\"behavior\":\"follow\",\"expectedTarget\":\"../photos\\u0000\"}}")]
     [DataRow("{\"link\":{\"behavior\":\"follow\",\"expectedTarget\":\"../photos\",\"recursive\":true}}")]
     [DataRow("{\"link\":{\"behavior\":\"follow\",\"expectedTarget\":\"a\",\"expectedTarget\":\"b\"}}")]

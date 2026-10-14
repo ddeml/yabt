@@ -333,7 +333,7 @@ internal sealed class AzureBlobObjectStore
             {
                 var folderKey = ToObjectStoreKey(
                     objectStorePrefix,
-                    blobItem.Prefix.TrimEnd('/'));
+                    blobItem.Prefix[..^1]);
                 yield return ArchiveFolderItem.CreateFolder(
                     GetObjectName(folderKey),
                     folderKey);
@@ -707,11 +707,11 @@ internal sealed class AzureBlobObjectStore
         return CombineBlobNameParts(context.ObjectStorePrefix, key);
     }
 
-    private static string CombineBlobNameParts(params IEnumerable<string?> parts)
+    internal static string CombineBlobNameParts(params IEnumerable<string?> parts)
     {
         var normalizedParts = parts
             .Select(NormalizeObjectPrefix)
-            .Where(part => !string.IsNullOrWhiteSpace(part));
+            .Where(part => !string.IsNullOrEmpty(part));
 
         return string.Join("/", normalizedParts);
     }
@@ -757,19 +757,26 @@ internal sealed class AzureBlobObjectStore
             requestException.Status is 404 or 412;
     }
 
-    private static string ToObjectStoreKey
+    internal static string ToObjectStoreKey
     (
         string objectStorePrefix,
         string blobName
     )
     {
-        var normalizedBlobName = NormalizeObjectKey(blobName);
-        if (string.IsNullOrEmpty(objectStorePrefix))
+        try
         {
-            return normalizedBlobName;
+            var normalizedBlobName = NormalizeObjectKey(blobName);
+            return ArchiveLayout.RemovePrefix(normalizedBlobName, objectStorePrefix);
         }
-
-        return ArchiveLayout.RemovePrefix(normalizedBlobName, objectStorePrefix);
+        catch (Exception exception)
+        {
+            throw new YabtAzureBlobException
+            (
+                $"Blob name '{blobName}' under object-store prefix '{objectStorePrefix}' " +
+                    "cannot be represented as a canonical archive object key.",
+                exception
+            );
+        }
     }
 
     private static string GetObjectName(string key)

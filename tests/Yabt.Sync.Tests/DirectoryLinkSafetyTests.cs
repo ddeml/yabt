@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yabt.Common;
+using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.FileSystem;
 using Yabt.Format.Mirror;
@@ -29,9 +30,10 @@ public sealed class DirectoryLinkSafetyTests
             fixture.OutsideRoot
         );
         var originalFiles = SnapshotFiles(fixture.OutsideRoot);
-        var restoreTarget = new FileSystemRestoreTarget(fixture.RestoreRoot, NullLogger.Instance);
+        var restoreTarget = fixture.Services.GetRequiredService<IRestoreDestinationFactory>()
+            .Create(fixture.RestoreRoot);
 
-        await Assert.ThrowsAsync<YabtSyncException>(() => restoreTarget.CreateStagingDirectoryAsync(default));
+        await Assert.ThrowsAsync<YabtException>(() => restoreTarget.CreateStagingAreaAsync());
 
         CollectionAssert.AreEqual(originalFiles, SnapshotFiles(fixture.OutsideRoot));
         Assert.AreEqual(0, Directory.GetDirectories(fixture.OutsideRoot).Length);
@@ -221,7 +223,7 @@ public sealed class DirectoryLinkSafetyTests
         await WriteTextAsync(externalFile, "changed external content");
         var originalFiles = SnapshotFiles(fixture.OutsideRoot);
 
-        await Assert.ThrowsAsync<YabtSyncException>
+        await Assert.ThrowsAsync<YabtFileSystemException>
         (
             () => fixture.Synchronizer.RestoreAsync
             (

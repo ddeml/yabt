@@ -16,7 +16,7 @@ internal sealed class JsonBackupRootLocator
     {
         _logger.LogTrace(nameof(LocateRootAsync));
 
-        if (string.IsNullOrWhiteSpace(startPath))
+        if (string.IsNullOrEmpty(startPath))
         {
             throw new YabtMetadataException("Backup root lookup requires a start path.");
         }

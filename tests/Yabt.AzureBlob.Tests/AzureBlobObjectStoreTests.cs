@@ -8,6 +8,30 @@ namespace Yabt.AzureBlob.Tests;
 public sealed class AzureBlobObjectStoreTests
 {
     [TestMethod]
+    public void BlobPathsPreserveWhitespaceIncludingWhitespaceOnlySegments()
+    {
+        Assert.AreEqual(" / file ", AzureBlobObjectStore.CombineBlobNameParts(" ", " file "));
+        Assert.AreEqual("folder/ ", AzureBlobObjectStore.CombineBlobNameParts(null, "folder", " "));
+        Assert.AreEqual(" file ", AzureBlobObjectStore.ToObjectStoreKey(" ", " / file "));
+        Assert.AreEqual(" file", AzureBlobObjectStore.ToObjectStoreKey("", " file"));
+        Assert.AreEqual("file", AzureBlobObjectStore.ToObjectStoreKey("", "file"));
+    }
+
+    [TestMethod]
+    [DataRow("folder\\literal.txt")]
+    [DataRow("folder//literal.txt")]
+    public void DiscoveredBlobNamesCannotBeReinterpretedAsDifferentPaths(string blobName)
+    {
+        var exception = Assert.ThrowsExactly<YabtAzureBlobException>
+        (
+            () => AzureBlobObjectStore.ToObjectStoreKey("", blobName)
+        );
+
+        StringAssert.Contains(exception.Message, blobName);
+        Assert.IsInstanceOfType<ArgumentException>(exception.InnerException);
+    }
+
+    [TestMethod]
     public void ClientRetryOptionsUseResilientDefaults()
     {
         var options = new AzureBlobObjectStoreOptions();

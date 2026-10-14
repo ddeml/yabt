@@ -15,7 +15,7 @@
     "packageName": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?=.*\\S)[^/\\\\]+$"
+      "pattern": "^(?![A-Za-z]:)(?!\\.{1,2}(?![\\s\\S]))[^/\\\\\\u0000]+(?![\\s\\S])"
     },
     "policy": { "$ref": "#/$defs/policy" },
     "entries": {
@@ -52,7 +52,7 @@
     },
     "logicalPath": {
       "type": "string",
-      "pattern": "^(?:$|(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))[^\\s/\\\\](?:[^/\\\\]*[^\\s/\\\\])?(?:/[^\\s/\\\\](?:[^/\\\\]*[^\\s/\\\\])?)*)$"
+      "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:/|(?![\\s\\S])))[^/\\\\\\u0000]+(?:/(?!\\.{1,2}(?:/|(?![\\s\\S])))[^/\\\\\\u0000]+)*)?(?![\\s\\S])"
     },
     "utcTimestamp": {
       "type": "string",
@@ -95,7 +95,6 @@
               "expectedTarget": {
                 "type": "string",
                 "minLength": 1,
-                "pattern": "\\S",
                 "not": { "pattern": "\\u0000" }
               }
             },
@@ -168,7 +167,7 @@
             "properties": {
               "length": { "const": 0 },
               "storedPath": {
-                "pattern": "^(?:\\.yabt-empty|.+/\\.yabt-empty)$"
+                "pattern": "^(?:\\.yabt-empty|[\\s\\S]+/\\.yabt-empty)(?![\\s\\S])"
               }
             }
           },

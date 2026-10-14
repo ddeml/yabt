@@ -27,7 +27,7 @@ internal static class FolderPolicyDirectoryLinks
             var link = pair.Value;
             if (link is null ||
                 !string.Equals(link.Behavior, DirectoryLinkPolicy.FollowBehavior, StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(link.ExpectedTarget) ||
+                string.IsNullOrEmpty(link.ExpectedTarget) ||
                 link.ExpectedTarget.Contains('\0', StringComparison.Ordinal))
             {
                 throw new YabtMetadataException(

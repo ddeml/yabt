@@ -8,9 +8,9 @@ namespace Yabt.Sync.Implementation;
 internal sealed class ArchiveProjectionObjectStore
 (
     IReadOnlyObjectStore _inner,
-    string _sourceRoot,
+    string _sourceDisplayName,
     string? sourceRootPrefix,
-    IFolderPolicyReader _folderPolicyReader,
+    Func<string, CancellationToken, Task<FolderPolicy>> _readPolicyAsync,
     IReadOnlyDictionary<string, IArchiveFormatHandler> _formatHandlers,
     string? logicalRootPath = default
 ) : IReadOnlyObjectStore
@@ -24,6 +24,8 @@ internal sealed class ArchiveProjectionObjectStore
     private readonly List<string> _projectedSourcePrefixes = [];
     private readonly string? _sourceRootPrefix = ArchiveLayout.NormalizeObjectPrefix(sourceRootPrefix);
     private readonly string _logicalRootPath = ArchiveLayout.NormalizeObjectKey(logicalRootPath);
+
+    public IObjectStoreNamespace Namespace => _inner.Namespace;
 
     public Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
@@ -384,9 +386,9 @@ internal sealed class ArchiveProjectionObjectStore
         var projectedSourceStore = new ArchiveProjectionObjectStore
         (
             _inner,
-            projectedScopeDefinition.SourceDisplayName,
+            CreateSourceDisplayName(projectedScopePrefix),
             projectedScopePrefix,
-            _folderPolicyReader,
+            _readPolicyAsync,
             _formatHandlers,
             projectedScopeDefinition.LogicalPath
         );
@@ -505,15 +507,13 @@ internal sealed class ArchiveProjectionObjectStore
             }
         }
 
-        var sourceDisplayName = CreateSourceDisplayName(projectedScopePrefix);
+        var sourceDisplayName = ObjectPath.Parse(projectedScopePrefix).Name;
         var logicalPath = ArchiveLayout.CombinePrefixAndRelativePath(
             _logicalRootPath,
             ArchiveLayout.RemovePrefix(
                 projectedScopePrefix,
                 _sourceRootPrefix));
-        var policy = await _folderPolicyReader.ReadPolicyAsync(
-            sourceDisplayName,
-            cancellationToken);
+        var policy = await _readPolicyAsync(projectedScopePrefix, cancellationToken);
         var formatHandler = ResolveFormatHandler(policy);
         var projectedScopeDefinition = new ProjectedScopeDefinition
         (
@@ -684,13 +684,7 @@ internal sealed class ArchiveProjectionObjectStore
         return false;
     }
 
-    private static string GetParentPrefix(string objectKey)
-    {
-        var normalizedObjectKey = ArchiveLayout.NormalizeObjectKey(objectKey);
-        var separator = normalizedObjectKey.LastIndexOf('/');
-
-        return separator < 0 ? string.Empty : normalizedObjectKey[..separator];
-    }
+    private static string GetParentPrefix(string objectKey) => ObjectPath.Parse(objectKey).Parent.Value;
 
     private bool IsSourceRootPrefix(string objectKey)
     {
@@ -721,17 +715,7 @@ internal sealed class ArchiveProjectionObjectStore
         var sourceRelativePath = ArchiveLayout.RemovePrefix(
             sourcePrefix,
             _sourceRootPrefix);
-        if (string.IsNullOrEmpty(sourceRelativePath))
-        {
-            return _sourceRoot;
-        }
-
-        var nativeRelativePath = sourceRelativePath.Replace(
-            '/',
-            Path.DirectorySeparatorChar);
-        return Path.Combine(
-            _sourceRoot,
-            nativeRelativePath);
+        return ObjectPath.Parse(_sourceDisplayName).Combine(ObjectPath.Parse(sourceRelativePath)).Value;
     }
 
     private sealed record ProjectedScope

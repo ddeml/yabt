@@ -104,6 +104,131 @@ public sealed class ZipArchiveFormatHandlerTests
     }
 
     [TestMethod]
+    [DataRow(" Photos")]
+    [DataRow("Photos ")]
+    [DataRow(" ")]
+    [DataRow("\n")]
+    [DataRow("photos?*")]
+    public async Task ProjectBackupAsyncPreservesCanonicalDisplayPathLeaf(string folderName)
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var handler = serviceProvider.GetRequiredService<IArchiveFormatHandler>();
+        var sourceStore = new MemoryObjectStore(provideContentHash: true);
+        await UploadTextAsync(sourceStore, "file.txt", "source content");
+        var displayPath = $"parent/{folderName}";
+
+        var projectedObjects = await CollectProjectedObjectsAsync
+        (
+            handler.ProjectBackupAsync
+            (
+                new
+                (
+                    sourceStore,
+                    Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+                    SourceDisplayName: displayPath
+                )
+            )
+        );
+
+        StringAssert.StartsWith(GetPackageObject(projectedObjects).RelativePath, $"{folderName}.xxh128-");
+    }
+
+    [TestMethod]
+    [DataRow("C:\\Photos")]
+    [DataRow("/photos")]
+    [DataRow("parent\\photos")]
+    public async Task ProjectBackupAsyncRejectsNativeDisplayPaths(string displayPath)
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var handler = serviceProvider.GetRequiredService<IArchiveFormatHandler>();
+
+        await Assert.ThrowsExactlyAsync<ArgumentException>
+        (
+            () => CollectProjectedObjectsAsync
+            (
+                handler.ProjectBackupAsync
+                (
+                    new
+                    (
+                        new MemoryObjectStore(),
+                        Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+                        SourceDisplayName: displayPath
+                    )
+                )
+            )
+        );
+    }
+
+    [TestMethod]
+    public async Task ProjectRestoreAsyncPreservesDistinctWhitespacePathsAndEmptyFolders()
+    {
+        string[] paths =
+        [
+            " documents/file.txt",
+            "documents/file.txt",
+            "folder/file.txt ",
+            "folder/file.txt",
+            " / ",
+            "\tfolder/\tfile.txt",
+            "\u00a0folder/file\u00a0",
+            "\nfolder/file\n",
+        ];
+        const string sourcePrefix = " root ";
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var handler = serviceProvider.GetRequiredService<IArchiveFormatHandler>();
+        var innerStore = new MemoryObjectStore(provideContentHash: true);
+        foreach (var path in paths)
+        {
+            await UploadTextAsync(innerStore, $"{sourcePrefix}/{path}", path);
+        }
+
+        var sourceStore = new EmptyFolderReadOnlyObjectStore(innerStore, $"{sourcePrefix}/ empty ");
+        var backupArtifacts = await CollectProjectedObjectsAsync
+        (
+            handler.ProjectBackupAsync
+            (
+                new
+                (
+                    sourceStore,
+                    SourcePrefix: sourcePrefix,
+                    Policy: new FolderPolicy(ZipArchiveFormatName.Value),
+                    SourceDisplayName: sourcePrefix
+                )
+            )
+        );
+        var restoreArtifacts = new List<ArchiveProjectedObject>();
+        foreach (var backupArtifact in backupArtifacts)
+        {
+            restoreArtifacts.Add(await CreateRestorableArtifactAsync(backupArtifact));
+        }
+
+        await using var restoreProjection = await handler.ProjectRestoreAsync
+        (
+            new
+            (
+                restoreArtifacts,
+                restoreAsRoot: true,
+                requireCompleteProjection: true
+            )
+        );
+
+        CollectionAssert.AreEquivalent
+        (
+            paths,
+            restoreProjection.Objects.Select(projectedObject => projectedObject.RelativePath).ToArray()
+        );
+        CollectionAssert.Contains(restoreProjection.Directories.ToArray(), " empty ");
+        foreach (var restoredObject in restoreProjection.Objects)
+        {
+            CollectionAssert.AreEqual
+            (
+                Encoding.UTF8.GetBytes(restoredObject.RelativePath),
+                await ReadContentBytesAsync(restoredObject)
+            );
+        }
+    }
+
+    [TestMethod]
     public async Task ProjectBackupAsyncStoresNativeEmptyFolderAsMarker()
     {
         using var serviceProvider = CreateServices().BuildServiceProvider();

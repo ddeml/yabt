@@ -1,6 +1,7 @@
 using Yabt.Core.Abstractions;
 using Yabt.FileSystem;
 using Yabt.FileSystem.Implementation;
+using Yabt.Metadata;
 
 #pragma warning disable IDE0130
 namespace Microsoft.Extensions.DependencyInjection;
@@ -30,6 +31,14 @@ public static class YabtFileSystemServiceCollectionExtensions
             provider.GetRequiredService<FileSystemBackupRootStoreResolver>());
         services.AddSingleton<ISourceRootObjectStoreResolver>(provider =>
             provider.GetRequiredService<FileSystemBackupRootStoreResolver>());
+        services.AddYabtFileSystemArchiveLocations();
+        return services;
+    }
+
+    public static IServiceCollection AddYabtFileSystemArchiveLocations(this IServiceCollection services)
+    {
+        services.AddSingleton<IArchiveLocationResolver, FileSystemArchiveLocationResolver>();
+        services.AddSingleton<IRestoreDestinationFactory, FileSystemRestoreDestinationFactory>();
         return services;
     }
 }

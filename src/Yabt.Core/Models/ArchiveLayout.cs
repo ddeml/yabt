@@ -35,73 +35,25 @@ public sealed record ArchiveLayout
         };
     }
 
-    public static string NormalizeObjectKey(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        var segments = value
-            .Replace('\\', '/')
-            .Trim('/')
-            .Split(
-                '/',
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        foreach (var segment in segments)
-        {
-            if (segment is "." or "..")
-            {
-                throw new ArgumentException
-                (
-                    $"Object key '{value}' contains an invalid segment.",
-                    nameof(value)
-                );
-            }
-        }
-
-        return string.Join('/', segments);
-    }
+    public static string NormalizeObjectKey(string? value) => ObjectPath.Parse(value).Value;
 
     public static string? NormalizeObjectPrefix(string? value)
     {
-        var normalized = NormalizeObjectKey(value);
-        return string.IsNullOrEmpty(normalized) ? null : normalized;
+        var path = ObjectPath.Parse(value);
+        return path.IsRoot ? null : path.Value;
     }
 
     public static string CombinePrefixAndRelativePath
     (
         string? prefix,
         string? relativePath
-    )
-    {
-        var normalizedPrefix = NormalizeObjectKey(prefix);
-        var normalizedRelativePath = NormalizeObjectKey(relativePath);
-
-        if (string.IsNullOrEmpty(normalizedPrefix))
-        {
-            return normalizedRelativePath;
-        }
-
-        return string.IsNullOrEmpty(normalizedRelativePath) ?
-            normalizedPrefix :
-            $"{normalizedPrefix}/{normalizedRelativePath}";
-    }
+    ) => ObjectPath.Parse(prefix).Combine(ObjectPath.Parse(relativePath)).Value;
 
     public static bool IsUnderPrefix
     (
         string objectKey,
         string? prefix
-    )
-    {
-        var normalizedObjectKey = NormalizeObjectKey(objectKey);
-        var normalizedPrefix = NormalizeObjectKey(prefix);
-
-        return string.IsNullOrEmpty(normalizedPrefix) ||
-            string.Equals(normalizedObjectKey, normalizedPrefix, StringComparison.Ordinal) ||
-            normalizedObjectKey.StartsWith($"{normalizedPrefix}/", StringComparison.Ordinal);
-    }
+    ) => ObjectPath.Parse(objectKey).IsUnder(ObjectPath.Parse(prefix));
 
     public static string RemovePrefix
     (
@@ -109,25 +61,14 @@ public sealed record ArchiveLayout
         string? prefix
     )
     {
-        var normalizedObjectKey = NormalizeObjectKey(objectKey);
-        var normalizedPrefix = NormalizeObjectKey(prefix);
-
-        if (string.IsNullOrEmpty(normalizedPrefix))
-        {
-            return normalizedObjectKey;
-        }
-
-        if (string.Equals(normalizedObjectKey, normalizedPrefix, StringComparison.Ordinal))
-        {
-            return string.Empty;
-        }
-
-        var expectedPrefix = $"{normalizedPrefix}/";
-        if (!normalizedObjectKey.StartsWith(expectedPrefix, StringComparison.Ordinal))
+        var path = ObjectPath.Parse(objectKey);
+        var prefixPath = ObjectPath.Parse(prefix);
+        if (!path.IsUnder(prefixPath))
         {
             throw new ArgumentException("Object key is not under the expected prefix.", nameof(objectKey));
         }
 
-        return normalizedObjectKey[expectedPrefix.Length..];
+        if (prefixPath.IsRoot) { return path.Value; }
+        return path == prefixPath ? string.Empty : path.Value[(prefixPath.Value.Length + 1)..];
     }
 }

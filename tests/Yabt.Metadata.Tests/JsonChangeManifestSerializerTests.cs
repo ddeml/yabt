@@ -16,7 +16,7 @@ public sealed class JsonChangeManifestSerializerTests
         var serializer = CreateSerializer();
         var firstEntry = new ArchiveChangeManifestEntry
         (
-            "folder\\b.txt",
+            "folder/b.txt",
             "stat-v1:2026-08-16T12:00:00.0000000Z:20",
             ContentHash: CreateContentHash("second")
         );
@@ -117,7 +117,7 @@ public sealed class JsonChangeManifestSerializerTests
                     ContentHash: CreateContentHash("package bytes"),
                     Projection: new
                     (
-                        "Photos\\2026",
+                        "Photos/2026",
                         "zip",
                         1,
                         projectionId,
@@ -748,7 +748,7 @@ public sealed class JsonChangeManifestSerializerTests
             () => serializer.ReadAsync(stream)
         );
 
-        StringAssert.Contains(exception.Message, "noncanonical values");
+        StringAssert.Contains(exception.Message, "invalid");
     }
 
     [TestMethod]
@@ -922,7 +922,7 @@ public sealed class JsonChangeManifestSerializerTests
     }
 
     [TestMethod]
-    public void CreateRejectsDuplicateNormalizedPaths()
+    public void CreateRejectsDuplicateCanonicalPaths()
     {
         var serializer = CreateSerializer();
         var contentHash = CreateContentHash("content");
@@ -937,7 +937,7 @@ public sealed class JsonChangeManifestSerializerTests
             ),
             new
             (
-                "folder\\file.txt",
+                "folder/file.txt",
                 "stat-v1:2026-08-16T12:00:00.0000000Z:7",
                 ContentHash: contentHash
             ),

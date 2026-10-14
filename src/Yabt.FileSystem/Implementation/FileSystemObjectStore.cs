@@ -12,11 +12,15 @@ internal sealed class FileSystemObjectStore
 (
     IOptionsMonitor<FileSystemObjectStoreOptions> _options,
     ILogger<FileSystemObjectStore> _logger
-) : IArchiveMutableObjectStore, ISourceDirectoryTraversal
+) : IArchiveMutableObjectStore, ISourceDirectoryTraversal, ILocalObjectStore
 {
     private const int DefaultBufferSize = 81_920;
     private const int DefaultListChunkSize = 1_000;
     private FileSystemSourceTraversal? _sourceTraversal;
+
+    public string RootPath => GetRootPath();
+
+    public IObjectStoreNamespace Namespace => new FileSystemObjectStoreNamespace(GetRootPath());
 
     public void ConfigureSourceTraversal
     (
@@ -92,12 +96,12 @@ internal sealed class FileSystemObjectStore
             (
                 () =>
                 {
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
+                    ValidateMutationPath(rootPath, destinationPath);
+                    ValidateMutationPath(rootPath, temporaryPath);
                     Directory.CreateDirectory(destinationDirectory);
                     Directory.CreateDirectory(temporaryDirectory);
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
+                    ValidateMutationPath(rootPath, destinationPath);
+                    ValidateMutationPath(rootPath, temporaryPath);
                     return new FileStream
                     (
                         temporaryPath,
@@ -135,8 +139,8 @@ internal sealed class FileSystemObjectStore
             (
                 () =>
                 {
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
+                    ValidateMutationPath(rootPath, temporaryPath);
+                    ValidateMutationPath(rootPath, destinationPath);
                     File.Move(temporaryPath, destinationPath);
                 },
                 ex =>
@@ -250,9 +254,9 @@ internal sealed class FileSystemObjectStore
 
         try
         {
-            FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
+            ValidateMutationPath(rootPath, temporaryPath);
             Directory.CreateDirectory(temporaryDirectory);
-            FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
+            ValidateMutationPath(rootPath, temporaryPath);
             _logger.LogFileSystemPlumbingOperation(
                 "Creating temporary conditional-replacement file",
                 temporaryPath);
@@ -279,8 +283,8 @@ internal sealed class FileSystemObjectStore
                 expectedContentHash,
                 () =>
                 {
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, temporaryPath);
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
+                    ValidateMutationPath(rootPath, temporaryPath);
+                    ValidateMutationPath(rootPath, destinationPath);
                     File.Move(temporaryPath, destinationPath, overwrite: true);
                 },
                 "Conditionally replace object",
@@ -412,7 +416,7 @@ internal sealed class FileSystemObjectStore
             (
                 () =>
                 {
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, listRootPath);
+                    ValidateMutationPath(rootPath, listRootPath);
                     if (!Directory.Exists(listRootPath)) { return; }
                     var folderItems = EnumerateFolderItems(
                         rootPath,
@@ -488,10 +492,10 @@ internal sealed class FileSystemObjectStore
         (
             () =>
             {
-                FileSystemPathSafety.RejectDescendantLinks(rootPath, sourcePath);
-                FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
+                ValidateMutationPath(rootPath, sourcePath);
+                ValidateMutationPath(rootPath, destinationPath);
                 Directory.CreateDirectory(destinationDirectory);
-                FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
+                ValidateMutationPath(rootPath, destinationPath);
                 File.Move(sourcePath, destinationPath);
             },
             ex => _logger.LogAbandonedFileSystemOperationFailed
@@ -540,10 +544,10 @@ internal sealed class FileSystemObjectStore
             (
                 () =>
                 {
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, sourcePath);
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
+                    ValidateMutationPath(rootPath, sourcePath);
+                    ValidateMutationPath(rootPath, destinationPath);
                     Directory.CreateDirectory(destinationParent);
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, destinationPath);
+                    ValidateMutationPath(rootPath, destinationPath);
                     Directory.Move(sourcePath, destinationPath);
                 },
                 ex => _logger.LogAbandonedFileSystemOperationFailed
@@ -578,7 +582,7 @@ internal sealed class FileSystemObjectStore
         return path;
     }
 
-    private Task ValidateReadPathAsync
+    private async Task ValidateReadPathAsync
     (
         string rootPath,
         string path,
@@ -588,10 +592,11 @@ internal sealed class FileSystemObjectStore
         _logger.LogTrace(nameof(ValidateReadPathAsync));
         if (_sourceTraversal is not null)
         {
-            return _sourceTraversal.ValidatePathAsync(rootPath, path, cancellationToken);
+            await _sourceTraversal.ValidatePathAsync(rootPath, path, cancellationToken);
+            ValidatePathNamespace(rootPath, path);
+            return;
         }
-        FileSystemPathSafety.RejectDescendantLinks(rootPath, path);
-        return Task.CompletedTask;
+        ValidateMutationPath(rootPath, path);
     }
 
     private async IAsyncEnumerable<ArchiveFolderItem> EnumerateSourceFolderItemsAsync
@@ -609,6 +614,8 @@ internal sealed class FileSystemObjectStore
         foreach (var childDirectory in childDirectories)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            FileSystemObjectName.Validate(Path.GetFileName(childDirectory));
+            var childKey = ToArchiveRelativePath(Path.GetRelativePath(rootPath, childDirectory));
             await ValidateReadPathAsync(rootPath, childDirectory, cancellationToken);
             if (recursive)
             {
@@ -622,7 +629,7 @@ internal sealed class FileSystemObjectStore
             {
                 yield return ArchiveFolderItem.CreateFolder(
                     Path.GetFileName(childDirectory),
-                    ToArchiveRelativePath(Path.GetRelativePath(rootPath, childDirectory)));
+                    childKey);
             }
         }
 
@@ -698,8 +705,9 @@ internal sealed class FileSystemObjectStore
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var filePath = files[index];
-                    await ValidateReadPathAsync(rootPath, filePath, cancellationToken);
                     var name = Path.GetFileName(filePath);
+                    FileSystemObjectName.Validate(name);
+                    await ValidateReadPathAsync(rootPath, filePath, cancellationToken);
                     if (string.Equals(name, ArchiveFolderMarkerFileNames.EmptyFolder, StringComparison.Ordinal))
                     {
                         continue;
@@ -746,7 +754,7 @@ internal sealed class FileSystemObjectStore
     private string GetRootPath()
     {
         var rootPath = _options.CurrentValue.RootPath;
-        if (string.IsNullOrWhiteSpace(rootPath))
+        if (string.IsNullOrEmpty(rootPath))
         {
             throw new YabtFileSystemException("Filesystem object store requires a root path.");
         }
@@ -778,7 +786,7 @@ internal sealed class FileSystemObjectStore
         try
         {
             var path = ResolveObjectPath(rootPath, key);
-            FileSystemPathSafety.RejectDescendantLinks(rootPath, path);
+            ValidateMutationPath(rootPath, path);
             return path;
         }
         catch (Exception ex)
@@ -807,7 +815,7 @@ internal sealed class FileSystemObjectStore
                 rootPath,
                 () =>
                 {
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, path);
+                    ValidateMutationPath(rootPath, path);
                     if (!CurrentContentHashMatches
                         (
                             path,
@@ -818,7 +826,7 @@ internal sealed class FileSystemObjectStore
                         return false;
                     }
 
-                    FileSystemPathSafety.RejectDescendantLinks(rootPath, path);
+                    ValidateMutationPath(rootPath, path);
                     mutation();
                     return true;
                 },
@@ -882,7 +890,7 @@ internal sealed class FileSystemObjectStore
             "Acquiring conditional-mutation guard",
             guardPath);
         Directory.CreateDirectory(Path.GetDirectoryName(guardPath)!);
-        FileSystemPathSafety.RejectDescendantLinks(rootPath, guardPath);
+        ValidateMutationPath(rootPath, guardPath);
         using var guard = AcquireConditionalMutationGuard(guardPath, cancellationToken);
         _logger.LogFileSystemPlumbingOperation(
             "Acquired conditional-mutation guard",
@@ -955,12 +963,13 @@ internal sealed class FileSystemObjectStore
         string directoryPath
     )
     {
-        FileSystemPathSafety.RejectDescendantLinks(rootPath, directoryPath);
+        ValidateMutationPath(rootPath, directoryPath);
         var childDirectoryPaths = Directory.EnumerateDirectories(directoryPath).
             OrderBy(childDirectoryPath => childDirectoryPath, StringComparer.Ordinal);
         foreach (var childDirectoryPath in childDirectoryPaths)
         {
-            FileSystemPathSafety.RejectDescendantLinks(rootPath, childDirectoryPath);
+            FileSystemObjectName.Validate(Path.GetFileName(childDirectoryPath));
+            ValidateMutationPath(rootPath, childDirectoryPath);
             var name = Path.GetFileName(childDirectoryPath);
             var key = ToArchiveRelativePath(Path.GetRelativePath(rootPath, childDirectoryPath));
             yield return ArchiveFolderItem.CreateFolder(name, key);
@@ -970,8 +979,9 @@ internal sealed class FileSystemObjectStore
             OrderBy(filePath => filePath, StringComparer.Ordinal);
         foreach (var filePath in filePaths)
         {
-            FileSystemPathSafety.RejectDescendantLinks(rootPath, filePath);
             var name = Path.GetFileName(filePath);
+            FileSystemObjectName.Validate(name);
+            ValidateMutationPath(rootPath, filePath);
             if (string.Equals(
                     name,
                     ArchiveFolderMarkerFileNames.EmptyFolder,
@@ -999,12 +1009,14 @@ internal sealed class FileSystemObjectStore
         string directoryPath
     )
     {
-        FileSystemPathSafety.RejectDescendantLinks(rootPath, directoryPath);
+        ValidateMutationPath(rootPath, directoryPath);
         var childDirectoryPaths = Directory.EnumerateDirectories(directoryPath).
             OrderBy(childDirectoryPath => childDirectoryPath, StringComparer.Ordinal);
         foreach (var childDirectoryPath in childDirectoryPaths)
         {
-            FileSystemPathSafety.RejectDescendantLinks(rootPath, childDirectoryPath);
+            FileSystemObjectName.Validate(Path.GetFileName(childDirectoryPath));
+            _ = ToArchiveRelativePath(Path.GetRelativePath(rootPath, childDirectoryPath));
+            ValidateMutationPath(rootPath, childDirectoryPath);
             var childItems = EnumerateRecursiveObjectItems(
                 rootPath,
                 childDirectoryPath);
@@ -1034,8 +1046,9 @@ internal sealed class FileSystemObjectStore
             OrderBy(filePath => filePath, StringComparer.Ordinal);
         foreach (var filePath in filePaths)
         {
-            FileSystemPathSafety.RejectDescendantLinks(rootPath, filePath);
             var name = Path.GetFileName(filePath);
+            FileSystemObjectName.Validate(name);
+            ValidateMutationPath(rootPath, filePath);
             if (string.Equals(
                     name,
                     ArchiveFolderMarkerFileNames.EmptyFolder,
@@ -1057,6 +1070,19 @@ internal sealed class FileSystemObjectStore
         }
     }
 
+    private static void ValidateMutationPath(string rootPath, string path)
+    {
+        FileSystemPathSafety.RejectDescendantLinks(rootPath, path);
+        ValidatePathNamespace(rootPath, path);
+    }
+
+    private static void ValidatePathNamespace(string rootPath, string path)
+    {
+        var relativePath = Path.GetRelativePath(rootPath, path);
+        var objectPath = relativePath == "." ? ObjectPath.Root : ObjectPath.Parse(ToArchiveRelativePath(relativePath));
+        new FileSystemObjectStoreNamespace(rootPath, allowRootTemporaryDirectoryAlias: true).ValidatePath(objectPath);
+    }
+
     private static string ResolveObjectPath(string rootPath, string objectPath)
     {
         var rootedPath = EnsureTrailingDirectorySeparator(Path.GetFullPath(rootPath));
@@ -1074,19 +1100,11 @@ internal sealed class FileSystemObjectStore
     private static string NormalizeRelativeObjectPath(string value)
     {
         var normalized = NormalizeObjectKey(value);
-        var invalidFileNameChars = Path.GetInvalidFileNameChars();
-        var segments = normalized.Split
-        (
-            '/',
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-        );
+        var segments = normalized.Split('/');
 
         foreach (var segment in segments)
         {
-            if (segment.IndexOfAny(invalidFileNameChars) >= 0)
-            {
-                throw new YabtFileSystemException("Object path contains an invalid segment.");
-            }
+            FileSystemObjectName.Validate(segment);
         }
 
         return Path.Combine(segments);
@@ -1102,7 +1120,22 @@ internal sealed class FileSystemObjectStore
         return normalized;
     }
 
-    private static string NormalizeObjectPrefix(string? value) => ArchiveLayout.NormalizeObjectKey(value);
+    private static string NormalizeObjectPrefix(string? value)
+    {
+        try
+        {
+            return ArchiveLayout.NormalizeObjectKey(value);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtFileSystemException
+            (
+                $"Filesystem object key '{value}' cannot be represented without changing its identity.",
+                key: value,
+                innerException: ex
+            );
+        }
+    }
 
     private static void ValidateExpectedContentHash(string expectedContentHash)
     {
@@ -1116,9 +1149,15 @@ internal sealed class FileSystemObjectStore
         }
     }
 
-    private static string ToArchiveRelativePath(string relativePath) => relativePath.
-        Replace(Path.DirectorySeparatorChar, '/').
-        Replace(Path.AltDirectorySeparatorChar, '/');
+    private static string ToArchiveRelativePath(string relativePath)
+    {
+        var segments = relativePath.Split(Path.DirectorySeparatorChar);
+        foreach (var segment in segments)
+        {
+            FileSystemObjectName.Validate(segment);
+        }
+        return NormalizeObjectKey(string.Join('/', segments));
+    }
 
     private static string EnsureTrailingDirectorySeparator(string path) => Path.EndsInDirectorySeparator(path) ?
         path : $"{path}{Path.DirectorySeparatorChar}";
@@ -1131,7 +1170,7 @@ internal sealed class FileSystemObjectStore
     {
         try
         {
-            FileSystemPathSafety.RejectDescendantLinks(GetRootPath(), path);
+            ValidateMutationPath(GetRootPath(), path);
             _logger.LogFileSystemPlumbingOperation(
                 "Checking temporary file for cleanup",
                 path);
