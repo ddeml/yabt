@@ -1,3 +1,4 @@
+using Yabt.Core;
 using Yabt.Core.Models;
 
 namespace Yabt.FileSystem.Implementation;
@@ -167,10 +168,12 @@ internal sealed class FileSystemSourceTraversal
                 HasIdentityOverlap(identity, physicalForbiddenPath)
             )
             {
+                var message = $"Source directory link '{linkPath}' overlaps reserved or archive storage '{forbiddenPath}'.";
                 throw new YabtFileSystemException
                 (
-                    $"Source directory link '{linkPath}' overlaps reserved or archive storage '{forbiddenPath}'.",
-                    path: linkPath
+                    message,
+                    path: linkPath,
+                    innerException: new ObjectStoreOverlapException(message)
                 );
             }
             var nearestForbiddenIdentity = ReadExistingAncestorIdentities(physicalForbiddenPath).FirstOrDefault();

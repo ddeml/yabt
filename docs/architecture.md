@@ -244,6 +244,34 @@ creation and commits from opaque staging tokens. Physical restore paths and
 temporary-file operations belong to the filesystem provider. Backup comparison
 replay remains private temporary storage, outside archive `.yabt-tmp`.
 
+Backup asks the location resolver for bounded overlap validation before target
+initialization or locking. The filesystem provider compares the effective
+selected source subtree with the whole target root, whose history, metadata,
+and staging may also be mutated. It separately protects source descriptor and
+initial policy read locations. A selected source folder and archive may be
+siblings below the same descriptor root.
+
+Preflight examines existing path components, resolving known junctions and
+symbolic links with a bounded number of substitutions and preserving missing
+target tails. It uses directory-specific namespace comparison and performs no
+additional tree scan, payload read, remote service probe, or source marker
+write. Identically spelled components need no comparison probe; unsupported
+ancestor comparison semantics leave overlap undetermined. Ordinary I/O failures
+still propagate, and destination namespace validation remains strict. Current
+source location resolution is filesystem-based; targets from other providers
+are undetermined. Unknown aliases and cross-provider mappings remain permitted,
+so a successful preflight does not prove disjoint storage.
+
+Existing source traversal supplies further overlap evidence during normal
+access. A provider reports known overlap through `ObjectStoreOverlapException`
+inside its contextual failure. The synchronizer and ZIP materialization stop
+immediately on that evidence, even through nested or aggregate exceptions,
+instead of continuing with other payloads. Prior safe checkpoints and recovery
+markers remain; unrelated removals and successful manifest publication do not
+run. Normal cleanup, such as releasing the archive lock, still occurs. This is
+best-effort detection, not a filesystem snapshot or protection against concurrent
+external topology changes.
+
 Filesystem access validates every existing descendant component, including
 ancestors of an otherwise ordinary file or directory. Mutable archive and
 restore-destination access rejects descendant links, while a configured store

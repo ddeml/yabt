@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace Yabt.FileSystem.Implementation;
 
 internal abstract class FileSystemPathBackend
@@ -10,6 +12,17 @@ internal abstract class FileSystemPathBackend
     public abstract void ValidateName(string name);
 
     public abstract StringComparer GetDirectoryNameComparer(string directoryPath);
+
+    /// <summary>Returns false only for unsupported name semantics; access failures still throw.</summary>
+    public virtual bool TryGetDirectoryNameComparer
+    (
+        string directoryPath,
+        [NotNullWhen(true)] out StringComparer? comparer
+    )
+    {
+        comparer = GetDirectoryNameComparer(directoryPath);
+        return true;
+    }
 
     public virtual void ValidateExistingName
     (

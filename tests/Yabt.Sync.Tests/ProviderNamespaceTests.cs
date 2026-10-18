@@ -363,6 +363,10 @@ public sealed class ProviderNamespaceTests
             );
         }
 
+        public void ValidateBackupLocations(ArchiveSourceLocation source, IObjectStore targetStore)
+        {
+        }
+
         public void ConfigureSourceTraversal(ArchiveSourceLocation source, IObjectStore targetStore)
         {
         }

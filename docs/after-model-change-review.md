@@ -12,7 +12,7 @@ change, for follow-up work in **Codex-Sandbox-01**.
   source-read failure handling, `verify-restore` , and Azure transfer/retry
   configuration. The handoff commit carries those pending changes alongside this
   document.
-- Status: **R01, R02, and R03 are implemented for their documented scopes; other
+- Status: **R01-R04 are implemented for their documented scopes; other
   findings remain open**. Recording and committing the baseline did not implement
   the proposed fixes. R09 was added during the follow-up discussion on
   2026-09-21.
@@ -56,7 +56,7 @@ were not claimed as completed runtime reproductions in the review.
 | R01 | P1 | Path normalization silently omits source content | CLI reproduction and exact-path regression tests | Implemented |
 | R02 | P1 | Deduplication follows a linked ancestor outside the archive | CLI reproduction and junction regression tests | Implemented |
 | R03 | P1 | Missing source becomes a successful empty backup | CLI reproduction and source-readiness regression tests | Implemented |
-| R04 | P1 | Backup accepts overlapping source and target roots | CLI reproduction | Open |
+| R04 | P1 | Backup accepts overlapping source and target roots | CLI reproduction and overlap/recovery regression tests | Implemented (best effort) |
 | R05 | P2 | Filesystem shape/casing changes prevent backup completion | CLI reproductions | Open |
 | R06 | P2 | Folder-policy settings are accepted but ignored | Handler reproduction and inspection | Open |
 | R07 | P2 | Unavailable restore-only entry can crash `verify-restore` | Static control-flow finding | Open |
@@ -330,6 +330,55 @@ check.
 **Acceptance checks:** Equal roots, target under source, source under target,
 and junction aliases must fail before mutation. Separate roots must continue to
 work.
+
+**Agreed scope and implementation on 2026-10-18:** Detection is bounded and best
+effort. The provider-owned location resolver validates known overlap before
+target initialization or mutation locking. Filesystem validation compares the
+effective selected source subtree with the entire writable target root, covering
+live data, history, root metadata, staging, and locks. Source descriptor and
+initial policy read locations receive separate protection. A selected source
+folder and target may be siblings beneath the descriptor root.
+
+The check resolves known junctions and symbolic links, including linked
+ancestors and missing target tails, using a bounded number of path substitutions
+and the provider's directory-specific comparison rules. Exact path components
+need no comparison probe. Unsupported ancestor comparison leaves overlap
+undetermined; ordinary I/O failures still propagate, and destination namespace
+validation stays strict. The check does not scan either tree, read payloads,
+probe remote services, or write source markers. Current
+production source selection is filesystem-based, so nonfilesystem targets are
+undetermined. Unknown aliases and cross-provider mappings remain allowed;
+preflight success is not a guarantee that storage is disjoint.
+
+R02's existing source traversal also rejects approved links into selected
+archive storage, source history, or staging. Those detected overlaps now carry
+an `ObjectStoreOverlapException` inside the ordinary contextual provider error.
+The synchronizer and ZIP builder recognize that evidence through nested and
+aggregate failures and stop immediately, including during lazy stream reads.
+They preserve earlier safe checkpoints and recovery markers, suppress unrelated
+removals, and do not publish a successful replacement descriptor or manifest.
+Lock release and ordinary cleanup still run. No whole-operation rollback or
+snapshot guarantee is introduced. Existing link approval and cycle rules remain
+unchanged; archive hard-link handling remains R09.
+
+Regression tests cover equal and nested roots, missing targets, explicit live
+prefixes, selected sibling folders, prefix lookalikes, metadata read locations,
+and junction aliases through configured roots or ancestors. Backup, dry-run, and
+verify share the preflight guard. Synthetic provider tests detect overlap after
+a completed checkpoint, both when opening and reading source streams, through
+mirror, ZIP, and nested ZIP projections. They verify that later payloads are not
+read or written, unrelated target files survive, and recovery evidence remains.
+Provider comparison tests also cover unsupported ancestor semantics and retain
+directory-specific case comparison for differently spelled components.
+
+**Verification:** The full Release suite on CodexSandbox01 completed with
+**707 passed, 0 failed, and 3 existing Linux-only tests skipped**. This includes
+74 added regression cases and the existing restore, link-safety, and ordinary
+source-read recovery tests. The build reported only the existing `NU1900`
+warnings for the unavailable NuGet vulnerability feed. `git diff --check` and
+CRLF checks passed. Native Linux execution remains unverified; controlled
+filesystem backends exercise unsupported ancestor semantics on this Windows
+host.
 
 ## Further correctness findings
 

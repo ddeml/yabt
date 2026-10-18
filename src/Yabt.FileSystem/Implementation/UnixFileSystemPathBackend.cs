@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace Yabt.FileSystem.Implementation;
@@ -25,12 +26,20 @@ internal sealed class UnixFileSystemPathBackend : FileSystemPathBackend
         }
     }
 
-    public override StringComparer GetDirectoryNameComparer(string directoryPath)
+    public override StringComparer GetDirectoryNameComparer(string directoryPath) =>
+        TryGetDirectoryNameComparer(directoryPath, out var comparer) ? comparer : throw UnsupportedNamespace(directoryPath);
+
+    public override bool TryGetDirectoryNameComparer
+    (
+        string directoryPath,
+        [NotNullWhen(true)] out StringComparer? comparer
+    )
     {
+        comparer = null;
         var existingPath = FindExistingDirectory(directoryPath);
         if (!OperatingSystem.IsLinux() || IntPtr.Size != sizeof(long))
         {
-            throw UnsupportedNamespace(existingPath);
+            return false;
         }
 
         var descriptor = Open(existingPath, OpenReadOnly | OpenCloseOnExec);
@@ -49,13 +58,13 @@ internal sealed class UnixFileSystemPathBackend : FileSystemPathBackend
                     {
                         throw NativeFailure(existingPath);
                     }
-                    if ((flags & CaseFoldDirectoryFlag) != 0) { throw UnsupportedNamespace(existingPath); }
+                    if ((flags & CaseFoldDirectoryFlag) != 0) { return false; }
                 }
                 else if (fileSystem is not BtrfsFileSystem and not TmpfsFileSystem)
                 {
                     // A mount may expose remote, casefolded, or host-translated names.
                     // Do not infer ordinal semantics merely from the Linux host OS.
-                    throw UnsupportedNamespace(existingPath);
+                    return false;
                 }
             }
             finally
@@ -68,7 +77,8 @@ internal sealed class UnixFileSystemPathBackend : FileSystemPathBackend
             _ = Close(descriptor);
         }
 
-        return StringComparer.Ordinal;
+        comparer = StringComparer.Ordinal;
+        return true;
     }
 
     private static YabtFileSystemException UnsupportedNamespace(string path) => new

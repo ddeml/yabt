@@ -26,9 +26,14 @@ internal sealed class FileSystemObjectPathComparer
         var count = Math.Min(firstSegments.Length, secondSegments.Length);
         for (var index = 0; index < count; index++)
         {
-            var nameComparer = _backend.GetDirectoryNameComparer(parentPath);
-            var comparison = nameComparer.Compare(firstSegments[index], secondSegments[index]);
-            if (comparison != 0) { return comparison; }
+            // Equal spellings need no filesystem evidence. A native path can pass through
+            // an unsupported ancestor namespace before reaching a supported store mount.
+            if (!string.Equals(firstSegments[index], secondSegments[index], StringComparison.Ordinal))
+            {
+                var nameComparer = _backend.GetDirectoryNameComparer(parentPath);
+                var comparison = nameComparer.Compare(firstSegments[index], secondSegments[index]);
+                if (comparison != 0) { return comparison; }
+            }
             parentPath = Path.Combine(parentPath, firstSegments[index]);
         }
 

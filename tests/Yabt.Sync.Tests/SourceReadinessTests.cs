@@ -242,6 +242,9 @@ public sealed class SourceReadinessTests
         public void ConfigureSourceTraversal(ArchiveSourceLocation source, IObjectStore targetStore) =>
             _inner.ConfigureSourceTraversal(source, targetStore);
 
+        public void ValidateBackupLocations(ArchiveSourceLocation source, IObjectStore targetStore) =>
+            _inner.ValidateBackupLocations(source, targetStore);
+
         public async Task<FolderPolicy> ReadPolicyAsync
         (
             ArchiveSourceLocation source,

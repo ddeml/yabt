@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Metadata;
@@ -142,6 +143,164 @@ public sealed class FileSystemArchiveLocationResolverTests
 
         StringAssert.Contains(exception.ToString(), "linked");
         Assert.IsFalse(policyReader.Paths.Contains(link, StringComparer.Ordinal));
+    }
+
+    [TestMethod]
+    [DataRow("")]
+    [DataRow("archive")]
+    [DataRow("../")]
+    public async Task BackupRejectsEqualOrNestedRootsWithoutCreatingTheTarget(string targetRelativePath)
+    {
+        using var fixture = new LocationFixture();
+        using var services = CreateServices(fixture.Root).BuildServiceProvider();
+        var resolver = services.GetRequiredService<IArchiveLocationResolver>();
+        var location = await resolver.LocateSourceAsync(fixture.Root);
+        var targetPath = Path.GetFullPath(Path.Combine(fixture.Root, targetRelativePath));
+        var target = services.GetRequiredService<ISourceRootObjectStoreResolver>().ResolveSourceRoot(targetPath);
+
+        var exception = Assert.ThrowsExactly<YabtFileSystemException>
+        (
+            () => resolver.ValidateBackupLocations(location, target)
+        );
+
+        Assert.IsInstanceOfType<ObjectStoreOverlapException>(exception.InnerException);
+        StringAssert.Contains(exception.Message, "overlaps target storage");
+        Assert.IsEmpty(Directory.GetFileSystemEntries(fixture.Root));
+    }
+
+    [TestMethod]
+    [DataRow("", "photos", "archive")]
+    [DataRow("", "photos", "photos-archive")]
+    [DataRow("live", "photos", "archive")]
+    [DataRow("live", "", "archive")]
+    public async Task BackupAllowsSiblingTargetOutsideSelectedDataAndMetadata
+    (
+        string livePrefix,
+        string selection,
+        string targetRelativePath
+    )
+    {
+        using var fixture = new LocationFixture();
+        var sourcePath = Directory.CreateDirectory(Path.Combine(fixture.Root, selection)).FullName;
+        Directory.CreateDirectory(Path.Combine(fixture.Root, livePrefix, selection));
+        using var services = CreateServices(fixture.Root, new(livePrefix, "hist")).BuildServiceProvider();
+        var resolver = services.GetRequiredService<IArchiveLocationResolver>();
+        var location = await resolver.LocateSourceAsync(sourcePath);
+        var targetPath = Path.Combine(fixture.Root, targetRelativePath);
+        var target = services.GetRequiredService<ISourceRootObjectStoreResolver>().ResolveSourceRoot(targetPath);
+
+        resolver.ValidateBackupLocations(location, target);
+
+        Assert.IsFalse(Directory.Exists(targetPath));
+    }
+
+    [TestMethod]
+    public async Task BackupProtectsPolicyLocationOutsideExplicitLivePrefix()
+    {
+        using var fixture = new LocationFixture();
+        var policyPath = Directory.CreateDirectory(Path.Combine(fixture.Root, "photos")).FullName;
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "live", "photos"));
+        using var services = CreateServices(fixture.Root, new("live", "hist")).BuildServiceProvider();
+        var resolver = services.GetRequiredService<IArchiveLocationResolver>();
+        var location = await resolver.LocateSourceAsync(policyPath);
+        var target = services.GetRequiredService<ISourceRootObjectStoreResolver>().ResolveSourceRoot(policyPath);
+
+        var exception = Assert.ThrowsExactly<YabtFileSystemException>
+        (
+            () => resolver.ValidateBackupLocations(location, target)
+        );
+
+        StringAssert.Contains(exception.Message, "source folder policy");
+        Assert.IsInstanceOfType<ObjectStoreOverlapException>(exception.InnerException);
+    }
+
+    [TestMethod]
+    public async Task BackupProtectsDescriptorWhenSelectedDataResolvesOutsideItsRoot()
+    {
+        using var fixture = new LocationFixture();
+        var sourcePath = Directory.CreateDirectory(Path.Combine(fixture.Root, "source")).FullName;
+        var dataPath = Directory.CreateDirectory(Path.Combine(fixture.Root, "data")).FullName;
+        fixture.LinkDirectory(Path.Combine(sourcePath, "live"), dataPath);
+        using var services = CreateServices(sourcePath, new("live", "hist")).BuildServiceProvider();
+        var resolver = services.GetRequiredService<IArchiveLocationResolver>();
+        var location = await resolver.LocateSourceAsync(sourcePath);
+        var target = services.GetRequiredService<ISourceRootObjectStoreResolver>().ResolveSourceRoot(sourcePath);
+
+        var exception = Assert.ThrowsExactly<YabtFileSystemException>
+        (
+            () => resolver.ValidateBackupLocations(location, target)
+        );
+
+        StringAssert.Contains(exception.Message, "source root metadata");
+        Assert.IsInstanceOfType<ObjectStoreOverlapException>(exception.InnerException);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task BackupResolvesTargetAliasesAndMissingSuffixes(bool existingSuffix)
+    {
+        using var fixture = new LocationFixture();
+        var sourcePath = Directory.CreateDirectory(Path.Combine(fixture.Root, "source")).FullName;
+        var aliasPath = Path.Combine(fixture.Root, "alias");
+        fixture.LinkDirectory(aliasPath, sourcePath);
+        if (existingSuffix) { Directory.CreateDirectory(Path.Combine(sourcePath, "archive")); }
+        using var services = CreateServices(sourcePath).BuildServiceProvider();
+        var resolver = services.GetRequiredService<IArchiveLocationResolver>();
+        var location = await resolver.LocateSourceAsync(sourcePath);
+        var targetPath = Path.Combine(aliasPath, "archive");
+        var target = services.GetRequiredService<ISourceRootObjectStoreResolver>().ResolveSourceRoot(targetPath);
+
+        var exception = Assert.ThrowsExactly<YabtFileSystemException>
+        (
+            () => resolver.ValidateBackupLocations(location, target)
+        );
+
+        Assert.IsInstanceOfType<ObjectStoreOverlapException>(exception.InnerException);
+        Assert.AreEqual(existingSuffix, Directory.Exists(targetPath));
+    }
+
+    [TestMethod]
+    public async Task BackupResolvesLinksInAnotherLinksTargetAncestors()
+    {
+        using var fixture = new LocationFixture();
+        var sourcePath = Directory.CreateDirectory(Path.Combine(fixture.Root, "source")).FullName;
+        Directory.CreateDirectory(Path.Combine(sourcePath, "archive"));
+        var firstAlias = Path.Combine(fixture.Root, "first");
+        var secondAlias = Path.Combine(fixture.Root, "second");
+        fixture.LinkDirectory(firstAlias, sourcePath);
+        fixture.LinkDirectory(secondAlias, Path.Combine(firstAlias, "archive"));
+        using var services = CreateServices(sourcePath).BuildServiceProvider();
+        var resolver = services.GetRequiredService<IArchiveLocationResolver>();
+        var location = await resolver.LocateSourceAsync(sourcePath);
+        var target = services.GetRequiredService<ISourceRootObjectStoreResolver>().ResolveSourceRoot(secondAlias);
+
+        var exception = Assert.ThrowsExactly<YabtFileSystemException>
+        (
+            () => resolver.ValidateBackupLocations(location, target)
+        );
+
+        Assert.IsInstanceOfType<ObjectStoreOverlapException>(exception.InnerException);
+    }
+
+    [TestMethod]
+    public async Task BackupAliasResolutionTerminatesForCyclicLinks()
+    {
+        using var fixture = new LocationFixture();
+        var sourcePath = Directory.CreateDirectory(Path.Combine(fixture.Root, "source")).FullName;
+        var cyclePath = Path.Combine(fixture.Root, "cycle");
+        fixture.LinkDirectory(cyclePath, cyclePath);
+        using var services = CreateServices(sourcePath).BuildServiceProvider();
+        var resolver = services.GetRequiredService<IArchiveLocationResolver>();
+        var location = await resolver.LocateSourceAsync(sourcePath);
+        var target = services.GetRequiredService<ISourceRootObjectStoreResolver>().ResolveSourceRoot(cyclePath);
+
+        var exception = Assert.ThrowsExactly<YabtFileSystemException>
+        (
+            () => resolver.ValidateBackupLocations(location, target)
+        );
+
+        StringAssert.Contains(exception.Message, "could not safely resolve filesystem path");
     }
 
     private static ServiceCollection CreateServices

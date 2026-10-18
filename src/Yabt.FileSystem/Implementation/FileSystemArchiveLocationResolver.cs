@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Metadata;
@@ -13,6 +14,8 @@ internal sealed class FileSystemArchiveLocationResolver
     ILogger<FileSystemArchiveLocationResolver> _logger
 ) : IArchiveLocationResolver
 {
+    private const int MaximumResolvedDirectoryLinks = 64;
+
     private readonly ISourceRootObjectStoreResolver _sourceRootObjectStoreResolver =
         sourceRootObjectStoreResolvers.SingleOrDefault() ??
         throw new YabtFileSystemException("Exactly one source root object store resolver must be registered.");
@@ -48,6 +51,59 @@ internal sealed class FileSystemArchiveLocationResolver
             displayName.Length == 0 ? "root" : displayName,
             _sourceRootObjectStoreResolver.ResolveSourceRoot(root.RootPath)
         );
+    }
+
+    public void ValidateBackupLocations(ArchiveSourceLocation source, IObjectStore targetStore)
+    {
+        _logger.LogTrace(nameof(ValidateBackupLocations));
+
+        // Other providers may expose this filesystem, but their endpoints alone cannot prove it.
+        if (targetStore is not ILocalObjectStore localArchive) { return; }
+
+        var archiveRoot = ResolvePhysicalPath(localArchive.RootPath, requireKnownLinkTargets: false);
+        var sourceRoot = ResolvePhysicalPath
+        (
+            ToNativePath(source.Root.RootPath, source.SourcePrefix),
+            requireKnownLinkTargets: false
+        );
+        if
+        (
+            FileSystemObjectStoreNamespace.IsNativePathUnder(archiveRoot, sourceRoot, allowUnknownComparison: true) ||
+            FileSystemObjectStoreNamespace.IsNativePathUnder(sourceRoot, archiveRoot, allowUnknownComparison: true)
+        )
+        {
+            throw CreateBackupOverlapException(sourceRoot, archiveRoot, "selected source data");
+        }
+
+        // Descriptor and initial policy reads can be outside an explicit live prefix. Protect
+        // their containing directories without excluding a safe sibling target below that root.
+        var descriptorRoot = ResolvePhysicalPath(source.Root.RootPath, requireKnownLinkTargets: false);
+        if (FileSystemObjectStoreNamespace.IsNativePathUnder(descriptorRoot, archiveRoot, allowUnknownComparison: true))
+        {
+            throw CreateBackupOverlapException(descriptorRoot, archiveRoot, "source root metadata");
+        }
+
+        var policyRoot = ResolvePhysicalPath
+        (
+            ToNativePath(source.Root.RootPath, source.SelectionPrefix),
+            requireKnownLinkTargets: false
+        );
+        if (FileSystemObjectStoreNamespace.IsNativePathUnder(policyRoot, archiveRoot, allowUnknownComparison: true))
+        {
+            throw CreateBackupOverlapException(policyRoot, archiveRoot, "source folder policy");
+        }
+    }
+
+    private static YabtFileSystemException CreateBackupOverlapException
+    (
+        string sourcePath,
+        string archivePath,
+        string sourceDescription
+    )
+    {
+        var message = $"Backup {sourceDescription} at '{sourcePath}' overlaps target storage " +
+            $"at '{archivePath}'. Choose a target outside the source read locations.";
+        return new(message, path: sourcePath, innerException: new ObjectStoreOverlapException(message));
     }
 
     public void ConfigureSourceTraversal(ArchiveSourceLocation source, IObjectStore targetStore)
@@ -157,56 +213,88 @@ internal sealed class FileSystemArchiveLocationResolver
     private static string ToNativePath(string rootPath, ObjectPath path) =>
         Path.Combine(rootPath, path.Value.Replace('/', Path.DirectorySeparatorChar));
 
-    private string ResolvePhysicalPath(string path)
+    private string ResolvePhysicalPath(string path, bool requireKnownLinkTargets = true)
     {
         _logger.LogTrace(nameof(ResolvePhysicalPath));
 
         var fullPath = Path.GetFullPath(path);
         try
         {
-            var rootPath = Path.GetPathRoot(fullPath) ??
-                throw new IOException($"Path '{fullPath}' does not have a filesystem root.");
-            var relativePath = Path.GetRelativePath(rootPath, fullPath);
-            var segments = relativePath.Split
-            (
-                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                StringSplitOptions.RemoveEmptyEntries
-            );
-            var currentPath = rootPath;
-            for (var segmentIndex = 0; segmentIndex < segments.Length; segmentIndex++)
+            var pendingPath = fullPath;
+            var resolvedLinkCount = 0;
+            while (true)
             {
-                var candidatePath = Path.Combine(currentPath, segments[segmentIndex]);
-                FileSystemInfo? fileSystemInfo = Directory.Exists(candidatePath) ?
-                    new DirectoryInfo(candidatePath) :
-                    File.Exists(candidatePath) ? new FileInfo(candidatePath) : null;
-                if (fileSystemInfo is null)
+                var rootPath = Path.GetPathRoot(pendingPath) ??
+                    throw new IOException($"Path '{pendingPath}' does not have a filesystem root.");
+                var relativePath = Path.GetRelativePath(rootPath, pendingPath);
+                var segments = relativePath == "." ? [] : relativePath.Split
+                (
+                    [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                    StringSplitOptions.RemoveEmptyEntries
+                );
+                var currentPath = rootPath;
+                var followedLink = false;
+                for (var segmentIndex = 0; segmentIndex < segments.Length; segmentIndex++)
                 {
-                    for (; segmentIndex < segments.Length; segmentIndex++)
+                    var candidatePath = Path.Combine(currentPath, segments[segmentIndex]);
+                    var attributes = FileSystemPathSafety.TryGetAttributes(candidatePath);
+                    if (!attributes.HasValue)
                     {
-                        currentPath = Path.Combine(currentPath, segments[segmentIndex]);
+                        for (; segmentIndex < segments.Length; segmentIndex++)
+                        {
+                            currentPath = Path.Combine(currentPath, segments[segmentIndex]);
+                        }
+
+                        return currentPath;
                     }
 
+                    if ((attributes.Value & FileAttributes.ReparsePoint) == 0)
+                    {
+                        currentPath = candidatePath;
+                        continue;
+                    }
+
+                    FileSystemInfo fileSystemInfo = (attributes.Value & FileAttributes.Directory) != 0 ?
+                        new DirectoryInfo(candidatePath) : new FileInfo(candidatePath);
+                    var linkTarget = fileSystemInfo.ResolveLinkTarget(returnFinalTarget: false);
+                    if (linkTarget is null)
+                    {
+                        if (requireKnownLinkTargets)
+                        {
+                            throw new IOException($"Reparse point '{candidatePath}' does not expose a resolvable target.");
+                        }
+
+                        // An unsupported reparse tag provides no alias evidence. Ordinary source
+                        // access and existing descendant-link safety rules still apply separately.
+                        currentPath = candidatePath;
+                        continue;
+                    }
+
+                    // Resolve one link at a time, including links in its target's ancestors.
+                    // Bound substitutions so cyclic or excessively indirect paths cannot loop.
+                    if (++resolvedLinkCount > MaximumResolvedDirectoryLinks)
+                    {
+                        throw new IOException($"Filesystem path '{fullPath}' exceeds the directory-link resolution limit.");
+                    }
+
+                    pendingPath = Path.GetFullPath(linkTarget.FullName);
+                    for (var tailIndex = segmentIndex + 1; tailIndex < segments.Length; tailIndex++)
+                    {
+                        pendingPath = Path.Combine(pendingPath, segments[tailIndex]);
+                    }
+
+                    followedLink = true;
                     break;
                 }
 
-                if ((fileSystemInfo.Attributes & FileAttributes.ReparsePoint) == 0)
-                {
-                    currentPath = candidatePath;
-                    continue;
-                }
-
-                var linkTarget = fileSystemInfo.ResolveLinkTarget(returnFinalTarget: true) ??
-                    throw new IOException($"Reparse point '{candidatePath}' does not expose a resolvable target.");
-                currentPath = Path.GetFullPath(linkTarget.FullName);
+                if (!followedLink) { return currentPath; }
             }
-
-            return Path.GetFullPath(currentPath);
         }
         catch (Exception ex)
         {
             throw new YabtFileSystemException
             (
-                $"Restore could not safely resolve filesystem path '{fullPath}'.",
+                $"Archive operation could not safely resolve filesystem path '{fullPath}'.",
                 path: fullPath,
                 innerException: ex
             );

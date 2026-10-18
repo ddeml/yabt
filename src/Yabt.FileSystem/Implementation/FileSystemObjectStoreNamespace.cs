@@ -66,14 +66,24 @@ internal sealed class FileSystemObjectStoreNamespace : ObjectStoreNamespace
     public static bool NativePathsEqual(string first, string second) =>
         IsNativePathUnder(first, second) && IsNativePathUnder(second, first);
 
-    public static bool IsNativePathUnder(string candidatePath, string ancestorPath)
+    /// <summary>
+    /// Tests known containment. With unknown comparison allowed, false can also mean that
+    /// an ancestor's name semantics are unsupported; destination validation remains strict.
+    /// </summary>
+    public static bool IsNativePathUnder
+    (
+        string candidatePath,
+        string ancestorPath,
+        bool allowUnknownComparison = false,
+        FileSystemPathBackend? backend = null
+    )
     {
         var candidate = Path.GetFullPath(candidatePath);
         var ancestor = Path.GetFullPath(ancestorPath);
         var candidateRoot = Path.GetPathRoot(candidate) ?? string.Empty;
         var ancestorRoot = Path.GetPathRoot(ancestor) ?? string.Empty;
-        var backend = FileSystemPathBackend.Current;
-        if (!string.Equals(candidateRoot, ancestorRoot, backend.NativePathComparison)) { return false; }
+        var effectiveBackend = backend ?? FileSystemPathBackend.Current;
+        if (!string.Equals(candidateRoot, ancestorRoot, effectiveBackend.NativePathComparison)) { return false; }
 
         var candidateRelativePath = Path.GetRelativePath(candidateRoot, candidate);
         var ancestorRelativePath = Path.GetRelativePath(ancestorRoot, ancestor);
@@ -81,11 +91,27 @@ internal sealed class FileSystemObjectStoreNamespace : ObjectStoreNamespace
         var ancestorSegments = ancestorRelativePath == "." ? [] : ancestorRelativePath.Split(Path.DirectorySeparatorChar);
         if (candidateSegments.Length < ancestorSegments.Length) { return false; }
 
-        var comparer = new FileSystemObjectPathComparer(candidateRoot, backend);
-        return comparer.Equals
-        (
-            string.Join('/', candidateSegments.Take(ancestorSegments.Length)),
-            string.Join('/', ancestorSegments)
-        );
+        var parentPath = candidateRoot;
+        for (var index = 0; index < ancestorSegments.Length; index++)
+        {
+            if (!string.Equals(candidateSegments[index], ancestorSegments[index], StringComparison.Ordinal))
+            {
+                StringComparer? comparer;
+                if (allowUnknownComparison)
+                {
+                    if (!effectiveBackend.TryGetDirectoryNameComparer(parentPath, out comparer)) { return false; }
+                }
+                else
+                {
+                    comparer = effectiveBackend.GetDirectoryNameComparer(parentPath);
+                }
+
+                if (!comparer.Equals(candidateSegments[index], ancestorSegments[index])) { return false; }
+            }
+
+            parentPath = Path.Combine(parentPath, candidateSegments[index]);
+        }
+
+        return true;
     }
 }

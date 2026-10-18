@@ -275,6 +275,27 @@ the existing contextual I/O failure and recovery path; never silently rename or
 omit conflicting desired content. Validate known namespace conflicts before
 live mutation while retaining safe checkpoints after later runtime failures.
 
+Backup location validation is bounded and best effort. Before target
+initialization or locking, the provider rejects known overlap between the
+selected source subtree and the whole writable target root, including history,
+metadata, and staging. Protect source descriptor and initial policy read
+locations as well, while allowing a selected source and target to be siblings
+below the descriptor root. Resolve known filesystem links and existing ancestor
+components without scanning trees, reading payloads, probing remote services,
+or writing markers into the source. Unknown aliases, unsupported ancestor
+comparison semantics, and cross-provider mappings do not alone prevent backup;
+they are not proof of separation. Ordinary I/O failures still propagate, and
+destination namespace validation remains strict.
+
+Use existing source traversal to detect additional overlap as it becomes known.
+Providers mark detected overlap with `ObjectStoreOverlapException`, optionally
+inside their contextual exception. Detection stops subsequent source payload
+reads and archive payload mutations, including within nested ZIP projections;
+do not collect it as an ordinary recoverable source read failure. Retain prior
+safe checkpoints and recovery markers, suppress unrelated removals, and do not
+publish a successful replacement manifest. This does not add snapshot isolation
+or change the stricter directory-link approval and cycle rules below.
+
 `IObjectStore` should expose folder-local traversal rather than recursive flat
 listing. The object store contract should answer "what files and immediate child
 folders are inside this folder prefix?" so backup can compare source and target

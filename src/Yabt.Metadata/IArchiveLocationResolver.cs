@@ -13,6 +13,13 @@ public interface IArchiveLocationResolver
         CancellationToken cancellationToken = default
     );
 
+    /// <summary>
+    /// Rejects known overlap using bounded provider location checks before target mutation.
+    /// Must not write storage, scan trees, or probe remote services. Returning normally means
+    /// no overlap was detected; it does not prove separation across unknown aliases.
+    /// </summary>
+    void ValidateBackupLocations(ArchiveSourceLocation source, IObjectStore targetStore);
+
     void ConfigureSourceTraversal(ArchiveSourceLocation source, IObjectStore targetStore);
 
     Task<FolderPolicy> ReadPolicyAsync

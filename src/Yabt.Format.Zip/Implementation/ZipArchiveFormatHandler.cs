@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Metadata;
@@ -961,6 +962,7 @@ internal sealed class ZipArchiveFormatHandler
                     }
                     catch (Exception ex)
                     {
+                        if (ObjectStoreOverlapException.IsContainedIn(ex)) { throw; }
                         sourceReadFailures.Add(ex);
                         continue;
                     }
@@ -994,6 +996,7 @@ internal sealed class ZipArchiveFormatHandler
                             }
                             catch (Exception ex)
                             {
+                                if (ObjectStoreOverlapException.IsContainedIn(ex)) { throw; }
                                 sourceReadFailures.Add(ex);
                                 sourceReadFailed = true;
                                 break;

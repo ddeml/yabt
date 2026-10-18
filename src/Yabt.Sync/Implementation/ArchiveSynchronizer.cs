@@ -5,6 +5,7 @@ using System.IO.Hashing;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Metadata;
@@ -2509,6 +2510,7 @@ internal sealed class ArchiveSynchronizer
             targetStoreConfiguration,
             sourceLocation.Root.RootPath
         );
+        _locationResolver.ValidateBackupLocations(sourceLocation, targetStore);
         _locationResolver.ConfigureSourceTraversal(sourceLocation, targetStore);
         var policy = await _locationResolver.ReadPolicyAsync
         (
@@ -2666,6 +2668,14 @@ internal sealed class ArchiveSynchronizer
 
         void CaptureSourceReadFailures(Exception exception)
         {
+            if (ObjectStoreOverlapException.IsContainedIn(exception))
+            {
+                throw new YabtSyncException
+                (
+                    $"Archive {operationName} stopped because source and target storage overlap.",
+                    exception
+                );
+            }
             foreach (var sourceReadFailure in SourceObjectReadException.FindAll(exception))
             {
                 sourceReadFailures.Add(CreateReadFailure(
@@ -3028,6 +3038,7 @@ internal sealed class ArchiveSynchronizer
             catch (Exception ex) when (SourceObjectReadException.FindAll(ex).Count != 0)
             {
                 currentCancellationToken.ThrowIfCancellationRequested();
+                if (ObjectStoreOverlapException.IsContainedIn(ex)) { throw; }
                 CaptureSourceReadFailures(ex);
                 if (projectedObject.Projection is not null)
                 {
