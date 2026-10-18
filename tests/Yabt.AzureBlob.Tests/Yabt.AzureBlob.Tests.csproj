@@ -13,5 +13,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Yabt.AzureBlob\Yabt.AzureBlob.csproj" />
+    <ProjectReference Include="..\..\src\Yabt.Tests\Yabt.Tests.csproj" />
   </ItemGroup>
 </Project>

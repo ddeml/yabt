@@ -6029,6 +6029,9 @@ public sealed class ArchiveSynchronizerTests
         public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
             _innerStore.EnsureReadyAsync(cancellationToken);
 
+        public Task InitializeAsync(CancellationToken cancellationToken = default) =>
+            _innerStore.InitializeAsync(cancellationToken);
+
         public Task UploadAsync
         (
             string key,
@@ -6265,6 +6268,9 @@ public sealed class ArchiveSynchronizerTests
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
             _innerStore.EnsureReadyAsync(cancellationToken);
+
+        public Task InitializeAsync(CancellationToken cancellationToken = default) =>
+            _innerStore.InitializeAsync(cancellationToken);
 
         public async Task UploadAsync
         (
@@ -6530,6 +6536,9 @@ public sealed class ArchiveSynchronizerTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+
+        public Task InitializeAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
 
         public Task UploadAsync
         (

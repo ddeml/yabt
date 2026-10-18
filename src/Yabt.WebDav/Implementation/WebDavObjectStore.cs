@@ -32,11 +32,70 @@ internal sealed class WebDavObjectStore
     public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogTrace(nameof(EnsureReadyAsync));
-        _logger.LogWebDavStoreReady();
+
+        try
+        {
+            var collectionUri = BuildUri(GetPathContext(), [], trailingSlash: true);
+            using var request = CreateRequest(PropFindMethod, collectionUri);
+            request.Headers.TryAddWithoutValidation(DepthHeaderName, "0");
+            request.Content = new StringContent
+            (
+                "<d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/></d:prop></d:propfind>",
+                Encoding.UTF8,
+                "application/xml"
+            );
+
+            using var response = await HttpClient.SendAsync
+            (
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken
+            );
+            await EnsureMultiStatusAsync
+            (
+                response,
+                $"PROPFIND {collectionUri.AbsoluteUri}",
+                cancellationToken
+            );
+            await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
+            var document = await LoadXmlDocumentAsync(content, cancellationToken);
+            var rootResponse = document.Descendants(DavNamespace + "response").SingleOrDefault
+            (
+                entry => entry.Element(DavNamespace + "href")?.Value is { Length: > 0 } href &&
+                    Uri.TryCreate(collectionUri, href, out var entryUri) &&
+                    string.Equals
+                    (
+                        entryUri.AbsoluteUri.TrimEnd('/'),
+                        collectionUri.AbsoluteUri.TrimEnd('/'),
+                        StringComparison.Ordinal
+                    )
+            );
+            if (rootResponse is null || !IsCollection(rootResponse))
+            {
+                throw new YabtWebDavException
+                (
+                    $"WebDAV root '{collectionUri.AbsoluteUri}' did not return readable collection properties."
+                );
+            }
+
+            _logger.LogWebDavStoreReady();
+        }
+        catch (Exception ex)
+        {
+            throw new YabtWebDavException(
+                "WebDAV object store could not read the existing configured root.",
+                ex);
+        }
+    }
+
+    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        _logger.LogTrace(nameof(InitializeAsync));
 
         try
         {
             await EnsureConfiguredRootExistsAsync(GetPathContext(), cancellationToken);
+            _logger.LogWebDavStoreReady();
         }
         catch (Exception ex)
         {

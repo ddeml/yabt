@@ -58,6 +58,14 @@ public sealed class MemoryObjectStore
         return Task.CompletedTask;
     }
 
+    public Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        _logger.LogTrace(nameof(InitializeAsync));
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
     public async Task UploadAsync
     (
         string key,

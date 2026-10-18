@@ -243,6 +243,16 @@ Initial object store providers:
 
 ## Object Store Traversal
 
+`IReadOnlyObjectStore.EnsureReadyAsync` validates access to an existing store
+without creating or modifying resources. Missing or inaccessible sources are
+errors, never empty trees. `IObjectStore.InitializeAsync` explicitly prepares a
+writable destination and may create its root resources; source reads,
+verification, and dry runs must not call it. Archive descriptor validation
+remains separate from provider readiness. Readiness is not a snapshot: later
+source listing and read failures must still propagate, suppressing unrelated
+removals and successful manifest publication. History deduplication requires an
+existing readable archive even in dry-run mode.
+
 Object keys preserve each name exactly, including leading, trailing, and
 whitespace-only names when the provider can represent them. Only null or an
 empty string denotes the root. Canonical keys use `/` separators and reject

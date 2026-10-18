@@ -73,10 +73,7 @@ internal sealed class HistoryDeduplicator
                     "The selected target store does not support guarded history compaction mutations.");
             }
 
-            if (!request.DryRun)
-            {
-                await targetStore.EnsureReadyAsync(cancellationToken);
-            }
+            await targetStore.EnsureReadyAsync(cancellationToken);
 
             await using IArchiveMutationLock? mutationLock = request.DryRun ?
                 null :

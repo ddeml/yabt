@@ -2603,7 +2603,10 @@ internal sealed class ArchiveSynchronizer
     )
     {
         await context.SourceStore.EnsureReadyAsync(cancellationToken);
-        await context.TargetStore.EnsureReadyAsync(cancellationToken);
+        if (writeChanges)
+        {
+            await context.TargetStore.InitializeAsync(cancellationToken);
+        }
 
         if (writeChanges && context.TargetStore is not IArchiveMutableObjectStore)
         {

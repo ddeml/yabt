@@ -185,6 +185,22 @@ recursively processes any provenanced artifacts it emits. This turns a ZIP
 nested inside another ZIP back into its original logical folder without guessing
 from a filename.
 
+Store readiness and destination initialization are separate operations.
+`IReadOnlyObjectStore.EnsureReadyAsync` validates an existing readable root
+without modifying storage. Filesystem readiness attempts directory enumeration;
+Azure reads container properties and WebDAV checks the root collection.
+`IObjectStore.InitializeAsync` may create root resources for a mutating backup.
+Source projection, verification, and dry runs never initialize storage. An
+absent filesystem target can still be compared as prospective empty storage
+during a dry run; this does not make a missing source valid. Deduplication
+validates the existing archive in both modes. Descriptor validation remains in
+the metadata and synchronization layers, outside provider readiness.
+
+Readiness cannot prevent a later source change. Source traversal must report
+failed listings and reads rather than infer an empty branch. Backup suppresses
+unrelated removals and successful manifest publication after source read
+failures, while retaining safe checkpoints already written.
+
 Object keys preserve exact name components, including whitespace. An empty
 string denotes the root; a whitespace-only name remains a distinct object.
 `ObjectPath` represents canonical keys with ordinal identity and `/` separators.

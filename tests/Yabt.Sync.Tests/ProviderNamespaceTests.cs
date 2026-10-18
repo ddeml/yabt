@@ -455,6 +455,8 @@ public sealed class ProviderNamespaceTests
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken = default) => Inner.EnsureReadyAsync(cancellationToken);
 
+        public Task InitializeAsync(CancellationToken cancellationToken = default) => Inner.InitializeAsync(cancellationToken);
+
         public Task<ArchiveObjectContent> OpenReadAsync(string key, CancellationToken cancellationToken = default) =>
             Inner.OpenReadAsync(key, cancellationToken);
 

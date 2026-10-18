@@ -10,6 +10,11 @@ public interface IReadOnlyObjectStore
     /// </summary>
     IObjectStoreNamespace Namespace => ObjectStoreNamespace.Ordinal;
 
+    /// <summary>
+    /// Validates access to the existing store without creating or changing any resources.
+    /// An unavailable store is an error, not an empty source. Subsequent reads and listings
+    /// must still report failures because readiness does not provide a snapshot.
+    /// </summary>
     Task EnsureReadyAsync(CancellationToken cancellationToken = default);
 
     Task<ArchiveObjectContent> OpenReadAsync

@@ -1,12 +1,57 @@
 using Azure.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yabt.AzureBlob.Implementation;
+using Yabt.Tests;
 
 namespace Yabt.AzureBlob.Tests;
 
 [TestClass]
 public sealed class AzureBlobObjectStoreTests
 {
+    [TestMethod]
+    public async Task EnsureReadyAsyncReadsExistingContainerWithoutCreatingIt()
+    {
+        await using var server = new TestHttpServer(200);
+        var store = CreateHttpStore(server.Endpoint);
+
+        await store.EnsureReadyAsync();
+
+        var request = server.Requests.Single();
+        Assert.AreEqual("GET", request.Method);
+        Assert.AreEqual("/archive?restype=container", request.Target);
+    }
+
+    [TestMethod]
+    [DataRow(404)]
+    [DataRow(403)]
+    [DataRow(503)]
+    public async Task EnsureReadyAsyncRejectsMissingOrUnavailableContainerWithoutCreatingIt(int statusCode)
+    {
+        await using var server = new TestHttpServer(statusCode);
+        var store = CreateHttpStore(server.Endpoint);
+
+        var exception = await Assert.ThrowsExactlyAsync<YabtAzureBlobException>
+        (
+            () => store.EnsureReadyAsync()
+        );
+
+        StringAssert.Contains(exception.Message, "existing configured container");
+        Assert.AreEqual("GET", server.Requests.Single().Method);
+    }
+
+    [TestMethod]
+    public async Task InitializeAsyncExplicitlyCreatesTheContainer()
+    {
+        await using var server = new TestHttpServer(201);
+        var store = CreateHttpStore(server.Endpoint);
+
+        await store.InitializeAsync();
+
+        var request = server.Requests.Single();
+        Assert.AreEqual("PUT", request.Method);
+        Assert.AreEqual("/archive?restype=container", request.Target);
+    }
+
     [TestMethod]
     public void BlobPathsPreserveWhitespaceIncludingWhitespaceOnlySegments()
     {
@@ -168,5 +213,22 @@ public sealed class AzureBlobObjectStoreTests
         Assert.AreEqual(new Uri("https://second.blob.core.windows.net/second"), secondContext.ContainerClient.Uri);
         Assert.AreEqual("two", secondContext.ObjectStorePrefix);
         Assert.AreEqual(2, secondContext.UploadTransferOptions.MaximumConcurrency);
+    }
+    private static AzureBlobObjectStore CreateHttpStore(Uri endpoint)
+    {
+        var options = new AzureBlobObjectStoreOptions
+        {
+            ConnectionString = "DefaultEndpointsProtocol=http;AccountName=testaccount;" +
+                $"AccountKey={Convert.ToBase64String(new byte[32])};BlobEndpoint={endpoint}",
+            ContainerName = "archive",
+            Retry = new AzureBlobRetryOptions { MaximumRetries = 0 },
+        };
+        return new
+        (
+            new TestOptionsMonitor<AzureBlobObjectStoreOptions>(options),
+            new AzureBlobContainerClientFactory(new TestTokenCredential()),
+            NullLogger<AzureBlobObjectStore>.Instance,
+            TimeProvider.System
+        );
     }
 }

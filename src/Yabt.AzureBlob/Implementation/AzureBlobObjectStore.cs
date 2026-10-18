@@ -29,12 +29,30 @@ internal sealed class AzureBlobObjectStore
         try
         {
             var context = GetContext();
+            await context.ContainerClient.GetPropertiesAsync(cancellationToken: cancellationToken);
             _logger.LogAzureBlobStoreReady(context.ContainerClient.Name);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtAzureBlobException(
+                "Azure Blob object store could not read the existing configured container.",
+                ex);
+        }
+    }
+
+    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        _logger.LogTrace(nameof(InitializeAsync));
+
+        try
+        {
+            var context = GetContext();
             await context.ContainerClient.CreateIfNotExistsAsync
             (
                 PublicAccessType.None,
                 cancellationToken: cancellationToken
             );
+            _logger.LogAzureBlobStoreReady(context.ContainerClient.Name);
         }
         catch (Exception ex)
         {

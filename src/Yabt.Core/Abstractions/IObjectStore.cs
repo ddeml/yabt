@@ -5,6 +5,12 @@ namespace Yabt.Core.Abstractions;
 public interface IObjectStore : IReadOnlyObjectStore
 {
     /// <summary>
+    /// Initializes a writable destination, creating its root resources when necessary.
+    /// Source reads, verification, and dry runs must not call this method.
+    /// </summary>
+    Task InitializeAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Creates one complete object at <paramref name="key"/>. Implementations must fail without
     /// overwriting when that key already exists, and must not expose a partially uploaded final
     /// object. YABT uses this create-if-absent contract for immutable archive objects and locks.

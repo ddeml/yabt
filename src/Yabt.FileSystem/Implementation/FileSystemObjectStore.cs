@@ -37,9 +37,45 @@ internal sealed class FileSystemObjectStore
         }
     }
 
-    public Task EnsureReadyAsync(CancellationToken cancellationToken = default)
+    public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogTrace(nameof(EnsureReadyAsync));
+
+        var rootPath = GetRootPath();
+        try
+        {
+            await ValidateReadPathAsync(rootPath, rootPath, cancellationToken);
+            _logger.LogFileSystemFolderList(string.Empty, rootPath, recursive: false);
+            await YabtTask.Run
+            (
+                () =>
+                {
+                    using var entries = Directory.EnumerateFileSystemEntries(rootPath).GetEnumerator();
+                    _ = entries.MoveNext();
+                },
+                ex => _logger.LogAbandonedFileSystemOperationFailed
+                (
+                    ex,
+                    nameof(Directory.EnumerateFileSystemEntries),
+                    rootPath
+                ),
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            throw new YabtFileSystemException
+            (
+                $"Filesystem object-store root '{rootPath}' could not be read; it must not be treated as empty.",
+                path: rootPath,
+                innerException: ex
+            );
+        }
+    }
+
+    public Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        _logger.LogTrace(nameof(InitializeAsync));
 
         var rootPath = GetRootPath();
         _logger.LogFileSystemStoreReady(rootPath);

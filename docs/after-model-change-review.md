@@ -12,7 +12,7 @@ change, for follow-up work in **Codex-Sandbox-01**.
   source-read failure handling, `verify-restore` , and Azure transfer/retry
   configuration. The handoff commit carries those pending changes alongside this
   document.
-- Status: **R01 and R02 are implemented for their documented scopes; the other
+- Status: **R01, R02, and R03 are implemented for their documented scopes; other
   findings remain open**. Recording and committing the baseline did not implement
   the proposed fixes. R09 was added during the follow-up discussion on
   2026-09-21.
@@ -55,7 +55,7 @@ were not claimed as completed runtime reproductions in the review.
 | --- | --- | --- | --- | --- |
 | R01 | P1 | Path normalization silently omits source content | CLI reproduction and exact-path regression tests | Implemented |
 | R02 | P1 | Deduplication follows a linked ancestor outside the archive | CLI reproduction and junction regression tests | Implemented |
-| R03 | P1 | Missing source becomes a successful empty backup | CLI reproduction | Open |
+| R03 | P1 | Missing source becomes a successful empty backup | CLI reproduction and source-readiness regression tests | Implemented |
 | R04 | P1 | Backup accepts overlapping source and target roots | CLI reproduction | Open |
 | R05 | P2 | Filesystem shape/casing changes prevent backup completion | CLI reproductions | Open |
 | R06 | P2 | Folder-policy settings are accepted but ignored | Handler reproduction and inspection | Open |
@@ -124,7 +124,8 @@ native empty folders, guarded provider mutations, and destination refusal with
 existing contents unchanged. Linux-only native-name cases require a Linux test
 run; the Windows suite exercises real extended-path trailing-space/dot entries.
 Azure and WebDAV coverage here is local path-contract testing, not a live-service
-integration run. R03's independent missing-source behavior remains open.
+integration run. R03's independent missing-source behavior was still open at
+this point; its subsequent fix is documented below.
 
 **Verification:** The following completed on CodexSandbox01 with **514 passed,
 0 failed, and 3 Linux-only tests skipped**:
@@ -247,7 +248,7 @@ previously depended on missing source folders being interpreted as empty.
 [JsonBackupRootLocator.cs](../src/Yabt.Metadata/Implementation/JsonBackupRootLocator.cs)
 , `LocateRootAsync` ;
 [FileSystemObjectStore.cs](../src/Yabt.FileSystem/Implementation/FileSystemObjectStore.cs)
-, `GetFolderItemsAsync` .
+, `EnsureReadyAsync`, `InitializeAsync`, and `GetFolderItemsAsync` .
 
 **Reproduction:** Create a valid source root descriptor and a separate archive
 containing `important.txt` . Invoke backup on a nonexistent child of the source
@@ -270,6 +271,40 @@ checks.
 inaccessible sources, and disappearance during traversal must fail without
 publishing a successful empty state or performing unrelated removals. A
 genuinely empty source must remain supported.
+
+**Implementation on 2026-10-18:** R02's strict source listing already rejects the
+original missing-child reproduction. The remaining readiness race was that the
+source root could disappear after descriptor lookup and be recreated by
+`EnsureReadyAsync`, allowing traversal to see an empty tree.
+
+Read readiness now validates existing storage without writing. Filesystem
+readiness attempts directory enumeration; a missing, inaccessible, or nonfolder
+root fails with contextual I/O information. Azure reads container properties;
+WebDAV validates the existing root collection. Writable destinations have a
+separate `InitializeAsync` operation. Only mutating backup calls it; source
+projections, verify, and dry runs do not. Deduplication requires an existing
+readable archive in both modes. Descriptor validation remains separate.
+
+Readiness does not provide a filesystem snapshot or make concurrent source
+changes impossible. Subsequent source listing and payload failures retain their
+existing error handling, preventing successful empty-state publication and
+unrelated removals. A genuinely empty source remains supported.
+
+Regression tests move the source away at deterministic boundaries after
+descriptor/policy lookup and during child traversal. They cover mirror and ZIP,
+backup/dry-run/verify, missing selected folders and live prefixes, genuinely
+empty sources, and missing archives during deduplication. Existing archive
+payloads, history, descriptors, and manifests must retain their exact contents.
+Filesystem tests also exercise real Windows directory-listing denial, linked
+store roots, and cancellation. Loopback HTTP fixtures verify that Azure and
+WebDAV readiness issue only reads, reject missing/unavailable roots, and reserve
+creation requests for explicit initialization; no live service was tested.
+
+**Verification:** The full Release suite on CodexSandbox01 completed with
+**633 passed, 0 failed, and 3 existing Linux-only tests skipped**, using the
+solution test command shown above. The build reported `NU1900` warnings because
+the NuGet vulnerability feed was unavailable. `git diff --check` and CRLF
+checks passed. Native Linux execution remains unverified.
 
 ### R04: Backup accepts overlapping source and target roots
 
