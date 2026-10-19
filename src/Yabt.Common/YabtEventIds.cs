@@ -106,4 +106,5 @@ public static class YabtEventIds
     public const int FolderPolicyCheck = 6003;
     public const int FolderPolicyRead = 6004;
     public const int FolderPolicyDefault = 6005;
+    public const int ConfigurationSettingIgnored = 6006;
 }

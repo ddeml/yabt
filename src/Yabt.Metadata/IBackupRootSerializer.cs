@@ -14,12 +14,14 @@ public interface IBackupRootSerializer
     Task<BackupRootDescriptor> ReadAsync
     (
         Stream source,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        string? sourceName = null
     );
 
     Task<BackupRootDocument> ReadDocumentAsync
     (
         Stream source,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        string? sourceName = null
     );
 }

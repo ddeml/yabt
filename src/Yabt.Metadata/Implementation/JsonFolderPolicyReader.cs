@@ -1,5 +1,8 @@
+using System.Collections.Frozen;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Yabt.Common;
+using Yabt.Core;
 using Yabt.Core.Models;
 
 namespace Yabt.Metadata.Implementation;
@@ -9,6 +12,11 @@ internal sealed class JsonFolderPolicyReader
     ILogger<JsonFolderPolicyReader> _logger
 ) : IFolderPolicyReader
 {
+    private static readonly FrozenSet<string> KnownProperties = new[]
+    {
+        "format", "includePatterns", "excludePatterns", "options", "directoryLinks",
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
     private readonly JsonSerializerOptions _jsonOptions = new(JsonMetadataOptions.Create())
     {
         AllowDuplicateProperties = false,
@@ -32,20 +40,36 @@ internal sealed class JsonFolderPolicyReader
 
         _logger.LogFolderPolicyRead(policyPath);
         await using var stream = File.OpenRead(policyPath);
-        FolderPolicy? policy;
+        FolderPolicy policy;
 
         try
         {
-            policy = await JsonSerializer.DeserializeAsync<FolderPolicy>(
+            using var document = await JsonDocument.ParseAsync
+            (
                 stream,
-                _jsonOptions,
-                cancellationToken);
-            if (policy is not null)
+                new JsonDocumentOptions { AllowDuplicateProperties = false },
+                cancellationToken: cancellationToken
+            );
+            policy = document.RootElement.Deserialize<FolderPolicy>(_jsonOptions) ??
+                throw new YabtMetadataException("A folder policy must be a JSON object.");
+            policy = policy with
             {
-                policy = policy with
-                {
-                    DirectoryLinks = FolderPolicyDirectoryLinks.Validate(policy.DirectoryLinks),
-                };
+                DirectoryLinks = FolderPolicyDirectoryLinks.Validate(policy.DirectoryLinks),
+            };
+            FolderPolicyDiagnostics.Validate(policy);
+            FolderPolicyDiagnostics.SetConfigurationSource(policy, policyPath);
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (KnownProperties.Contains(property.Name)) { continue; }
+
+                ConfigurationWarnings.Report
+                (
+                    _logger,
+                    policyPath,
+                    $"$[{JsonSerializer.Serialize(property.Name)}]",
+                    "This property is unknown and will be ignored."
+                );
             }
         }
         catch (Exception ex)
@@ -53,6 +77,6 @@ internal sealed class JsonFolderPolicyReader
             throw new YabtMetadataException($"Folder policy JSON '{policyPath}' could not be deserialized.", ex);
         }
 
-        return policy ?? FolderPolicy.Default;
+        return policy;
     }
 }

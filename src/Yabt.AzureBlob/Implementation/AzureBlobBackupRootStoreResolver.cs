@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Yabt.Common;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 
@@ -59,6 +60,12 @@ internal sealed class AzureBlobBackupRootStoreResolver
                 $"'{configSectionPath}'.");
         }
 
+        RuntimeConfigurationWarnings.Inspect<AzureBlobObjectStoreOptions>
+        (
+            _configuration,
+            configSectionPath,
+            _logger
+        );
         var options = section.Get<AzureBlobObjectStoreOptions>() ??
             throw new YabtAzureBlobException(
                 $"Azure Blob object store '{store.Id}' configuration section " +

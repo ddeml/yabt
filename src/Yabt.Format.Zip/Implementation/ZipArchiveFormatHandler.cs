@@ -71,6 +71,26 @@ internal sealed class ZipArchiveFormatHandler
 
     public bool ProjectsBesideSourceFolder => true;
 
+    public void ValidateBackupPolicy
+    (
+        FolderPolicy policy,
+        string? configurationSource = null
+    )
+    {
+        _logger.LogTrace(nameof(ValidateBackupPolicy));
+
+        var source = configurationSource ?? ".yabt-policy.json";
+        FolderPolicyDiagnostics.ReportIgnoredPatterns(policy, _logger, source);
+        FolderPolicyDiagnostics.ReportIgnoredOptions
+        (
+            policy,
+            _logger,
+            "Per-folder ZIP options are not supported and will be ignored. " +
+                "Application-wide ZIP settings remain effective.",
+            source
+        );
+    }
+
     public bool CanRestoreArtifact(ArchiveProjectedObject artifact)
     {
         _logger.LogTrace(nameof(CanRestoreArtifact));
@@ -103,6 +123,13 @@ internal sealed class ZipArchiveFormatHandler
 
         ArgumentNullException.ThrowIfNull(request);
 
+        var policy = request.Policy ?? new FolderPolicy(ZipArchiveFormatName.Value);
+        ValidateBackupPolicy
+        (
+            policy,
+            ArchiveLayout.CombinePrefixAndRelativePath(request.SourcePrefix, ".yabt-policy.json")
+        );
+
         await request.SourceStore.EnsureReadyAsync(cancellationToken);
 
         var sourceObjects = await ListSourceObjectsAsync(
@@ -125,7 +152,6 @@ internal sealed class ZipArchiveFormatHandler
             sourceObjects = prebuiltPackage.SourceObjects;
         }
 
-        var policy = request.Policy ?? new FolderPolicy(ZipArchiveFormatName.Value);
         var sourcePath = ArchiveLayout.NormalizeObjectKey(request.LogicalPath);
         var packageFingerprint = ComputePackageFingerprint(
             sourceObjects,

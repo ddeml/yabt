@@ -24,7 +24,7 @@ public static class YabtSyncServiceCollectionExtensions
         var optionsBuilder = services.AddOptions<YabtSyncOptions>();
         if (configSectionPath is not null)
         {
-            optionsBuilder.BindConfiguration(configSectionPath);
+            optionsBuilder.BindYabtConfiguration(configSectionPath);
         }
 
         services.TryAddSingleton(TimeProvider.System);

@@ -125,6 +125,36 @@ public sealed class JsonManifestSerializerTests
     }
 
     [TestMethod]
+    [DataRow("configurationSource")]
+    [DataRow("ConfigurationSource")]
+    public async Task ReadAsyncRejectsPolicyConfigurationSourceProperty(string propertyName)
+    {
+        using var serviceProvider = CreateServices().BuildServiceProvider();
+        var serializer = serviceProvider.GetRequiredService<IManifestSerializer>();
+        var json = Encoding.UTF8.GetString(await WriteAsync
+        (
+            serializer,
+            CreateSimpleManifest(serializer)
+        ));
+        var invalidJson = json.Replace
+        (
+            "\"policy\": {",
+            $"\"policy\": {{\r\n    \"{propertyName}\": \"source/.yabt-policy.json\",",
+            StringComparison.Ordinal
+        );
+        Assert.AreNotEqual(json, invalidJson);
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(invalidJson));
+
+        var exception = await Assert.ThrowsExactlyAsync<YabtMetadataException>
+        (
+            () => serializer.ReadAsync(source)
+        );
+
+        StringAssert.Contains(exception.Message, "deserialized");
+        StringAssert.Contains(exception.InnerException?.Message, propertyName);
+    }
+
+    [TestMethod]
     public async Task ReadAsyncRejectsTamperedSelfHash()
     {
         using var serviceProvider = CreateServices().BuildServiceProvider();

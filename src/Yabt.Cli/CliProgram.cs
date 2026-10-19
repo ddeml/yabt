@@ -11,6 +11,7 @@ public static class CliProgram
 {
     public static async Task<int> Main(string[] args)
     {
+        using var configurationWarnings = ConfigurationWarnings.BeginOperation();
         LogFileCommandLineResult commandLine;
         LogFileStartup logFileStartup;
         try

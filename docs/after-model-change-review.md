@@ -12,7 +12,7 @@ change, for follow-up work in **Codex-Sandbox-01**.
   source-read failure handling, `verify-restore` , and Azure transfer/retry
   configuration. The handoff commit carries those pending changes alongside this
   document.
-- Status: **R01-R05 and R09 are implemented for their documented scopes; other
+- Status: **R01-R06 and R09 are implemented for their documented scopes; other
   findings remain open**. Recording and committing the baseline did not implement
   the proposed fixes. R09 was added during the follow-up discussion on
   2026-09-21.
@@ -58,7 +58,7 @@ were not claimed as completed runtime reproductions in the review.
 | R03 | P1 | Missing source becomes a successful empty backup | CLI reproduction and source-readiness regression tests | Implemented |
 | R04 | P1 | Backup accepts overlapping source and target roots | CLI reproduction and overlap/recovery regression tests | Implemented (best effort) |
 | R05 | P2 | Filesystem shape/casing changes prevent backup completion | CLI reproductions and transition/recovery regression tests | Implemented |
-| R06 | P2 | Folder-policy settings are accepted but ignored | Handler reproduction and inspection | Open |
+| R06 | P2 | Folder-policy settings are accepted but ignored | Warning, validation, and round-trip regression tests | Implemented (warn and ignore) |
 | R07 | P2 | Unavailable restore-only entry can crash `verify-restore` | Static control-flow finding | Open |
 | R08 | Investigate | Cancellation may release a lock before mutation finishes | Static concurrency concern | Open |
 | R09 | P1 | Hard-linked archive files share mutable contents and distort deduplication savings | CLI reproduction and hard-link/recovery regression tests | Implemented |
@@ -449,13 +449,51 @@ options. The policy documentation presents a draft shape containing these
 fields, so whether to implement them now is a design decision; silently
 accepting ineffective settings is the immediate problem.
 
-**Proposed direction:** Either define and implement the semantics or reject
-nonempty unsupported settings. Also consider rejecting unknown policy properties
-so misspelled settings do not silently succeed.
+**Implemented resolution:** Richard selected warning-and-ignore handling for
+unknown optional configuration properties and recognized but unimplemented
+optional settings. Mirror and ZIP now warn for nonempty `includePatterns` ,
+`excludePatterns` , and `options` before projection, including nested policies.
+The warnings explicitly say that excluded files may still be archived and that
+ZIP uses runtime compression settings. Filtering and per-folder compression
+remain unimplemented; this fix makes that behavior visible.
 
-**Acceptance checks:** Verify the chosen behavior for mirror and ZIP, nested
-policies, exclusions, and per-folder compression. Do not silently archive a file
-that the accepted policy says to exclude.
+Root/layout and policy readers warn about unknown properties. The selected
+filesystem resolver diagnoses ignored extensions and credential references.
+Registered runtime options inspect consumed sections, including custom Azure
+sections and nested retry options. Arbitrary host/third-party settings and
+unused runtime sections are outside this inspection. Warnings identify the file
+or section and property path, never setting values, and repeat at most once per
+source/property pair per operation, including concurrent traversal.
+
+Invalid JSON, invalid known types/values, unsupported required formats/providers,
+directory-link approvals, and integrity metadata remain errors. The Azure
+descriptor allowlist remains strict, including unused declarations, to preserve
+its credential boundary. Exact source policies and root descriptors still
+round-trip unchanged. Restored policies are payload; their archived settings
+are not activated or warned about. Transient policy diagnostic provenance never
+enters serialized manifests or changes their identity.
+
+**Regression coverage:** Reader and resolver tests cover unknown fields,
+unsupported optional settings, malformed known values, safe messages, and
+strict Azure declarations. Handler and integration tests cover mirror/ZIP roots,
+nested mirror/ZIP policies, repeated backups, ignored exclusions, global ZIP
+compression, unchanged manifest identity, and exact policy restoration without
+active-policy warnings. Common/runtime tests cover concurrent warning
+deduplication, options reload, case-insensitive binding, custom sections, JSON
+source identification, and hosts without logging services. Manifest tests reject
+unknown diagnostic fields rather than silently accepting them.
+
+**Verification (2026-10-19):** Full Release solution testing completed with
+**854 passed, 0 failed, and 3 Linux-only tests skipped** on Windows. This adds
+85 regression cases over the R05 baseline. The command was:
+
+```powershell
+dotnet test yabt.sln --no-restore --configuration Release `
+  --verbosity minimal -m:1 --disable-build-servers
+```
+
+Both JSON schemas parse successfully, and `git diff --check` passes. Native
+Linux behavior was not exercised on this host.
 
 ### R07: `verify-restore` can dereference an unavailable entry
 
@@ -672,7 +710,7 @@ Related observations to evaluate during this work:
 3. Add targeted regression tests for R01-R04, confirm failures, and address
    those safety findings first. Use only disposable data for the destructive
    reproductions.
-4. Resolve R05-R07 and agree on R06 policy semantics. Investigate R08 with
+4. R05 and R06 are implemented; resolve R07 next. Investigate R08 with
    deterministic coordination rather than timing-dependent sleeps.
 5. Measure I01-I03, then refactor under the resulting tests and provider
    contracts.

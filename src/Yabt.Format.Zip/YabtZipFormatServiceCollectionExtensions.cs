@@ -17,7 +17,7 @@ public static class YabtZipFormatServiceCollectionExtensions
         var optionsBuilder = services.AddOptions<ZipArchiveFormatOptions>();
         if (configSectionPath is not null)
         {
-            optionsBuilder.BindConfiguration(configSectionPath);
+            optionsBuilder.BindYabtConfiguration(configSectionPath);
         }
 
         services.AddSingleton<IArchiveFormatHandler, ZipArchiveFormatHandler>();

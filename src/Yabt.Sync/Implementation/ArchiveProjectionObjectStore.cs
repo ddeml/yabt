@@ -515,6 +515,11 @@ internal sealed class ArchiveProjectionObjectStore
                 _sourceRootPrefix));
         var policy = await _readPolicyAsync(projectedScopePrefix, cancellationToken);
         var formatHandler = ResolveFormatHandler(policy);
+        formatHandler.ValidateBackupPolicy
+        (
+            policy,
+            ArchiveLayout.CombinePrefixAndRelativePath(projectedScopePrefix, FolderPolicyFileNames.Primary)
+        );
         var projectedScopeDefinition = new ProjectedScopeDefinition
         (
             sourceDisplayName,

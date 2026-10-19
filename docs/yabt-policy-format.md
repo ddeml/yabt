@@ -49,10 +49,25 @@ belongs under `options` .
 `includePatterns` , `excludePatterns` , and `options` are optional. Omit them
 when they are empty or not needed.
 
-The common schema validates the policy shape. A format handler may supply
-stricter validation for its own `options` object.
+The built-in `mirror` and `zip` handlers currently ignore nonempty values for
+these settings and issue a warning for each setting. Include patterns do not
+restrict the archived files, and files matching exclude patterns may still be
+archived. Per-folder ZIP compression settings have no effect; ZIP uses the
+runtime `Formats:Zip` options instead. Empty arrays, empty objects, and null
+optional values need no warning.
 
-## Draft Shape
+The common schema validates the policy shape. A format handler owns validation
+and diagnostics for its own `options` object and supported settings.
+
+Unknown top-level properties warn and are ignored. Warnings identify the policy
+file and property path without logging setting values, once per setting per
+operation. Invalid JSON, invalid known types/values, unsupported formats, and
+invalid directory-link approvals remain errors. The exact policy bytes still
+travel with the archive and return on restore. Restoring an archived policy
+does not apply its settings or emit active-policy warnings; package manifests
+retain their existing strict integrity validation.
+
+## Examples
 
 A minimal mirror policy is:
 
@@ -62,23 +77,17 @@ A minimal mirror policy is:
 }
 ```
 
-A zip policy with provider options is:
+A minimal ZIP policy is:
 
 ```json
 {
-  "format": "zip",
-  "includePatterns": [
-    "**/*"
-  ],
-  "excludePatterns": [
-    "**/Thumbs.db",
-    "**/.DS_Store"
-  ],
-  "options": {
-    "compressionLevel": 6
-  }
+  "format": "zip"
 }
 ```
+
+For example, adding `"excludePatterns": ["**/secret.env"]` produces a warning
+that the setting is ignored and matching files may be archived. Do not use
+these currently unsupported filters to keep files out of an archive.
 
 ## Directory Links
 

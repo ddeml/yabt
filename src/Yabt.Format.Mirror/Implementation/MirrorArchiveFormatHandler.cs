@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
+using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 
@@ -13,6 +14,26 @@ internal sealed class MirrorArchiveFormatHandler
     public string FormatName => MirrorArchiveFormatName.Value;
 
     public bool ProjectsBesideSourceFolder => false;
+
+    public void ValidateBackupPolicy
+    (
+        FolderPolicy policy,
+        string? configurationSource = null
+    )
+    {
+        _logger.LogTrace(nameof(ValidateBackupPolicy));
+
+        var source = configurationSource ?? ".yabt-policy.json";
+        FolderPolicyDiagnostics.ReportIgnoredPatterns(policy, _logger, source);
+        FolderPolicyDiagnostics.ReportIgnoredOptions
+        (
+            policy,
+            _logger,
+            "Per-folder mirror options are not supported and will be ignored. " +
+                "The mirror representation uses its default behavior.",
+            source
+        );
+    }
 
     public bool CanRestoreArtifact(ArchiveProjectedObject artifact)
     {
@@ -31,6 +52,12 @@ internal sealed class MirrorArchiveFormatHandler
         _logger.LogTrace(nameof(ProjectBackupAsync));
 
         ArgumentNullException.ThrowIfNull(request);
+
+        ValidateBackupPolicy
+        (
+            request.Policy ?? FolderPolicy.Default,
+            ArchiveLayout.CombinePrefixAndRelativePath(request.SourcePrefix, ".yabt-policy.json")
+        );
 
         await request.SourceStore.EnsureReadyAsync(cancellationToken);
 

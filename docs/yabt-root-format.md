@@ -32,6 +32,26 @@ upload checkpoints, cache keys, or retry state.
 
 During MVP development, readers accept only `schemaVersion: 1`.
 
+## Configuration Diagnostics
+
+Unknown root and layout properties warn and are ignored. The selected provider
+also warns about unknown optional extension settings; unused provider settings
+are not inspected for these warnings. Filesystem `credentialRef` is unsupported
+and warns that filesystem access uses the current process identity.
+
+Warnings identify the file or runtime section and property path, without
+logging setting values. Each source/property pair warns once per operation.
+The original descriptor bytes, including ignored fields, remain unchanged when
+copied or restored. Invalid JSON, invalid known types/values, unsupported schema
+versions or selected providers, and unsafe layouts still fail.
+
+Azure declarations retain the strict allowlist described below to prevent
+credentials from entering durable metadata. This applies to every declaration,
+including unused stores. Unknown properties in consumed Azure runtime options,
+including nested retry settings, warn instead. Runtime diagnostics cover only
+registered YABT sections when consumed or reloaded; arbitrary application and
+third-party sections are left to their owners.
+
 ## Exact Archive Copy And Restore
 
 `.yabt-root.json` is reserved root metadata, not an ordinary object in the
@@ -99,7 +119,8 @@ Root validation checks every declared Azure store, not only the store selected
 for the current command. Any `credentialRef` or provider-specific property on an
 Azure declaration is rejected before backup can copy the descriptor, which
 prevents a secret-bearing unused declaration from leaking into another archive.
-Conversely, `configSectionPath` is rejected on non-Azure store declarations.
+The filesystem provider ignores `configSectionPath` with a warning when it is
+nonempty; its settings still come directly from its descriptor declaration.
 
 YABT binds the selected section from the application's merged `IConfiguration` .
 This allows non-secret values such as `ServiceUri` , `ContainerName` , `Prefix`
@@ -245,9 +266,11 @@ mandatory byte-for-byte duplicate confirmation occur only when the separate
 Secrets must not be stored in `.yabt-root.json`.
 
 Store declarations may include a `credentialRef` value for providers such as
-WebDAV. Runtime configuration resolves that reference through mechanisms such as
-OS credential storage, environment variables, user secrets, or an external
-secret store.
+WebDAV. Credential-reference resolution is not implemented yet: filesystem
+declarations and consumed WebDAV runtime options warn when it is supplied.
+Filesystem access uses the process identity; WebDAV uses its configured client
+credentials or anonymous access. Future resolution may use OS credential
+storage, environment variables, user secrets, or an external secret store.
 
 Azure Blob declarations do not use `credentialRef` or contain endpoint,
 container, prefix, or authentication values. Their optional `configSectionPath`

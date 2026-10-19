@@ -27,6 +27,31 @@ Do not introduce a metadata cache initially. If a cache is added later, it must
 remain disposable and rebuildable from durable metadata, manifests, and
 object-store contents.
 
+## Configuration Diagnostics
+
+Unknown optional settings warn and are ignored. Recognized but unimplemented
+optional settings warn with the effective behavior. Invalid JSON and known
+values, unsupported required formats/providers, directory-link approvals, and
+integrity metadata retain strict validation. Azure descriptor declarations
+retain their credential-safe allowlist, even for unused stores.
+
+Metadata readers identify unknown root, layout, and policy properties. Providers
+validate their selected descriptor extensions. Runtime options use the standard
+.NET options binder with a diagnostic inspection of their registered section;
+this also covers custom Azure configuration paths and option reloads. Unused
+sections and arbitrary host configuration are outside that inspection.
+
+`IArchiveFormatHandler.ValidateBackupPolicy` owns diagnostics for active source
+settings, including nested mirror folders that do not invoke a separate format
+projection. The built-in handlers warn that include/exclude filters and
+per-folder options are ignored. ZIP continues to use its runtime compression
+options. Restore treats archived policies as payload without activating them.
+
+`ConfigurationWarnings` shares a concurrent warning set within one asynchronous
+operation. Each source/property pair logs once, identifying the file or section
+and property path without setting values. Policy source provenance is transient
+and does not enter canonical manifests or affect projection identities.
+
 ## Object Stores
 
 YABT treats backup, restore, and reconciliation locations as object stores. A

@@ -3,7 +3,8 @@
   "$id": "https://example.invalid/yabt/yabt-root.schema.json",
   "title": "YABT root descriptor",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
+  "description": "Unknown optional root and layout settings warn and are ignored. Provider safety restrictions remain strict.",
   "properties": {
     "documentType": {
       "type": "string",
@@ -48,7 +49,7 @@
     },
     "layout": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "livePrefix": {
           "type": "string",
@@ -101,11 +102,6 @@
             "then": {
               "propertyNames": {
                 "enum": ["id", "kind", "configSectionPath"]
-              }
-            },
-            "else": {
-              "not": {
-                "required": ["configSectionPath"]
               }
             }
           }

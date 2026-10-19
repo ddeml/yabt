@@ -18,7 +18,7 @@ public static class YabtFileSystemServiceCollectionExtensions
         var optionsBuilder = services.AddOptions<FileSystemObjectStoreOptions>();
         if (configSectionPath is not null)
         {
-            optionsBuilder.BindConfiguration(configSectionPath);
+            optionsBuilder.BindYabtConfiguration(configSectionPath);
         }
 
         services.AddSingleton<FileSystemObjectStore>();

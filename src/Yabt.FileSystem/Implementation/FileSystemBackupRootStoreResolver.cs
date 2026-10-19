@@ -1,7 +1,9 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Yabt.Common;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
+using Yabt.Metadata;
 
 namespace Yabt.FileSystem.Implementation;
 
@@ -18,6 +20,7 @@ internal sealed class FileSystemBackupRootStoreResolver
         string descriptorRootPath
     )
     {
+        _logger.LogTrace(nameof(ResolveStore));
         ArgumentNullException.ThrowIfNull(store);
 
         if (!string.Equals(store.Kind, FileSystemObjectStoreKind.Value, StringComparison.Ordinal))
@@ -26,6 +29,7 @@ internal sealed class FileSystemBackupRootStoreResolver
                 $"Store '{store.Id}' is not a filesystem object store.");
         }
 
+        ReportUnsupportedProperties(store, descriptorRootPath);
         var rootPath = GetStringProviderProperty(store, "rootPath");
         if (string.IsNullOrEmpty(rootPath))
         {
@@ -43,6 +47,7 @@ internal sealed class FileSystemBackupRootStoreResolver
 
     public IObjectStore ResolveSourceRoot(string rootPath)
     {
+        _logger.LogTrace(nameof(ResolveSourceRoot));
         if (string.IsNullOrEmpty(rootPath))
         {
             throw new YabtFileSystemException("Source root object store requires a root path.");
@@ -54,6 +59,56 @@ internal sealed class FileSystemBackupRootStoreResolver
         {
             RootPath = Path.GetFullPath(rootPath),
         });
+    }
+
+    private void ReportUnsupportedProperties
+    (
+        BackupRootStore store,
+        string descriptorRootPath
+    )
+    {
+        _logger.LogTrace(nameof(ReportUnsupportedProperties));
+        var sourceName = Path.Combine(descriptorRootPath, BackupRootFileNames.Primary);
+        var propertyPath = $"$.stores[id={JsonSerializer.Serialize(store.Id)}]";
+        if (store.ConfigSectionPath is not null)
+        {
+            ConfigurationWarnings.Report
+            (
+                _logger,
+                sourceName,
+                $"{propertyPath}.configSectionPath",
+                "Filesystem runtime configuration sections are unsupported and ignored; settings in this store declaration are used."
+            );
+        }
+        if (store.CredentialRef is not null)
+        {
+            ConfigurationWarnings.Report
+            (
+                _logger,
+                sourceName,
+                $"{propertyPath}.credentialRef",
+                "Filesystem credential references are unsupported and ignored; access uses the current process identity."
+            );
+        }
+
+        if (store.ProviderProperties is null) { return; }
+        foreach (var property in store.ProviderProperties)
+        {
+            if (string.Equals(property.Key, "rootPath", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(property.Key, "bufferSize", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(property.Key, "listChunkSize", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            ConfigurationWarnings.Report
+            (
+                _logger,
+                sourceName,
+                $"{propertyPath}[{JsonSerializer.Serialize(property.Key)}]",
+                "Unknown filesystem setting is ignored."
+            );
+        }
     }
 
     private FileSystemObjectStore CreateStore(FileSystemObjectStoreOptions options) =>
@@ -77,7 +132,8 @@ internal sealed class FileSystemBackupRootStoreResolver
 
         return value.ValueKind == JsonValueKind.String ?
             value.GetString() :
-            value.ToString();
+            throw new YabtFileSystemException(
+                $"Filesystem object store '{store.Id}' provider property '{name}' must be a string.");
     }
 
     private static int? GetInt32ProviderProperty
@@ -93,10 +149,10 @@ internal sealed class FileSystemBackupRootStoreResolver
         }
 
         return value.ValueKind == JsonValueKind.Number &&
-            value.TryGetInt32(out var result) ?
+            value.TryGetInt32(out var result) && result > 0 ?
             result :
             throw new YabtFileSystemException(
-                $"Filesystem object store '{store.Id}' provider property '{name}' must be an integer.");
+                $"Filesystem object store '{store.Id}' provider property '{name}' must be a positive integer.");
     }
 
     private static bool TryGetProviderProperty

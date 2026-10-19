@@ -943,6 +943,29 @@ Prefer the configuration defaults provided by `Host.CreateApplicationBuilder`
 and other framework builders. Do not explicitly clear or rebuild configuration
 sources unless the defaults are insufficient.
 
+Unknown optional configuration settings warn and are ignored. Recognized but
+unimplemented optional settings also warn, explaining the effective behavior.
+The built-in mirror and ZIP handlers do not apply `includePatterns` ,
+`excludePatterns` , or per-folder `options` ; their warnings must explicitly
+state that matching exclusions may still be archived and that ZIP uses runtime
+compression settings. Preserve the exact source policy as payload.
+
+Report the configuration file or runtime section and property path, without
+logging setting values. Deduplicate each source/property warning within one
+operation, including parallel traversal. Validate active policies through their
+format handler before projection, including nested mirror folders. Policy
+diagnostic provenance is transient and never changes durable JSON or hashes.
+Archived policy snapshots are payload, not active restore configuration.
+
+Root and layout readers own their known fields; providers own their extension
+settings. Inspect provider settings when selected and runtime options when
+consumed or reloaded. Inspect only registered YABT runtime sections, including
+descriptor-selected Azure sections, not arbitrary host or third-party sections.
+Keep malformed JSON, invalid known values/types, unsupported required formats
+or providers, directory-link approvals, and integrity metadata strict. The
+Azure root-store allowlist and credential restrictions remain strict, including
+unused store declarations; permissive warnings must not bypass those rules.
+
 ## Inline Review Markers
 
 Review marker comments in code carry specific meanings:

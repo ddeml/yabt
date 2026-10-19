@@ -10,6 +10,9 @@ public interface IArchiveFormatHandler
 
     bool CanRestoreArtifact(ArchiveProjectedObject artifact);
 
+    /// <summary>Validates active source settings and reports options this handler ignores.</summary>
+    void ValidateBackupPolicy(FolderPolicy policy, string? configurationSource = null) { }
+
     IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupAsync
     (
         ArchiveProjectionRequest request,

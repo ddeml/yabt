@@ -3,22 +3,26 @@
   "$id": "https://example.invalid/yabt/yabt-policy.schema.json",
   "title": "YABT folder policy",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
+  "description": "Unknown top-level settings warn and are ignored. Directory-link approvals remain strict.",
   "properties": {
     "format": {
       "type": "string",
       "minLength": 1
     },
     "includePatterns": {
-      "type": "array",
-      "items": { "type": "string" }
+      "type": ["array", "null"],
+      "description": "Currently ignored by mirror and ZIP; nonempty patterns warn that other files may also be archived.",
+      "items": { "type": "string", "minLength": 1, "pattern": "\\S" }
     },
     "excludePatterns": {
-      "type": "array",
-      "items": { "type": "string" }
+      "type": ["array", "null"],
+      "description": "Currently ignored by mirror and ZIP; nonempty patterns warn that matching files may be archived.",
+      "items": { "type": "string", "minLength": 1, "pattern": "\\S" }
     },
     "options": {
       "type": ["object", "null"],
+      "description": "Currently ignored by mirror and ZIP with a warning when nonempty. ZIP uses runtime compression settings.",
       "additionalProperties": true
     },
     "directoryLinks": {
@@ -43,6 +47,5 @@
         "required": ["behavior", "expectedTarget"]
       }
     }
-  },
-  "required": ["format"]
+  }
 }

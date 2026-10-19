@@ -1,10 +1,13 @@
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Yabt.Common;
+using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Metadata;
@@ -15,6 +18,134 @@ namespace Yabt.Format.Zip.Tests;
 [TestClass]
 public sealed class ZipArchiveFormatHandlerTests
 {
+    [TestMethod]
+    public async Task ProjectBackupAsyncWarnsForIgnoredSettingsAndPreservesRestorablePolicySnapshot()
+    {
+        var warnings = new List<string>();
+        var services = CreateServices();
+        services.AddSingleton(warnings);
+        services.AddSingleton(typeof(ILogger<>), typeof(ZipPolicyCaptureLogger<>));
+        using var provider = services.BuildServiceProvider();
+        var handler = provider.GetRequiredService<IArchiveFormatHandler>();
+        var source = new MemoryObjectStore(provideContentHash: true);
+        var text = new string('x', 8192);
+        await UploadTextAsync(source, "private.secret", text);
+        var policy = new FolderPolicy
+        (
+            ZipArchiveFormatName.Value,
+            IncludePatterns: ["*.txt"],
+            ExcludePatterns: ["*.secret"],
+            Options: new { CompressionLevel = "NoCompression", Secret = "never-log-this-value" }
+        );
+        const string configurationSource = "source/photos/.yabt-policy.json";
+        FolderPolicyDiagnostics.SetConfigurationSource(policy, configurationSource);
+
+        using var operation = ConfigurationWarnings.BeginOperation();
+        handler.ValidateBackupPolicy(policy);
+        var objects = await CollectProjectedObjectsAsync
+        (
+            handler.ProjectBackupAsync(new(source, Policy: policy, SourceDisplayName: "photos"))
+        );
+        var package = GetPackageObject(objects);
+        var manifestObject = GetManifestObject(objects);
+        var manifestBytes = await ReadContentBytesAsync(manifestObject);
+        await using var packageContent = await package.OpenContentAsync(default);
+        using var archive = new ZipArchive(packageContent.Content, ZipArchiveMode.Read);
+        var entry = archive.GetEntry("private.secret");
+
+        Assert.IsNotNull(entry);
+        Assert.IsLessThan(entry.Length, entry.CompressedLength);
+        Assert.HasCount(3, warnings);
+        Assert.IsTrue(warnings.All(message =>
+            message.Contains(configurationSource, StringComparison.Ordinal)));
+        Assert.IsTrue(warnings.Any(message =>
+            message.Contains("Application-wide ZIP settings remain effective.", StringComparison.Ordinal)));
+        Assert.IsTrue(warnings.All(message =>
+            !message.Contains("never-log-this-value", StringComparison.Ordinal)));
+        Assert.IsFalse(Encoding.UTF8.GetString(manifestBytes).
+            Contains(configurationSource, StringComparison.Ordinal));
+
+        var serializer = provider.GetRequiredService<IManifestSerializer>();
+        using var manifestStream = new MemoryStream(manifestBytes);
+        var manifest = await serializer.ReadAsync(manifestStream);
+        Assert.IsNull(FolderPolicyDiagnostics.GetConfigurationSource(manifest.Policy));
+        CollectionAssert.AreEqual(new[] { "*.secret" }, manifest.Policy.ExcludePatterns?.ToArray());
+        Assert.AreEqual
+        (
+            "NoCompression",
+            ((JsonElement)manifest.Policy.Options!).GetProperty("compressionLevel").GetString()
+        );
+
+        var otherPolicy = policy with { };
+        FolderPolicyDiagnostics.SetConfigurationSource(otherPolicy, "other/.yabt-policy.json");
+        var otherSource = await CollectProjectedObjectsAsync
+        (
+            handler.ProjectBackupAsync
+            (
+                new
+                (
+                    source,
+                    Policy: otherPolicy,
+                    SourceDisplayName: "photos"
+                )
+            )
+        );
+        Assert.AreEqual(package.RelativePath, GetPackageObject(otherSource).RelativePath);
+        CollectionAssert.AreEqual(manifestBytes, await ReadContentBytesAsync(GetManifestObject(otherSource)));
+
+        var restorable = new List<ArchiveProjectedObject>();
+        foreach (var artifact in objects)
+        {
+            restorable.Add(await CreateRestorableArtifactAsync(artifact));
+        }
+
+        warnings.Clear();
+        await using var restored = await handler.ProjectRestoreAsync
+        (
+            new(restorable, restoreAsRoot: true, requireCompleteProjection: true)
+        );
+        CollectionAssert.AreEqual
+        (
+            Encoding.UTF8.GetBytes(text),
+            await ReadContentBytesAsync(restored.Objects.Single())
+        );
+        Assert.IsEmpty(warnings);
+    }
+
+    [TestMethod]
+    public void ValidateBackupPolicyDoesNotWarnForEmptyOptionalSettings()
+    {
+        var warnings = new List<string>();
+        var services = CreateServices();
+        services.AddSingleton(warnings);
+        services.AddSingleton(typeof(ILogger<>), typeof(ZipPolicyCaptureLogger<>));
+        using var provider = services.BuildServiceProvider();
+        var handler = provider.GetRequiredService<IArchiveFormatHandler>();
+
+        handler.ValidateBackupPolicy(new(ZipArchiveFormatName.Value, [], [], new { }));
+        handler.ValidateBackupPolicy(new(ZipArchiveFormatName.Value));
+
+        Assert.IsEmpty(warnings);
+    }
+
+    [TestMethod]
+    public async Task ProjectBackupAsyncRejectsInvalidProgrammaticOptions()
+    {
+        using var provider = CreateServices().BuildServiceProvider();
+        var handler = provider.GetRequiredService<IArchiveFormatHandler>();
+
+        await Assert.ThrowsExactlyAsync<YabtCoreException>
+        (
+            () => CollectProjectedObjectsAsync
+            (
+                handler.ProjectBackupAsync
+                (
+                    new(new MemoryObjectStore(), Policy: new(ZipArchiveFormatName.Value, Options: false))
+                )
+            )
+        );
+    }
+
     [TestMethod]
     public void ServiceRegistrationRegistersZipFormatHandler()
     {
@@ -1475,6 +1606,25 @@ public sealed class ZipArchiveFormatHandlerTests
     private sealed class ZipSourceTimeProvider(DateTimeOffset _utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => _utcNow;
+    }
+
+    private sealed class ZipPolicyCaptureLogger<T>(List<string> _warnings) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel == LogLevel.Warning;
+
+        public void Log<TState>
+        (
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        )
+        {
+            if (logLevel == LogLevel.Warning) { _warnings.Add(formatter(state, exception)); }
+        }
     }
 
     private sealed class OversizedManifestSerializer : IManifestSerializer

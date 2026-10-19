@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yabt.AzureBlob.Implementation;
 using Yabt.Core.Models;
@@ -9,6 +10,38 @@ namespace Yabt.AzureBlob.Tests;
 [TestClass]
 public sealed class AzureBlobBackupRootStoreResolverTests
 {
+    [TestMethod]
+    public void ResolveStoreWarnsAboutUnknownCustomSectionSettingsWithoutLoggingValues()
+    {
+        const string configSectionPath = "ObjectStores:MainAzure";
+        const string privateValue = "must-not-be-logged";
+        var configuration = CreateConfiguration
+        (
+            new Dictionary<string, string?>
+            {
+                [$"{configSectionPath}:ServiceUri"] = "https://main.blob.core.windows.net",
+                [$"{configSectionPath}:futureSetting"] = privateValue,
+                [$"{configSectionPath}:Retry:futureRetry"] = privateValue,
+            }
+        );
+        var logger = new CapturingAzureConfigurationLogger();
+        var resolver = CreateResolver(configuration, logger);
+        var store = new BackupRootStore
+        (
+            "main",
+            AzureBlobObjectStoreKind.Value,
+            ConfigSectionPath: configSectionPath
+        );
+
+        _ = ResolveContext(resolver, store);
+
+        Assert.HasCount(2, logger.Warnings);
+        Assert.IsTrue(logger.Warnings.All(warning => warning.Contains("MainAzure", StringComparison.Ordinal)));
+        Assert.IsTrue(logger.Warnings.Any(warning => warning.Contains("futureSetting", StringComparison.Ordinal)));
+        Assert.IsTrue(logger.Warnings.Any(warning => warning.Contains("futureRetry", StringComparison.Ordinal)));
+        Assert.IsFalse(logger.Warnings.Any(warning => warning.Contains(privateValue, StringComparison.Ordinal)));
+    }
+
     [TestMethod]
     public void ResolveStoreUsesCustomConfigurationSection()
     {
@@ -231,11 +264,15 @@ public sealed class AzureBlobBackupRootStoreResolverTests
         return azureObjectStore.GetContext();
     }
 
-    private static AzureBlobBackupRootStoreResolver CreateResolver(IConfiguration configuration) =>
+    private static AzureBlobBackupRootStoreResolver CreateResolver
+    (
+        IConfiguration configuration,
+        ILogger<AzureBlobBackupRootStoreResolver>? logger = null
+    ) =>
         new
         (
             configuration,
-            NullLogger<AzureBlobBackupRootStoreResolver>.Instance,
+            logger ?? NullLogger<AzureBlobBackupRootStoreResolver>.Instance,
             NullLogger<AzureBlobObjectStore>.Instance,
             new AzureBlobContainerClientFactory(new TestTokenCredential()),
             TimeProvider.System
@@ -247,4 +284,26 @@ public sealed class AzureBlobBackupRootStoreResolverTests
     ) => new ConfigurationBuilder().
         AddInMemoryCollection(values).
         Build();
+
+    private sealed class CapturingAzureConfigurationLogger : ILogger<AzureBlobBackupRootStoreResolver>
+    {
+        public List<string> Warnings { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel == LogLevel.Warning;
+
+        public void Log<TState>
+        (
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        )
+        {
+            if (logLevel == LogLevel.Warning) { Warnings.Add(formatter(state, exception)); }
+        }
+    }
 }

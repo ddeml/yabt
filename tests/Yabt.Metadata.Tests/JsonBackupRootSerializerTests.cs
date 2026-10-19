@@ -1,5 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Yabt.Common;
 using Yabt.Core.Models;
 using Yabt.Metadata;
 
@@ -168,7 +170,7 @@ public sealed class JsonBackupRootSerializerTests
     }
 
     [TestMethod]
-    public async Task ReadAsyncRejectsUnknownRootProperty()
+    public async Task ReadAsyncWarnsAndIgnoresUnknownRootProperty()
     {
         const string json =
             "{\"documentType\":\"yabt.backupRoot\",\"schemaVersion\":1," +
@@ -176,13 +178,17 @@ public sealed class JsonBackupRootSerializerTests
                 "\"changeManifestCompresion\":\"none\"," +
                 "\"layout\":{\"livePrefix\":\"\",\"histPrefix\":\".yabt-hist\"}," +
                 "\"stores\":[{\"id\":\"target\",\"kind\":\"fileSystem\"}]}";
-        var serializer = CreateSerializer();
+        List<string> warnings = [];
+        var serializer = CreateSerializer(warnings);
         await using var source = new MemoryStream(Encoding.UTF8.GetBytes(json));
 
-        var exception = await Assert.ThrowsAsync<YabtMetadataException>(
-            () => serializer.ReadAsync(source));
+        var descriptor = await serializer.ReadAsync(source, sourceName: "source/.yabt-root.json");
 
-        StringAssert.Contains(exception.ToString(), "changeManifestCompresion");
+        Assert.IsNull(descriptor.ChangeManifestCompression);
+        Assert.HasCount(1, warnings);
+        StringAssert.Contains(warnings[0], "source/.yabt-root.json");
+        StringAssert.Contains(warnings[0], "$[\"changeManifestCompresion\"]");
+        StringAssert.Contains(warnings[0], "ignored");
     }
 
     [TestMethod]
@@ -280,16 +286,23 @@ public sealed class JsonBackupRootSerializerTests
     }
 
     [TestMethod]
-    public async Task ReadAsyncRejectsUnknownLayoutProperty()
+    public async Task ReadAsyncWarnsAndIgnoresUnknownLayoutProperty()
     {
         var json = CreateRootJson(
             layoutProperty:
                 "\"layout\":{\"livePrefix\":\"\",\"histPrefix\":\".yabt-hist\"," +
                     "\"historyPrefix\":\"hist\"}");
 
-        var exception = await AssertReadRejectedAsync(json);
+        List<string> warnings = [];
+        var serializer = CreateSerializer(warnings);
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(json));
 
-        StringAssert.Contains(exception.ToString(), "historyPrefix");
+        var descriptor = await serializer.ReadAsync(source);
+
+        Assert.AreEqual(".yabt-hist", descriptor.Layout.HistPrefix);
+        Assert.HasCount(1, warnings);
+        StringAssert.Contains(warnings[0], ".yabt-root.json");
+        StringAssert.Contains(warnings[0], "$.layout[\"historyPrefix\"]");
     }
 
     [TestMethod]
@@ -299,7 +312,7 @@ public sealed class JsonBackupRootSerializerTests
 
         var exception = await AssertReadRejectedAsync(json);
 
-        StringAssert.Contains(exception.ToString(), "ArchiveId");
+        StringAssert.Contains(exception.ToString(), "archiveId");
     }
 
     [TestMethod]
@@ -310,7 +323,7 @@ public sealed class JsonBackupRootSerializerTests
 
         var exception = await AssertReadRejectedAsync(json);
 
-        StringAssert.Contains(exception.ToString(), "LivePrefix");
+        StringAssert.Contains(exception.ToString(), "livePrefix");
     }
 
     [DataRow("\"credentialRef\":\"legacy-secret\"")]
@@ -347,7 +360,7 @@ public sealed class JsonBackupRootSerializerTests
     }
 
     [TestMethod]
-    public async Task ReadAsyncRejectsConfigSectionPathForNonAzureStore()
+    public async Task ReadAsyncLeavesNonAzureConfigSectionPathValidationToProvider()
     {
         var json = CreateRootJson
         (
@@ -357,11 +370,16 @@ public sealed class JsonBackupRootSerializerTests
                     "\"configSectionPath\":\"ObjectStores:FileSystem\"}]"
         );
 
-        await AssertReadRejectedAsync(json);
+        var serializer = CreateSerializer();
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var descriptor = await serializer.ReadAsync(source);
+
+        Assert.AreEqual("ObjectStores:FileSystem", descriptor.Stores.Single().ConfigSectionPath);
     }
 
     [TestMethod]
-    public async Task ReadAsyncRejectsExplicitNullConfigSectionPathForNonAzureStore()
+    public async Task ReadAsyncAcceptsExplicitNullConfigSectionPathForNonAzureStore()
     {
         var json = CreateRootJson
         (
@@ -370,7 +388,12 @@ public sealed class JsonBackupRootSerializerTests
                     "\"rootPath\":\"archive\",\"configSectionPath\":null}]"
         );
 
-        await AssertReadRejectedAsync(json);
+        var serializer = CreateSerializer();
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var descriptor = await serializer.ReadAsync(source);
+
+        Assert.IsNull(descriptor.Stores.Single().ConfigSectionPath);
     }
 
     [TestMethod]
@@ -495,11 +518,164 @@ public sealed class JsonBackupRootSerializerTests
             () => serializer.ReadAsync(source));
     }
 
-    private static IBackupRootSerializer CreateSerializer()
+    [DataRow(false)]
+    [DataRow(true)]
+    [TestMethod]
+    public async Task ReadDocumentAsyncPreservesUnknownPropertiesAndExactBytes(bool includePreamble)
+    {
+        const string privateValue = "must-not-be-logged";
+        var json = CreateRootJson
+        (
+            layoutProperty:
+                "\"layout\":{\"livePrefix\":\"\",\"histPrefix\":\".yabt-hist\",\"futureLayout\":null}",
+            additionalProperty: $"\"futureRoot\":{{\"nested\":\"{privateValue}\"}}"
+        );
+        var bytes = Encoding.UTF8.GetBytes($"  {json}\r\n");
+        if (includePreamble) { bytes = [.. Encoding.UTF8.GetPreamble(), .. bytes]; }
+        List<string> warnings = [];
+        var serializer = CreateSerializer(warnings);
+        await using var source = new MemoryStream(bytes);
+
+        var document = await serializer.ReadDocumentAsync(source);
+
+        await using var preserved = new MemoryStream();
+        await document.CopyToAsync(preserved);
+        CollectionAssert.AreEqual(bytes, preserved.ToArray());
+        Assert.HasCount(2, warnings);
+        Assert.IsFalse(warnings.Any(warning => warning.Contains(privateValue, StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncDoesNotWarnAboutProviderOwnedProperties()
+    {
+        var json = CreateRootJson
+        (
+            storesProperty:
+                "\"stores\":[{\"id\":\"target\",\"kind\":\"fileSystem\"," +
+                    "\"rootPath\":\"archive\",\"futureProviderSetting\":42}]"
+        );
+        List<string> warnings = [];
+        var serializer = CreateSerializer(warnings);
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var descriptor = await serializer.ReadAsync(source);
+
+        Assert.IsEmpty(warnings);
+        Assert.AreEqual(42, descriptor.Stores.Single().ProviderProperties!["futureProviderSetting"].GetInt32());
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncDeduplicatesWarningsWithinOneOperation()
+    {
+        var json = CreateRootJson(additionalProperty: "\"futureRoot\":true");
+        List<string> warnings = [];
+        var serializer = CreateSerializer(warnings);
+        using (ConfigurationWarnings.BeginOperation())
+        {
+            await using var first = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            await using var second = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            await serializer.ReadAsync(first, sourceName: "source/.yabt-root.json");
+            await serializer.ReadAsync(second, sourceName: "source/.yabt-root.json");
+        }
+
+        Assert.HasCount(1, warnings);
+        using (ConfigurationWarnings.BeginOperation())
+        {
+            await using var next = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            await serializer.ReadAsync(next, sourceName: "source/.yabt-root.json");
+        }
+        Assert.HasCount(2, warnings);
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncStillRejectsDuplicateUnknownRootProperties()
+    {
+        var json = CreateRootJson(additionalProperty: "\"futureRoot\":true,\"futureRoot\":false");
+
+        await AssertReadRejectedAsync(json);
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsDuplicateUnknownLayoutProperties()
+    {
+        var json = CreateRootJson
+        (
+            layoutProperty:
+                "\"layout\":{\"livePrefix\":\"\",\"histPrefix\":\".yabt-hist\"," +
+                    "\"futureLayout\":true,\"futureLayout\":false}"
+        );
+
+        await AssertReadRejectedAsync(json);
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsDuplicatePropertiesInsideIgnoredSettings()
+    {
+        var json = CreateRootJson
+        (
+            additionalProperty: "\"futureRoot\":{\"nested\":true,\"nested\":false}"
+        );
+
+        await AssertReadRejectedAsync(json);
+    }
+
+    [TestMethod]
+    public async Task ReadAsyncRejectsDuplicatePropertiesInsideProviderSettings()
+    {
+        var json = CreateRootJson
+        (
+            storesProperty:
+                "\"stores\":[{\"id\":\"target\",\"kind\":\"fileSystem\"," +
+                    "\"futureProvider\":{\"nested\":true,\"nested\":false}}]"
+        );
+
+        await AssertReadRejectedAsync(json);
+    }
+
+    [DataRow("schemaVersion")]
+    [DataRow("historyDeduplicationTinyFileMaximumBytes")]
+    [TestMethod]
+    public async Task ReadAsyncRejectsStringValuesForNumericSettings(string propertyName)
+    {
+        var json = propertyName == "schemaVersion" ?
+            CreateRootJson().Replace("\"schemaVersion\":1", "\"schemaVersion\":\"1\"", StringComparison.Ordinal) :
+            CreateRootJson(additionalProperty: "\"historyDeduplicationTinyFileMaximumBytes\":\"4096\"");
+
+        var error = await AssertReadRejectedAsync(json);
+
+        StringAssert.Contains(error.ToString(), propertyName);
+    }
+
+    private static IBackupRootSerializer CreateSerializer(List<string>? warnings = null)
     {
         var services = new ServiceCollection();
+        if (warnings is not null)
+        {
+            services.AddSingleton(warnings);
+            services.AddSingleton(typeof(ILogger<>), typeof(CapturingRootConfigurationLogger<>));
+        }
         services.AddYabtMetadata();
 
         return services.BuildServiceProvider().GetRequiredService<IBackupRootSerializer>();
+    }
+
+    private sealed class CapturingRootConfigurationLogger<T>(List<string> warnings) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel == LogLevel.Warning;
+
+        public void Log<TState>
+        (
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        )
+        {
+            if (logLevel == LogLevel.Warning) { warnings.Add(formatter(state, exception)); }
+        }
     }
 }

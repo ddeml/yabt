@@ -5,6 +5,7 @@ using System.IO.Hashing;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Yabt.Common;
 using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
@@ -98,7 +99,7 @@ internal sealed class ArchiveSynchronizer
             cancellationToken);
     }
 
-    private Task<SyncRunResult> RunArchiveOperationAsync
+    private async Task<SyncRunResult> RunArchiveOperationAsync
     (
         SyncRunRequest request,
         ArchiveOperationDirection direction,
@@ -107,8 +108,9 @@ internal sealed class ArchiveSynchronizer
     {
         _logger.LogTrace(nameof(RunArchiveOperationAsync));
 
+        using var configurationWarnings = ConfigurationWarnings.BeginOperation();
         ArgumentNullException.ThrowIfNull(request);
-        return direction switch
+        return await (direction switch
         {
             ArchiveOperationDirection.Backup => RunBackupOperationAsync(
                 request,
@@ -117,7 +119,7 @@ internal sealed class ArchiveSynchronizer
                 request,
                 cancellationToken),
             _ => throw new ArgumentOutOfRangeException(nameof(direction), direction, null),
-        };
+        });
     }
 
     private async Task<SyncRunResult> RunBackupOperationAsync
@@ -433,7 +435,12 @@ internal sealed class ArchiveSynchronizer
             BackupRootFileNames.Primary,
             cancellationToken
         );
-        var document = await _backupRootSerializer.ReadDocumentAsync(content.Content, cancellationToken);
+        var document = await _backupRootSerializer.ReadDocumentAsync
+        (
+            content.Content,
+            cancellationToken,
+            sourceName: $"Restore destination: {BackupRootFileNames.Primary}"
+        );
         return document.Descriptor.Layout;
     }
 
@@ -509,7 +516,8 @@ internal sealed class ArchiveSynchronizer
                 cancellationToken);
             archiveDocument = await _backupRootSerializer.ReadDocumentAsync(
                 content.Content,
-                cancellationToken);
+                cancellationToken,
+                sourceName: $"Archive store: {BackupRootFileNames.Primary}");
         }
         catch (Exception ex)
         {
@@ -580,7 +588,8 @@ internal sealed class ArchiveSynchronizer
             );
             destinationDocument = await _backupRootSerializer.ReadDocumentAsync(
                 content.Content,
-                cancellationToken);
+                cancellationToken,
+                sourceName: $"Restore destination: {descriptorPath}");
         }
         catch (Exception ex)
         {
@@ -2433,6 +2442,8 @@ internal sealed class ArchiveSynchronizer
     {
         _logger.LogTrace(nameof(VerifyAsync));
 
+        using var configurationWarnings = ConfigurationWarnings.BeginOperation();
+
         var context = await CreateContextAsync(request, cancellationToken);
 
         return await ApplyProjectionAsync(
@@ -2522,6 +2533,8 @@ internal sealed class ArchiveSynchronizer
         {
             throw new YabtSyncException($"No archive format handler is registered for format '{policy.Format}'.");
         }
+
+        formatHandler.ValidateBackupPolicy(policy, FolderPolicyFileNames.Primary);
 
         return new
         (
@@ -5873,7 +5886,8 @@ internal sealed class ArchiveSynchronizer
                 cancellationToken);
             return await _backupRootSerializer.ReadDocumentAsync(
                 storedContent.Content,
-                cancellationToken);
+                cancellationToken,
+                sourceName: $"{description} store: {BackupRootFileNames.Primary}");
         }
         catch (Exception ex)
         {

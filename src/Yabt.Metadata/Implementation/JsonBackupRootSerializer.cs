@@ -1,5 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Yabt.Common;
 using Yabt.Core.Models;
 
 namespace Yabt.Metadata.Implementation;
@@ -9,21 +13,40 @@ internal sealed class JsonBackupRootSerializer : IBackupRootSerializer
     private static readonly byte[] Utf8Preamble = [0xEF, 0xBB, 0xBF];
 
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly ILogger<JsonBackupRootSerializer> _logger;
 
-    public JsonBackupRootSerializer()
-        : this(JsonMetadataOptions.Create())
+    public JsonBackupRootSerializer(ILogger<JsonBackupRootSerializer>? logger = null)
+        : this(JsonMetadataOptions.Create(), logger)
     {
     }
 
-    public JsonBackupRootSerializer(JsonSerializerOptions jsonOptions)
+    public JsonBackupRootSerializer
+    (
+        JsonSerializerOptions jsonOptions,
+        ILogger<JsonBackupRootSerializer>? logger = null
+    )
     {
         ArgumentNullException.ThrowIfNull(jsonOptions);
 
+        _logger = logger ?? NullLogger<JsonBackupRootSerializer>.Instance;
         _jsonOptions = new(jsonOptions)
         {
             AllowDuplicateProperties = false,
+            NumberHandling = JsonNumberHandling.Strict,
             PropertyNameCaseInsensitive = false,
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+            TypeInfoResolver = (jsonOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver()).
+                WithAddedModifier
+                (
+                    typeInfo =>
+                    {
+                        if (typeInfo.Type == typeof(BackupRootDescriptor) ||
+                            typeInfo.Type == typeof(ArchiveLayout))
+                        {
+                            typeInfo.UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip;
+                        }
+                    }
+                ),
         };
     }
 
@@ -34,6 +57,7 @@ internal sealed class JsonBackupRootSerializer : IBackupRootSerializer
         CancellationToken cancellationToken = default
     )
     {
+        _logger.LogTrace(nameof(WriteAsync));
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentNullException.ThrowIfNull(destination);
 
@@ -48,19 +72,23 @@ internal sealed class JsonBackupRootSerializer : IBackupRootSerializer
     public async Task<BackupRootDescriptor> ReadAsync
     (
         Stream source,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        string? sourceName = null
     )
     {
-        var document = await ReadDocumentAsync(source, cancellationToken);
+        _logger.LogTrace(nameof(ReadAsync));
+        var document = await ReadDocumentAsync(source, cancellationToken, sourceName);
         return document.Descriptor;
     }
 
     public async Task<BackupRootDocument> ReadDocumentAsync
     (
         Stream source,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        string? sourceName = null
     )
     {
+        _logger.LogTrace(nameof(ReadDocumentAsync));
         ArgumentNullException.ThrowIfNull(source);
 
         byte[] content;
@@ -94,13 +122,61 @@ internal sealed class JsonBackupRootSerializer : IBackupRootSerializer
             documentContent = documentContent[Utf8Preamble.Length..];
         }
 
-        using (var document = JsonDocument.Parse(documentContent))
+        var validatedDescriptor = ValidateDescriptor(descriptor);
+        using (var document = ParseDocument(documentContent))
         {
             ValidateProviderPropertyPresence(document.RootElement);
+            var warningSource = sourceName ?? (source as FileStream)?.Name ?? BackupRootFileNames.Primary;
+            ReportUnknownProperties(document.RootElement, typeof(BackupRootDescriptor), warningSource, "$");
+            ReportUnknownProperties
+            (
+                document.RootElement.GetProperty("layout"),
+                typeof(ArchiveLayout),
+                warningSource,
+                "$.layout"
+            );
         }
 
-        var validatedDescriptor = ValidateDescriptor(descriptor);
         return new BackupRootDocument(validatedDescriptor, content);
+    }
+
+    private static JsonDocument ParseDocument(ReadOnlyMemory<byte> content)
+    {
+        try
+        {
+            return JsonDocument.Parse(content, new JsonDocumentOptions { AllowDuplicateProperties = false });
+        }
+        catch (Exception ex)
+        {
+            throw new YabtMetadataException("Backup root JSON could not be parsed.", ex);
+        }
+    }
+
+    private void ReportUnknownProperties
+    (
+        JsonElement element,
+        Type type,
+        string sourceName,
+        string propertyPath
+    )
+    {
+        _logger.LogTrace(nameof(ReportUnknownProperties));
+        var knownProperties = _jsonOptions.GetTypeInfo(type).Properties;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (knownProperties.Any(known => string.Equals(known.Name, property.Name, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            ConfigurationWarnings.Report
+            (
+                _logger,
+                sourceName,
+                $"{propertyPath}[{JsonSerializer.Serialize(property.Name)}]",
+                "Unknown optional property is ignored."
+            );
+        }
     }
 
     private static BackupRootDescriptor ValidateDescriptor(BackupRootDescriptor descriptor)
@@ -260,15 +336,6 @@ internal sealed class JsonBackupRootSerializer : IBackupRootSerializer
                         "and configSectionPath. Credentials and provider settings belong in " +
                         "runtime configuration.");
             }
-
-            return;
-        }
-
-        if (store.ConfigSectionPath is not null)
-        {
-            throw new YabtMetadataException(
-                $"Backup root JSON object store '{store.Id}' uses configSectionPath, which is " +
-                    "supported only for Azure Blob stores.");
         }
     }
 
@@ -308,15 +375,6 @@ internal sealed class JsonBackupRootSerializer : IBackupRootSerializer
                             $"kind, and configSectionPath; property '{property.Name}' is forbidden " +
                             "even when its value is null.");
                 }
-
-                continue;
-            }
-
-            if (store.TryGetProperty("configSectionPath", out _))
-            {
-                throw new YabtMetadataException(
-                    $"Backup root JSON non-Azure store '{storeId}' must not contain " +
-                        "configSectionPath, even when its value is null.");
             }
         }
     }

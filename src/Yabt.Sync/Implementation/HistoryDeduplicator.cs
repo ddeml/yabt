@@ -3,6 +3,7 @@ using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Yabt.Common;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Metadata;
@@ -39,6 +40,7 @@ internal sealed class HistoryDeduplicator
     {
         _logger.LogTrace(nameof(DeduplicateAsync));
 
+        using var configurationWarnings = ConfigurationWarnings.BeginOperation();
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.ArchiveRoot))
         {

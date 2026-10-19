@@ -17,7 +17,17 @@ public static class YabtWebDavServiceCollectionExtensions
         var optionsBuilder = services.AddOptions<WebDavObjectStoreOptions>();
         if (configSectionPath is not null)
         {
-            optionsBuilder.BindConfiguration(configSectionPath);
+            optionsBuilder.BindYabtConfiguration
+            (
+                configSectionPath,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [nameof(WebDavObjectStoreOptions.CredentialRef)] =
+                        "Credential references are not supported and will be ignored. " +
+                        "Configure UserName and Password in runtime configuration for Basic authentication; " +
+                        "otherwise requests are anonymous.",
+                }
+            );
         }
 
         services.AddSingleton<WebDavObjectStore>();

@@ -29,7 +29,7 @@ public static class YabtAzureBlobServiceCollectionExtensions
         }
 
         var optionsBuilder = services.AddOptions<AzureBlobObjectStoreOptions>();
-        optionsBuilder.BindConfiguration(effectiveConfigSectionPath);
+        optionsBuilder.BindYabtConfiguration(effectiveConfigSectionPath);
 
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<TokenCredential>(_ => new DefaultAzureCredential());

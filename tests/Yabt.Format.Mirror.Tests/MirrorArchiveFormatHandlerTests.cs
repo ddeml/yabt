@@ -3,6 +3,8 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Yabt.Common;
+using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.Tests;
@@ -12,6 +14,83 @@ namespace Yabt.Format.Mirror.Tests;
 [TestClass]
 public sealed class MirrorArchiveFormatHandlerTests
 {
+    [TestMethod]
+    public async Task ProjectBackupAsyncWarnsOnceForIgnoredSettingsAndStillArchivesMatchingFiles()
+    {
+        var warnings = new List<string>();
+        var services = CreateServices();
+        services.AddSingleton(warnings);
+        services.AddSingleton(typeof(ILogger<>), typeof(MirrorPolicyCaptureLogger<>));
+        using var provider = services.BuildServiceProvider();
+        var handler = provider.GetRequiredService<IArchiveFormatHandler>();
+        var source = new MemoryObjectStore();
+        await UploadTextAsync(source, "photos/private.secret", "private content");
+        var policy = new FolderPolicy
+        (
+            MirrorArchiveFormatName.Value,
+            IncludePatterns: ["*.txt"],
+            ExcludePatterns: ["*.secret"],
+            Options: new { SecretSetting = "never-log-this-value" }
+        );
+        const string configurationSource = "source/photos/.yabt-policy.json";
+        FolderPolicyDiagnostics.SetConfigurationSource(policy, configurationSource);
+
+        using var operation = ConfigurationWarnings.BeginOperation();
+        handler.ValidateBackupPolicy(policy);
+        var objects = await CollectProjectedObjectsAsync
+        (
+            handler.ProjectBackupAsync(new(source, "photos", policy))
+        );
+
+        Assert.HasCount(3, warnings);
+        Assert.IsTrue(warnings.All(message =>
+            message.Contains(configurationSource, StringComparison.Ordinal)));
+        Assert.IsTrue(warnings.Any(message =>
+            message.Contains("Files matching these patterns may be archived.", StringComparison.Ordinal)));
+        Assert.IsTrue(warnings.All(message =>
+            !message.Contains("never-log-this-value", StringComparison.Ordinal)));
+        Assert.AreEqual("private.secret", objects.Single().RelativePath);
+        await AssertProjectedTextAsync(objects.Single(), "private content");
+
+        await using var restored = await handler.ProjectRestoreAsync(new(objects.Single()));
+        Assert.HasCount(3, warnings);
+        await AssertProjectedTextAsync(restored.Objects.Single(), "private content");
+    }
+
+    [TestMethod]
+    public void ValidateBackupPolicyDoesNotWarnForEmptyOptionalSettings()
+    {
+        var warnings = new List<string>();
+        var services = CreateServices();
+        services.AddSingleton(warnings);
+        services.AddSingleton(typeof(ILogger<>), typeof(MirrorPolicyCaptureLogger<>));
+        using var provider = services.BuildServiceProvider();
+        var handler = provider.GetRequiredService<IArchiveFormatHandler>();
+
+        handler.ValidateBackupPolicy(new(IncludePatterns: [], ExcludePatterns: [], Options: new { }));
+        handler.ValidateBackupPolicy(FolderPolicy.Default);
+
+        Assert.IsEmpty(warnings);
+    }
+
+    [TestMethod]
+    public async Task ProjectBackupAsyncRejectsInvalidProgrammaticOptions()
+    {
+        using var provider = CreateServices().BuildServiceProvider();
+        var handler = provider.GetRequiredService<IArchiveFormatHandler>();
+
+        await Assert.ThrowsExactlyAsync<YabtCoreException>
+        (
+            () => CollectProjectedObjectsAsync
+            (
+                handler.ProjectBackupAsync
+                (
+                    new(new MemoryObjectStore(), Policy: new(Options: "invalid"))
+                )
+            )
+        );
+    }
+
     [TestMethod]
     public void ServiceRegistrationRegistersMirrorFormatHandler()
     {
@@ -238,5 +317,24 @@ public sealed class MirrorArchiveFormatHandlerTests
     private sealed class MirrorSourceTimeProvider(DateTimeOffset _utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => _utcNow;
+    }
+
+    private sealed class MirrorPolicyCaptureLogger<T>(List<string> _warnings) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel == LogLevel.Warning;
+
+        public void Log<TState>
+        (
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        )
+        {
+            if (logLevel == LogLevel.Warning) { _warnings.Add(formatter(state, exception)); }
+        }
     }
 }
