@@ -297,6 +297,19 @@ the existing contextual I/O failure and recovery path; never silently rename or
 omit conflicting desired content. Validate known namespace conflicts before
 live mutation while retaining safe checkpoints after later runtime failures.
 
+Backup resolves file/directory transitions and provider-equivalent spelling
+changes by historizing confirmed blockers before preparing replacement payloads.
+Validate the complete desired namespace against the prospective layout through
+`IObjectStoreNamespace.AfterRemoving` before moving any blocker. Comparison and
+validation of recreated directories remain provider-owned. Historize complete
+blocking folders, including native empty descendants and `.yabt-empty` markers.
+Dry runs and verification model removed subtrees as empty without mutating them.
+An interrupted backup may leave live incomplete; preserve old bytes in history,
+invalidate prior manifest evidence before mutation, and publish a replacement
+manifest only after success. A rerun reconciles against the current readable
+source, without automatic rollback or a frozen source snapshot. Unrelated
+obsolete entries remain deferred until all desired writes succeed.
+
 Backup location validation is bounded and best effort. Before target
 initialization or locking, the provider rejects known overlap between the
 selected source subtree and the whole writable target root, including history,

@@ -2647,6 +2647,7 @@ internal sealed class ArchiveSynchronizer
         var nextManifestEntries = new Dictionary<string, ArchiveChangeManifestEntry>(StringComparer.Ordinal);
 
         var targetFolders = new Dictionary<string, TargetFolderState>(StringComparer.Ordinal);
+        var absentTargetFolders = new HashSet<string>(StringComparer.Ordinal);
         await LoadTargetFolderStateAsync(
             context.TargetStore,
             context.TargetDescriptor.Layout,
@@ -2815,6 +2816,7 @@ internal sealed class ArchiveSynchronizer
 
             if (!targetFolder.Objects.Remove(relativePath, out var targetObject) &&
                 IsEmptyFolderMarker(relativePath) &&
+                !absentTargetFolders.Contains(GetParentPrefix(relativePath)) &&
                 await context.TargetStore.ExistsAsync(
                     context.TargetDescriptor.Layout.ToLiveObjectKey(relativePath),
                     currentCancellationToken))
@@ -3075,13 +3077,38 @@ internal sealed class ArchiveSynchronizer
                 desiredObjects.Add(projectedObject);
             }
 
-            context.TargetStore.Namespace
-                .Scope(ObjectPath.Parse(context.TargetDescriptor.Layout.LivePrefix))
+            var targetNamespace = context.TargetStore.Namespace
+                .Scope(ObjectPath.Parse(context.TargetDescriptor.Layout.LivePrefix));
+            var representationConflicts = await PlanBackupRepresentationConflictsAsync
+            (
+                context.TargetStore,
+                context.TargetDescriptor.Layout,
+                targetNamespace,
+                desiredObjects,
+                targetFolders,
+                absentTargetFolders,
+                cancellationToken
+            );
+            targetNamespace
+                .AfterRemoving(representationConflicts.Select(conflict => ObjectPath.Parse(conflict.RelativePath)))
                 .ValidateTree
                 (
                     desiredObjects.Select(item => ObjectPath.Parse(item.RelativePath)),
                     []
                 );
+            await ApplyBackupRepresentationConflictsAsync
+            (
+                context.TargetStore,
+                historizer,
+                context.TargetDescriptor.Layout,
+                representationConflicts,
+                previousManifestEntries,
+                summary,
+                writeChanges,
+                verifyOnly,
+                EnsureChangeManifestInvalidatedAsync,
+                cancellationToken
+            );
             reconciliationTraversal = await ArchiveReconciler.ReconcileAsync
             (
                 desiredObjects,
@@ -3316,9 +3343,10 @@ internal sealed class ArchiveSynchronizer
                     $"Archive {operationName}",
                     sourceReadFailures,
                     writeChanges ?
-                        "Readable objects may have been archived as rerun checkpoints; " +
-                            "unrelated removals, the root descriptor, and the live change " +
-                            "manifest were left untouched." :
+                        "Readable objects may have been archived as rerun checkpoints and " +
+                            "blocking entries may have been moved to history. Unrelated " +
+                            "removals and root descriptor replacement were deferred; no " +
+                            "successful live change manifest was published." :
                         "No changes were made."),
                 NewCount: summary.NewCount,
                 ChangedCount: summary.ChangedCount,
@@ -3432,6 +3460,162 @@ internal sealed class ArchiveSynchronizer
             context.Policy,
             context.SourceDisplayName
         );
+    }
+
+    private async Task<List<BackupRepresentationConflict>> PlanBackupRepresentationConflictsAsync
+    (
+        IObjectStore targetStore,
+        ArchiveLayout targetLayout,
+        IObjectStoreNamespace targetNamespace,
+        IEnumerable<ArchiveProjectedObject> desiredObjects,
+        Dictionary<string, TargetFolderState> targetFolders,
+        HashSet<string> absentTargetFolders,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(PlanBackupRepresentationConflictsAsync));
+
+        var desiredFiles = desiredObjects.Select(item => item.RelativePath).
+            ToLookup(GetParentPrefix, StringComparer.Ordinal);
+        var desiredFolders = new HashSet<string>(StringComparer.Ordinal) { string.Empty };
+        foreach (var group in desiredFiles)
+        {
+            var folder = ObjectPath.Parse(group.Key);
+            while (desiredFolders.Add(folder.Value))
+            {
+                folder = folder.Parent;
+            }
+        }
+
+        var desiredChildFolders = desiredFolders.Where(path => path.Length != 0).
+            ToLookup(GetParentPrefix, StringComparer.Ordinal);
+        var orderedFolders = desiredFolders.OrderBy(GetPathDepth).
+            ThenBy(path => path, StringComparer.Ordinal);
+        var conflicts = new List<BackupRepresentationConflict>();
+        foreach (var folderPath in orderedFolders)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var targetFolder = await LoadTargetFolderStateAsync
+            (
+                targetStore,
+                targetLayout,
+                targetFolders,
+                folderPath,
+                cancellationToken
+            );
+
+            // These indexes exist only during read-only planning. Provider comparison
+            // semantics can change when an existing directory is replaced.
+            var objectPaths = targetFolder.Objects.Keys.ToDictionary
+            (
+                path => path,
+                targetNamespace.PathComparer
+            );
+            var folderPaths = targetFolder.Folders.Keys.ToDictionary
+            (
+                path => path,
+                targetNamespace.PathComparer
+            );
+            foreach (var desiredFolder in desiredChildFolders[folderPath])
+            {
+                if (objectPaths.TryGetValue(desiredFolder, out var blockingObject))
+                {
+                    conflicts.Add(new(blockingObject, IsFolder: false));
+                    targetFolder.Objects.Remove(blockingObject);
+                }
+
+                if (folderPaths.TryGetValue(desiredFolder, out var existingFolder))
+                {
+                    if (string.Equals(existingFolder, desiredFolder, StringComparison.Ordinal)) { continue; }
+
+                    conflicts.Add(new(existingFolder, IsFolder: true));
+                    targetFolder.Folders.Remove(existingFolder);
+                }
+
+                // A missing or historized subtree is empty for both execution and
+                // dry runs. Never probe an obsolete alias or a file as a directory.
+                targetFolders[desiredFolder] = new();
+                absentTargetFolders.Add(desiredFolder);
+            }
+
+            foreach (var desiredFile in desiredFiles[folderPath])
+            {
+                if (folderPaths.TryGetValue(desiredFile, out var blockingFolder))
+                {
+                    conflicts.Add(new(blockingFolder, IsFolder: true));
+                    targetFolder.Folders.Remove(blockingFolder);
+                }
+
+                if (objectPaths.TryGetValue(desiredFile, out var existingFile) &&
+                    !string.Equals(existingFile, desiredFile, StringComparison.Ordinal))
+                {
+                    conflicts.Add(new(existingFile, IsFolder: false));
+                    targetFolder.Objects.Remove(existingFile);
+                }
+            }
+        }
+
+        return conflicts;
+    }
+
+    private async Task ApplyBackupRepresentationConflictsAsync
+    (
+        IObjectStore targetStore,
+        ArchiveHistorizer? historizer,
+        ArchiveLayout targetLayout,
+        IEnumerable<BackupRepresentationConflict> conflicts,
+        Dictionary<string, ArchiveChangeManifestEntry> previousManifestEntries,
+        ArchiveSyncSummary summary,
+        bool writeChanges,
+        bool verifyOnly,
+        Func<CancellationToken, Task> beforeWriteAsync,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(ApplyBackupRepresentationConflictsAsync));
+
+        const string reason = "blocks the desired representation";
+        foreach (var conflict in conflicts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (conflict.IsFolder)
+            {
+                await MoveTargetFolderToHistoryAsync
+                (
+                    targetStore,
+                    historizer,
+                    targetLayout,
+                    conflict.RelativePath,
+                    previousManifestEntries,
+                    summary,
+                    writeChanges,
+                    verifyOnly,
+                    beforeWriteAsync,
+                    cancellationToken,
+                    reason
+                );
+                continue;
+            }
+
+            summary.AddExtra();
+            previousManifestEntries.TryGetValue(conflict.RelativePath, out var previousManifestEntry);
+            if (writeChanges)
+            {
+                await beforeWriteAsync(cancellationToken);
+                await (historizer ??
+                    throw new YabtSyncException("A mutating backup requires destination historization."))
+                    .MoveObjectAsync(conflict.RelativePath, "Backup", cancellationToken);
+                LogBackupObjectHistorized(conflict.RelativePath, reason, projection: previousManifestEntry?.Projection);
+            }
+            else if (verifyOnly)
+            {
+                LogVerifyObjectDifference(conflict.RelativePath, reason, projection: previousManifestEntry?.Projection);
+            }
+            else
+            {
+                LogBackupWouldHistorizeObject(conflict.RelativePath, reason, projection: previousManifestEntry?.Projection);
+            }
+        }
     }
 
     private async Task<TargetFolderState> LoadTargetFolderStateAsync
@@ -3662,7 +3846,8 @@ internal sealed class ArchiveSynchronizer
         bool writeChanges,
         bool verifyOnly,
         Func<CancellationToken, Task> beforeWriteAsync,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        string reason = "removed from the source"
     )
     {
         var targetFolderPrefix = targetLayout.ToLiveObjectKey(relativeFolderPath);
@@ -3719,7 +3904,7 @@ internal sealed class ArchiveSynchronizer
                 {
                     LogBackupWouldHistorizeObject(
                         relativeFolderPath,
-                        "removed from the source",
+                        reason,
                         isDirectory: true);
                 }
 
@@ -3740,7 +3925,7 @@ internal sealed class ArchiveSynchronizer
                 {
                     LogBackupWouldHistorizeObject(
                         relativePath,
-                        "removed from the source",
+                        reason,
                         projection: previousManifestEntry?.Projection);
                 }
             }
@@ -3761,7 +3946,7 @@ internal sealed class ArchiveSynchronizer
         {
             LogBackupObjectHistorized(
                 relativeFolderPath,
-                "removed from the source",
+                reason,
                 isDirectory: true);
             return;
         }
@@ -3771,7 +3956,7 @@ internal sealed class ArchiveSynchronizer
             previousManifestEntries.TryGetValue(relativePath, out var previousManifestEntry);
             LogBackupObjectHistorized(
                 relativePath,
-                "removed from the source",
+                reason,
                 projection: previousManifestEntry?.Projection);
         }
     }

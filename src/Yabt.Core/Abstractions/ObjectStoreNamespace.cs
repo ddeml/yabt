@@ -11,6 +11,12 @@ public abstract class ObjectStoreNamespace : IObjectStoreNamespace
 
     public abstract void ValidatePath(ObjectPath path);
 
+    public virtual IObjectStoreNamespace AfterRemoving(IEnumerable<ObjectPath> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        return this;
+    }
+
     public virtual IObjectStoreNamespace Scope(ObjectPath prefix)
     {
         var ancestor = prefix;

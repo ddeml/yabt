@@ -35,6 +35,7 @@ public sealed class ProviderNamespaceTests
         await UploadAsync(source, firstPath, "first identity");
         await UploadAsync(source, secondPath, "second identity");
         await UploadAsync(target.Inner, layout.ToLiveObjectKey("000-change.txt"), "original live bytes");
+        await UploadAsync(target.Inner, layout.ToLiveObjectKey(firstPath), "planned blocker must remain live");
         await UploadAsync(target.Inner, layout.ToLiveObjectKey("obsolete.txt"), "extra bytes that must not be historized");
         await UploadAsync(target.Inner, "history/previous/retained.txt", "prior history must remain exact");
         var before = Snapshot(target.Inner);
@@ -75,6 +76,118 @@ public sealed class ProviderNamespaceTests
             Assert.IsTrue(target.Inner.TryGetObject(item.Key, out var archived), item.Key);
             CollectionAssert.AreEqual(item.Content.ToArray(), archived.Content.ToArray(), item.Key);
         }
+    }
+
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(false, true)]
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    public async Task BackupSeparatesAnExactObjectFromItsSameNamedPrefix
+    (
+        bool desiredDirectory,
+        bool dryRun
+    )
+    {
+        var source = new MemoryObjectStore();
+        var target = new NamespaceStore(ObjectStoreNamespace.Ordinal);
+        var desiredPath = desiredDirectory ? "item/keep.txt" : "item";
+        var obsoletePath = desiredDirectory ? "item" : "item/keep.txt";
+        var desiredContent = desiredDirectory ? "descendant payload" : "exact object";
+        var obsoleteContent = desiredDirectory ? "exact object" : "descendant payload";
+        await UploadAsync(source, desiredPath, desiredContent);
+        await UploadAsync(target.Inner, "item", "exact object");
+        await UploadAsync(target.Inner, "item/keep.txt", "descendant payload");
+        var before = Snapshot(target.Inner);
+        var unchangedTimestamp = target.Inner.GetObject(desiredPath).LastModifiedUtc;
+        using var services = CreateServices(source, target, ArchiveLayout.Default).BuildServiceProvider();
+        var synchronizer = services.GetRequiredService<IArchiveSynchronizer>();
+
+        var result = await synchronizer.BackupAsync
+        (
+            new("provider-owned-source", DryRun: dryRun, ByteForByte: true)
+        );
+
+        Assert.IsTrue(result.Completed, result.Message);
+        Assert.AreEqual(1, result.UnchangedCount);
+        Assert.AreEqual(0, result.NewCount);
+        Assert.AreEqual(0, result.ChangedCount);
+        Assert.AreEqual(1, result.ExtraCount);
+        if (dryRun)
+        {
+            Assert.AreEqual(0, target.Mutations.Count);
+            CollectionAssert.AreEqual(before, Snapshot(target.Inner));
+            return;
+        }
+
+        Assert.AreEqual(unchangedTimestamp, target.Inner.GetObject(desiredPath).LastModifiedUtc);
+        Assert.AreEqual
+        (
+            desiredContent,
+            Encoding.UTF8.GetString(target.Inner.GetObject(desiredPath).Content.Span)
+        );
+        Assert.IsFalse(target.Inner.TryGetObject(obsoletePath, out _));
+        var historicalObjects = target.Inner.Snapshot()
+            .Where(item => item.Key.StartsWith(".yabt-hist/", StringComparison.Ordinal))
+            .ToArray();
+        Assert.HasCount(1, historicalObjects);
+        StringAssert.EndsWith(historicalObjects[0].Key, $"/{obsoletePath}");
+        Assert.AreEqual(obsoleteContent, Encoding.UTF8.GetString(historicalObjects[0].Content.Span));
+        var moves = target.Mutations.Where(mutation => mutation.StartsWith("move ", StringComparison.Ordinal)).ToArray();
+        Assert.HasCount(1, moves);
+        StringAssert.StartsWith(moves[0], desiredDirectory ? "move item to " : "move folder item to ");
+        var verification = await synchronizer.VerifyAsync(new("provider-owned-source", ByteForByte: true));
+        Assert.IsTrue(verification.Completed, verification.Message);
+    }
+
+    [TestMethod]
+    [DataRow("Report.txt", "report.txt", false, "")]
+    [DataRow("r\u00e9sum\u00e9.txt", "resume.txt", false, "")]
+    [DataRow("R\u00e9sum\u00e9", "resume", true, "")]
+    [DataRow("Report.txt", "report.txt", false, "nested/live")]
+    [DataRow("R\u00e9sum\u00e9", "resume", true, "nested/live")]
+    public async Task BackupHistorizesProviderEquivalentSpellingBeforeInstallingReplacement
+    (
+        string existingName,
+        string desiredName,
+        bool directory,
+        string livePrefix
+    )
+    {
+        var source = new MemoryObjectStore();
+        var target = new NamespaceStore(new FoldingNamespace(ignoreAccents: true));
+        var layout = new ArchiveLayout(livePrefix, ArchiveLayout.Default.HistPrefix);
+        var existingPath = directory ? $"{existingName}/child.txt" : existingName;
+        var desiredPath = directory ? $"{desiredName}/child.txt" : desiredName;
+        var existingKey = layout.ToLiveObjectKey(existingPath);
+        var desiredKey = layout.ToLiveObjectKey(desiredPath);
+        await UploadAsync(source, desiredPath, "replacement payload");
+        await UploadAsync(target.Inner, existingKey, "original payload");
+        using var services = CreateServices(source, target, layout).BuildServiceProvider();
+        var synchronizer = services.GetRequiredService<IArchiveSynchronizer>();
+
+        var result = await synchronizer.BackupAsync(new("provider-owned-source"));
+
+        Assert.IsTrue(result.Completed, result.Message);
+        Assert.IsFalse(target.Inner.TryGetObject(existingKey, out _));
+        Assert.AreEqual
+        (
+            "replacement payload",
+            Encoding.UTF8.GetString(target.Inner.GetObject(desiredKey).Content.Span)
+        );
+        var historicalObjects = target.Inner.Snapshot()
+            .Where(item => item.Key.StartsWith(".yabt-hist/", StringComparison.Ordinal))
+            .ToArray();
+        Assert.HasCount(1, historicalObjects);
+        StringAssert.EndsWith(historicalObjects[0].Key, $"/{existingPath}");
+        Assert.AreEqual("original payload", Encoding.UTF8.GetString(historicalObjects[0].Content.Span));
+        var moveKey = layout.ToLiveObjectKey(existingName);
+        var expectedMove = directory ? $"move folder {moveKey} to " : $"move {moveKey} to ";
+        var moveIndex = target.Mutations.FindIndex(mutation => mutation.StartsWith(expectedMove, StringComparison.Ordinal));
+        var uploadIndex = target.Mutations.IndexOf($"upload {desiredKey}");
+        Assert.IsTrue(moveIndex >= 0 && uploadIndex > moveIndex, string.Join(Environment.NewLine, target.Mutations));
+        var verification = await synchronizer.VerifyAsync(new("provider-owned-source", ByteForByte: true));
+        Assert.IsTrue(verification.Completed, verification.Message);
     }
 
     [TestMethod]

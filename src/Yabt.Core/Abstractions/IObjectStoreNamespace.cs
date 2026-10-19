@@ -15,6 +15,12 @@ public interface IObjectStoreNamespace
     /// <summary>Returns namespace rules for paths relative to the specified directory prefix.</summary>
     IObjectStoreNamespace Scope(ObjectPath prefix);
 
+    /// <summary>
+    /// Returns prospective rules after the specified existing entries and their subtrees are
+    /// removed. Does not mutate the store or change its runtime path validation.
+    /// </summary>
+    IObjectStoreNamespace AfterRemoving(IEnumerable<ObjectPath> paths);
+
     /// <summary>Validates desired files, directories, and every implicit ancestor directory.</summary>
     void ValidateTree(IEnumerable<ObjectPath> files, IEnumerable<ObjectPath> directories);
 }

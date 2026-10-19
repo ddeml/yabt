@@ -24,6 +24,34 @@ internal sealed class FileSystemObjectStoreNamespace : ObjectStoreNamespace
 
     public override StringComparer PathComparer { get; }
 
+    public override IObjectStoreNamespace AfterRemoving(IEnumerable<ObjectPath> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        var removedPaths = paths.Select
+        (
+            path =>
+            {
+                if (path.IsRoot)
+                {
+                    throw new YabtFileSystemException
+                    (
+                        "The filesystem namespace root cannot be removed during reconciliation.",
+                        path: _rootPath
+                    );
+                }
+
+                ValidatePath(path);
+                return Path.Combine(_rootPath, path.Value.Replace('/', Path.DirectorySeparatorChar));
+            }
+        ).ToArray();
+        return removedPaths.Length == 0 ? this : new FileSystemObjectStoreNamespace
+        (
+            _rootPath,
+            new ProspectiveFileSystemPathBackend(_rootPath, _backend, removedPaths),
+            _allowRootTemporaryDirectoryAlias
+        );
+    }
+
     public override void ValidatePath(ObjectPath path)
     {
         try

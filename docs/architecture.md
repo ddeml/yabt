@@ -266,6 +266,23 @@ renaming, skipping desired content, or treating it as removed. Later I/O failure
 retain already committed safe checkpoints; operations are not whole-tree
 transactions.
 
+Backup plans file/directory transitions and provider-equivalent spelling changes
+before opening replacement payloads. It validates the desired layout through
+`IObjectStoreNamespace.AfterRemoving` , then historizes the confirmed blockers.
+The prospective namespace models recreated directories using their surviving
+parent's comparison rules; existing directories retain their own rules. Normal
+provider access still enforces exact existing spelling. Entire blocking folders
+move with their hidden markers and native empty descendants. Flat providers keep
+an exact object separate from its same-named descendant prefix.
+
+Dry runs and verification use empty virtual subtrees for planned folder moves,
+so they do not probe a blocked destination or mutate the archive. Interrupted
+backup can leave live incomplete while preserving previous bytes in history.
+Rerunning reconciles the source's current readable state; there is no frozen
+snapshot or automatic rollback. Normal restore still requires a valid live
+manifest. Unrelated obsolete entries remain deferred until desired writes
+succeed.
+
 `IArchiveLocationResolver` prepares the source store, selected canonical prefixes,
 policy reads, and native overlap checks. `IRestoreDestination` owns directory
 creation and commits from opaque staging tokens. Physical restore paths and
@@ -448,13 +465,14 @@ lifetime.
 Backup classifies source-object open and stream-read failures separately from
 target-provider or mutation failures. It continues reconciliation after
 independent source read failures and returns a deterministic end-of-run report
-with every source path and underlying reason. A failed replacement is never
-historized before its readable source snapshot exists. If any source read fails,
-target extras, root-descriptor replacement, history finalization, and live
-change-manifest publication are deferred; any successful readable-object writes
-remain conservative rerun checkpoints and invalidation evidence remains active
-where required. Cancellation, enumeration, target reads/writes, locks, and
-historization failures remain fail-fast.
+with every source path and underlying reason. Ordinary same-path replacements
+retain their readable source snapshot before historization. Confirmed shape or
+spelling blockers may already have moved to history before payload preparation.
+If any source read fails, unrelated target extras, root-descriptor replacement,
+history finalization, and live change-manifest publication are deferred. Any
+successful readable-object writes remain rerun checkpoints and invalidation
+evidence remains active where required. Cancellation, enumeration, target
+reads/writes, locks, and historization failures remain fail-fast.
 
 The configured compression controls only what a mutating backup writes. Readers
 always inspect both supported filenames. If both exist, they are trusted only

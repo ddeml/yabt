@@ -12,7 +12,7 @@ change, for follow-up work in **Codex-Sandbox-01**.
   source-read failure handling, `verify-restore` , and Azure transfer/retry
   configuration. The handoff commit carries those pending changes alongside this
   document.
-- Status: **R01-R04 and R09 are implemented for their documented scopes; other
+- Status: **R01-R05 and R09 are implemented for their documented scopes; other
   findings remain open**. Recording and committing the baseline did not implement
   the proposed fixes. R09 was added during the follow-up discussion on
   2026-09-21.
@@ -57,7 +57,7 @@ were not claimed as completed runtime reproductions in the review.
 | R02 | P1 | Deduplication follows a linked ancestor outside the archive | CLI reproduction and junction regression tests | Implemented |
 | R03 | P1 | Missing source becomes a successful empty backup | CLI reproduction and source-readiness regression tests | Implemented |
 | R04 | P1 | Backup accepts overlapping source and target roots | CLI reproduction and overlap/recovery regression tests | Implemented (best effort) |
-| R05 | P2 | Filesystem shape/casing changes prevent backup completion | CLI reproductions | Open |
+| R05 | P2 | Filesystem shape/casing changes prevent backup completion | CLI reproductions and transition/recovery regression tests | Implemented |
 | R06 | P2 | Folder-policy settings are accepted but ignored | Handler reproduction and inspection | Open |
 | R07 | P2 | Unavailable restore-only entry can crash `verify-restore` | Static control-flow finding | Open |
 | R08 | Investigate | Cancellation may release a lock before mutation finishes | Static concurrency concern | Open |
@@ -386,24 +386,50 @@ host.
 
 **Code:**
 [ArchiveSynchronizer.cs](../src/Yabt.Sync/Implementation/ArchiveSynchronizer.cs)
-, `TakeExistingBackupObjectAsync` , `ProcessBackupObjectAsync` , and the later
-extra-item historization.
+, `PlanBackupRepresentationConflictsAsync` ,
+`ApplyBackupRepresentationConflictsAsync` , and
+[FileSystemObjectStoreNamespace.cs](../src/Yabt.FileSystem/Implementation/FileSystemObjectStoreNamespace.cs)
+, `AfterRemoving` .
 
 **Reproductions:** A desired source file `item` conflicts with an existing
 archive directory `item/old.txt` . Separately, on Windows, source `Report.txt`
 conflicts with archive `report.txt` . Both backups fail during upload. Existing
 archive bytes survive, but rerunning does not resolve either conflict.
 
-**Proposed direction:** Classify filesystem representation conflicts before
-upload, validate/stage the replacement, and historize its blocker before
-committing. Preserve complete old folders, including native empty descendants
-and `.yabt-empty` markers. Case comparison must reflect the target filesystem's
-representational capabilities.
+**Agreed direction:** Classify representation conflicts and validate the desired
+layout before mutation. Historize confirmed blockers before preparing their
+replacement payloads. Richard accepted an incomplete live tree after interruption
+because previous bytes remain in history and a rerun reconciles against the
+current readable source. This does not provide automatic rollback or a frozen
+source snapshot. Keep unrelated obsolete entries until desired writes succeed.
 
-**Acceptance checks:** Test directory-to-file, file-to-directory, case-only file
-and folder changes, failed preparation, and successful reruns. The first
-direction and case-only filename case were reproduced; the remaining cases are
-proposed regression coverage.
+**Implementation (2026-10-19):** Backup plans blockers through provider-owned
+namespace comparison and validates the desired tree with
+`IObjectStoreNamespace.AfterRemoving` before executing any move. Filesystem
+prospective validation retains strict name rules and accounts for comparison
+semantics inherited by recreated directories. Normal provider access keeps its
+existing spelling checks; generic synchronization contains no OS-specific logic.
+
+Both file/directory transition directions and case-only file/folder changes move
+the blocking representation to history. Complete folders retain `.yabt-empty`
+markers and native empty descendants. Flat providers distinguish an exact object
+from its same-named prefix. Dry runs and verification use virtual empty subtrees
+without probing blocked paths or modifying data.
+
+Existing manifest evidence is invalidated before mutation; failed reads suppress
+unrelated removals and successful manifest publication. A later successful backup
+rebuilds the manifest. Normal restore requires a valid live manifest, so recovery
+from history may require manual intervention while the source is unavailable.
+
+**Verification:** The Release solution suite passed with **769 passed, 0 failed,
+and 3 existing Linux-only skips** on Windows. The 28 new cases cover both shape
+transitions, case and accent equivalence, complete-folder preservation, dry runs,
+explicit live prefixes, failed replacement reads and successful reruns, flat-store
+object/prefix coexistence, and prospective filesystem comparison. Existing
+collision tests also confirm planned blockers remain untouched when the desired
+layout is invalid. Native Windows per-directory case-sensitivity checks passed;
+native Linux behavior was not exercised on this host. Only the existing NuGet
+vulnerability-feed availability warnings occurred.
 
 ### R06: Policy settings are accepted but ignored
 
