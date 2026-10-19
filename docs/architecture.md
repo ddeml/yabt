@@ -130,6 +130,34 @@ live objects; future resolution may consider them as optional extra candidates,
 but they are neither modified nor required to remain available for historical
 restoration.
 
+Materialized history backing must be independent of other object names. The
+provider-owned `IsIndependentMaterializationAsync` check supplies transient
+evidence separately from durable history metadata. The filesystem provider
+reads file identity and hard-link count from an opened handle; a missing or
+unsupported identity/count is an error. Azure, WebDAV, and memory stores retain
+their independent-key resource model. The supported WebDAV operations do not
+expose hidden server-side filesystem aliases.
+
+Deduplication keeps multiply linked filesystem objects materialized, excludes
+them from backing selection and redundant-object deletion, and claims no
+storage savings for them. All existing references require verified independent
+backing, including tiny or otherwise excluded content and orphan references
+awaiting cleanup. A shared orphan reference cannot be deleted by cleanup.
+Backing hashes and independence are checked before publication and again before
+deletions; each removed object's independence is rechecked before its guarded
+deletion. An observed later change fails with original bytes and recovery
+markers retained. YABT does not silently break hard links or repair shared
+history copies.
+
+Source hard links remain ordinary logical files, producing independent archive
+and restore copies. The filesystem provider rejects multiply linked control
+files before in-place use, checks an existing archive lock before delete-on-close
+opening, and validates the acquired handle again before truncation. Restore
+validates staging before timestamp updates and commits. Atomic replacement of
+one directory entry remains safe because it does not change the contents behind
+other hard-link names. Native Windows/Linux evidence is required for these
+writable safety checks; ordinary source reads remain unaffected.
+
 Deduplication is ordered for recoverability. YABT verifies the materialized
 backing copy, writes and commits the complete reference metadata, and only then
 removes redundant bytes. A failure may leave extra materializations, but it must

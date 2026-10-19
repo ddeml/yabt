@@ -40,6 +40,8 @@ internal sealed class FileSystemArchiveMutationLock
             try
             {
                 FileSystemPathSafety.RejectDescendantLinks(rootPath, lockPath);
+                // Refuse a preexisting alias before DeleteOnClose can mark its archive name for deletion.
+                FileSystemFileIdentity.RequireIndependentIfPresent(lockPath);
                 logger.LogFileSystemPlumbingOperation(
                     "Creating or opening archive-mutation lock file",
                     lockPath);
@@ -54,6 +56,7 @@ internal sealed class FileSystemArchiveMutationLock
                 );
                 try
                 {
+                    FileSystemFileIdentity.RequireIndependent(lockStream.SafeFileHandle, lockPath);
                     var lockContent = Encoding.UTF8.GetBytes
                     (
                         "{\"documentType\":\"yabt.archiveMutationLock\",\"schemaVersion\":1}\n"

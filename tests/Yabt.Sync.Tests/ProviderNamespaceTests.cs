@@ -461,6 +461,12 @@ public sealed class ProviderNamespaceTests
 
         public Task InitializeAsync(CancellationToken cancellationToken = default) => Inner.InitializeAsync(cancellationToken);
 
+        public Task<bool> IsIndependentMaterializationAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => Inner.IsIndependentMaterializationAsync(key, cancellationToken);
+
         public Task<ArchiveObjectContent> OpenReadAsync(string key, CancellationToken cancellationToken = default) =>
             Inner.OpenReadAsync(key, cancellationToken);
 

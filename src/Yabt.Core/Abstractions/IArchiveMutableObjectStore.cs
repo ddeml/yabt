@@ -9,6 +9,19 @@ namespace Yabt.Core.Abstractions;
 public interface IArchiveMutableObjectStore : IObjectStore, IArchiveMutationLockProvider
 {
     /// <summary>
+    /// Reports whether the current materialized object's bytes are independent of writes
+    /// through other user-visible keys or paths. Providers with shared backing must inspect
+    /// current evidence; unavailable evidence is an error, not an assertion of independence.
+    /// This is transient operation evidence and must not be persisted in archive metadata.
+    /// Callers still need to validate the object's existence and contents separately.
+    /// </summary>
+    Task<bool> IsIndependentMaterializationAsync
+    (
+        string key,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// Replaces an existing object only when its complete current bytes match
     /// <paramref name="expectedContentHash"/>.
     /// </summary>

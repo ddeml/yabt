@@ -58,6 +58,19 @@ public sealed class MemoryObjectStore
         return Task.CompletedTask;
     }
 
+    public Task<bool> IsIndependentMaterializationAsync
+    (
+        string key,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(IsIndependentMaterializationAsync));
+
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = NormalizeObjectKey(key);
+        return Task.FromResult(true);
+    }
+
     public Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogTrace(nameof(InitializeAsync));

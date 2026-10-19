@@ -261,6 +261,46 @@ internal sealed class FileSystemObjectStore
         }
     }
 
+    public async Task<bool> IsIndependentMaterializationAsync
+    (
+        string key,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(IsIndependentMaterializationAsync));
+
+        var normalizedKey = NormalizeObjectKey(key);
+        var rootPath = GetRootPath();
+        var path = GetObjectPath(rootPath, normalizedKey);
+        try
+        {
+            return await YabtTask.Run
+            (
+                () =>
+                {
+                    ValidateMutationPath(rootPath, path);
+                    using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    return FileSystemFileIdentity.Read(handle, path).LinkCount == 1;
+                },
+                abandonedExceptionHandler: ex => _logger.LogAbandonedFileSystemOperationFailed
+                (
+                    ex, "Inspect object materialization independence", path
+                ),
+                cancellationToken: cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            throw new YabtFileSystemException
+            (
+                $"Materialization independence could not be verified for filesystem object '{normalizedKey}'.",
+                normalizedKey,
+                path,
+                ex
+            );
+        }
+    }
+
     public async Task<bool> TryReplaceIfContentHashMatchesAsync
     (
         string key,
@@ -945,7 +985,7 @@ internal sealed class FileSystemObjectStore
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                return new FileStream
+                var guard = new FileStream
                 (
                     guardPath,
                     FileMode.OpenOrCreate,
@@ -954,6 +994,16 @@ internal sealed class FileSystemObjectStore
                     bufferSize: 1,
                     FileOptions.None
                 );
+                try
+                {
+                    FileSystemFileIdentity.RequireIndependent(guard.SafeFileHandle, guardPath);
+                    return guard;
+                }
+                catch
+                {
+                    guard.Dispose();
+                    throw;
+                }
             }
             catch (IOException) when (File.Exists(guardPath))
             {

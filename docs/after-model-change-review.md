@@ -12,7 +12,7 @@ change, for follow-up work in **Codex-Sandbox-01**.
   source-read failure handling, `verify-restore` , and Azure transfer/retry
   configuration. The handoff commit carries those pending changes alongside this
   document.
-- Status: **R01-R04 are implemented for their documented scopes; other
+- Status: **R01-R04 and R09 are implemented for their documented scopes; other
   findings remain open**. Recording and committing the baseline did not implement
   the proposed fixes. R09 was added during the follow-up discussion on
   2026-09-21.
@@ -61,7 +61,7 @@ were not claimed as completed runtime reproductions in the review.
 | R06 | P2 | Folder-policy settings are accepted but ignored | Handler reproduction and inspection | Open |
 | R07 | P2 | Unavailable restore-only entry can crash `verify-restore` | Static control-flow finding | Open |
 | R08 | Investigate | Cancellation may release a lock before mutation finishes | Static concurrency concern | Open |
-| R09 | P1 | Hard-linked archive files share mutable contents and distort deduplication savings | CLI reproduction of shared backing; other branches inspected | Open |
+| R09 | P1 | Hard-linked archive files share mutable contents and distort deduplication savings | CLI reproduction and hard-link/recovery regression tests | Implemented |
 | I01 | Improvement | ZIP buffers accumulate across a backup | Lifetime inspection | Open |
 | I02 | Improvement | ZIP restore repeatedly parses the central directory | Inspection and isolated probe | Open |
 | I03 | Improvement | Current-live restore traverses history unnecessarily | Traversal inspection | Open |
@@ -519,6 +519,53 @@ that releases no payload storage, a reference whose only backing is multiply
 linked, and a multiply linked lock file. Assert correct savings, unchanged
 external content, stable independent backing, and ordinary source hard-link
 backup/restore. Do not label this item resolved until those cases are tested.
+
+**Implementation on 2026-10-18:** Archive stores now expose an explicit
+`IsIndependentMaterializationAsync` check. The filesystem provider reads native
+file identity and link count from an opened handle on Windows or Linux. Shared
+files return false; missing or unsupported evidence and I/O failures are errors.
+The check is operation evidence only and adds nothing to durable metadata.
+Ordinary source reads do not require it. Azure, WebDAV, and memory stores retain
+their independent-key resource model; hidden server-side resource aliases are
+outside the filesystem hard-link detection implemented here.
+
+Deduplication retains shared historical materializations in the rebuilt catalog
+but excludes them from backing selection, redundant-object deletion, and
+claimed savings. Existing references require independent content even below the
+tiny-file threshold, outside normal deduplication eligibility, or when no new
+duplicates will be replaced. This also covers orphan references left beside
+their original materialization after an interrupted command. Shared orphan
+reference files cannot be discarded by cleanup.
+
+Backing content and independence are revalidated before reference/catalog
+publication and again before deletions. Each planned removal is checked again
+before its hash-guarded deletion. Later failures retain original bytes and the
+history invalidation marker. There is no automatic private-copy repair, policy
+override, or guarantee against external programs changing archive topology
+concurrently.
+
+Filesystem control writes reject shared files before truncation or use. The
+archive lock is checked before delete-on-close opening and again on its acquired
+handle. The conditional mutation guard is also checked. Restore checks its
+staging handle before changing timestamps or committing the staged file. Normal
+atomic replacement of a destination file remains supported because replacing
+one directory entry leaves the other hard-link names and their bytes intact.
+
+Regression tests create real Windows hard links and cover shared live/history
+and external/history bytes, both candidate ordering cases, dry-run savings,
+all-shared groups, references whose backing becomes shared, shared orphan
+materializations, and independent source hard-link backup/restore through
+mirror and ZIP. Provider-neutral tests inject sharing changes during reference
+and catalog publication and verify that removals stop with recovery evidence
+intact. Filesystem tests cover linked controls and staging, native identity,
+missing evidence, and atomic replacement without external-content mutation.
+
+**Verification:** The full Release solution suite on CodexSandbox01 completed
+with **741 passed, 0 failed, and 3 existing Linux-only tests skipped**, including
+34 new regression cases. The build reported only the existing `NU1900` warnings
+for the unavailable NuGet vulnerability feed. `git diff --check` and CRLF checks
+passed. Native Linux identity/link-count execution remains unverified on this
+Windows host.
 
 ## Improvement opportunities
 

@@ -131,6 +131,28 @@ backing copy for historical references. References identify content by hash
 rather than by another reference path, so reference chains are impossible and a
 backing object's path can change without rewriting every reference.
 
+Filesystem history objects with multiple hard links must remain materialized.
+Do not use them as deduplication backing, delete them as redundant content, or
+claim storage savings for unlinking them. Existing references, including orphan
+references awaiting cleanup, require a verified independent materialization.
+Refuse unsafe reference cleanup rather than discarding shared control files.
+Keep independence evidence transient and separate from durable history entries.
+`IArchiveMutableObjectStore.IsIndependentMaterializationAsync` supplies the
+provider-owned check; unavailable filesystem evidence is an error. Revalidate
+backing contents and independence before publishing references or a replacement
+catalog, again before deletions, and check each removed object before its
+guarded deletion. Preserve originals and the invalidation marker on a later
+failure. Do not automatically break hard links or add a policy override.
+
+Source hard links remain ordinary logical files and produce independent archive
+and restore copies; do not recreate their link topology. The filesystem provider
+checks opened-file identity and link count before writable control-file use or
+restore staging timestamp changes. Refuse a preexisting shared archive lock
+before opening it with delete-on-close semantics, and recheck the acquired
+handle before truncation. Atomic replacement of an existing destination entry
+does not modify its other hard-link names and remains supported. Directory-link
+approvals do not waive file hard-link protections.
+
 Name a reference by appending `.yabt-ref.json` to the complete original
 filename, including its extension, for example `report.pdf.yabt-ref.json` . The
 reference must be human-readable, versioned JSON with document type
@@ -339,9 +361,10 @@ separately as R09.
 Approved descendant links currently require local Windows directory identities
 or Linux inode/mount identities. Refuse UNC participation and ambiguous Linux
 bind-mount layouts until alias containment is supported; ordinary trees without
-descendant links remain usable without native identity APIs. Directory/link
-topology must not be changed concurrently by external programs; path
-revalidation is not a handle-anchored sandbox.
+descendant links need no native directory identities for source traversal.
+Writable filesystem controls still require file identity and link-count
+evidence. Directory/link topology must not be changed concurrently by external
+programs; path revalidation is not a handle-anchored sandbox.
 
 Empty folders may be represented with the reserved marker file:
 

@@ -97,10 +97,13 @@ internal sealed class HistoryDeduplicator
                 trustManifest: !markerExists,
                 operationCancellationToken);
             var scan = await ScanHistoryAsync(
-                targetStore,
+                mutableTargetStore,
                 descriptor.Layout,
                 operationCancellationToken);
-            EnsureReferencesHaveMaterializedBacking(scan.Occurrences);
+            var referenceBackings = SelectIndependentReferenceBackings
+            (
+                scan.Occurrences.Concat(scan.OrphanReferences)
+            );
 
             var plans = await CreateDeduplicationPlansAsync(
                 targetStore,
@@ -109,6 +112,21 @@ internal sealed class HistoryDeduplicator
                 scan.StoredRelativePaths,
                 tinyFileMaximumBytes,
                 operationCancellationToken);
+            var canonicalBackings = referenceBackings.Concat(plans.Select(plan => plan.Canonical))
+                .DistinctBy(occurrence => occurrence.PhysicalKey, StringComparer.Ordinal)
+                .ToArray();
+            await EnsureCanonicalBackingsStillMatchAsync
+            (
+                mutableTargetStore,
+                canonicalBackings,
+                operationCancellationToken
+            );
+            var objectsToRemove = plans.Select(plan => plan.Original).Concat(scan.OrphanReferences);
+            foreach (var original in objectsToRemove)
+            {
+                await EnsureIndependentMaterializationAsync(mutableTargetStore, original, operationCancellationToken);
+            }
+
             LogUnchangedHistoryOccurrences(
                 scan.Occurrences,
                 plans,
@@ -175,6 +193,7 @@ internal sealed class HistoryDeduplicator
                     existingManifest,
                     nextManifest,
                     plans,
+                    canonicalBackings,
                     scan.OrphanReferences,
                     operationCancellationToken);
             }
@@ -258,7 +277,7 @@ internal sealed class HistoryDeduplicator
 
     private async Task<HistoryScan> ScanHistoryAsync
     (
-        IObjectStore targetStore,
+        IArchiveMutableObjectStore targetStore,
         ArchiveLayout layout,
         CancellationToken cancellationToken
     )
@@ -444,7 +463,7 @@ internal sealed class HistoryDeduplicator
 
     private async Task<HistoryOccurrence> ReadMaterializedOccurrenceAsync
     (
-        IObjectStore targetStore,
+        IArchiveMutableObjectStore targetStore,
         ArchiveObjectInfo archiveObject,
         string relativePath,
         CancellationToken cancellationToken
@@ -477,7 +496,8 @@ internal sealed class HistoryDeduplicator
             entry,
             archiveObject.Key,
             contentHash,
-            IsDeduplicationEligiblePath(relativePath)
+            IsDeduplicationEligiblePath(relativePath),
+            await targetStore.IsIndependentMaterializationAsync(archiveObject.Key, cancellationToken)
         );
     }
 
@@ -508,19 +528,13 @@ internal sealed class HistoryDeduplicator
             cancellationToken.ThrowIfCancellationRequested();
 
             var materialized = group
-                .Where(occurrence => string.Equals(
+                .Where(occurrence => occurrence.IsIndependentMaterialization && string.Equals(
                     occurrence.Entry.Representation,
                     ArchiveHistoryEntryRepresentation.Materialized,
                     StringComparison.Ordinal))
                 .OrderBy(occurrence => occurrence.Entry.RelativePath, StringComparer.Ordinal)
                 .ToArray();
-            if (materialized.Length == 0)
-            {
-                throw new YabtSyncException(
-                    $"History references for hash '{group.Key.ContentHash}' have no materialized backing object.");
-            }
-
-            if (group.Key.ContentLength <= tinyFileMaximumBytes)
+            if (materialized.Length < 2 || group.Key.ContentLength <= tinyFileMaximumBytes)
             {
                 continue;
             }
@@ -630,6 +644,7 @@ internal sealed class HistoryDeduplicator
         ExistingManifest existingManifest,
         ArchiveHistoryManifest nextManifest,
         IReadOnlyList<ReferencePlan> plans,
+        IReadOnlyList<HistoryOccurrence> canonicalBackings,
         IReadOnlyList<HistoryOccurrence> orphanReferences,
         CancellationToken cancellationToken
     )
@@ -709,7 +724,7 @@ internal sealed class HistoryDeduplicator
 
         await EnsureCanonicalBackingsStillMatchAsync(
             targetStore,
-            plans,
+            canonicalBackings,
             cancellationToken);
 
         // Remove obsolete references while their corresponding materialized objects still exist.
@@ -718,6 +733,7 @@ internal sealed class HistoryDeduplicator
         // becoming the only descriptions of one logical historical occurrence.
         foreach (var orphanReference in orphanReferences)
         {
+            await EnsureIndependentMaterializationAsync(targetStore, orphanReference, cancellationToken);
             var deleted = await targetStore.TryDeleteIfContentHashMatchesAsync(
                 orphanReference.PhysicalKey,
                 orphanReference.StoredObjectContentHash,
@@ -735,6 +751,7 @@ internal sealed class HistoryDeduplicator
 
         foreach (var plan in plans)
         {
+            await EnsureIndependentMaterializationAsync(targetStore, plan.Original, cancellationToken);
             var deleted = await targetStore.TryDeleteIfContentHashMatchesAsync(
                 plan.Original.PhysicalKey,
                 plan.Original.StoredObjectContentHash,
@@ -822,16 +839,16 @@ internal sealed class HistoryDeduplicator
 
     private async Task EnsureCanonicalBackingsStillMatchAsync
     (
-        IObjectStore targetStore,
-        IEnumerable<ReferencePlan> plans,
+        IArchiveMutableObjectStore targetStore,
+        IEnumerable<HistoryOccurrence> canonicalOccurrences,
         CancellationToken cancellationToken
     )
     {
-        var canonicalOccurrences = plans
-            .Select(plan => plan.Canonical)
-            .DistinctBy(occurrence => occurrence.PhysicalKey, StringComparer.Ordinal);
+        _logger.LogTrace(nameof(EnsureCanonicalBackingsStillMatchAsync));
+
         foreach (var canonicalOccurrence in canonicalOccurrences)
         {
+            await EnsureIndependentMaterializationAsync(targetStore, canonicalOccurrence, cancellationToken);
             _logger.LogHistoryObjectRead(
                 canonicalOccurrence.Entry.RelativePath,
                 "deduplication backing validation");
@@ -848,6 +865,23 @@ internal sealed class HistoryDeduplicator
                     $"Materialized history backing '{canonicalOccurrence.Entry.RelativePath}' " +
                     "changed before redundant objects could be removed.");
             }
+        }
+    }
+
+    private static async Task EnsureIndependentMaterializationAsync
+    (
+        IArchiveMutableObjectStore targetStore,
+        HistoryOccurrence occurrence,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!await targetStore.IsIndependentMaterializationAsync(occurrence.PhysicalKey, cancellationToken))
+        {
+            throw new YabtSyncException
+            (
+                $"History object '{occurrence.Entry.StoredRelativePath}' does not have independent storage. " +
+                    "Shared materializations cannot back references or be removed by deduplication."
+            );
         }
     }
 
@@ -1004,36 +1038,41 @@ internal sealed class HistoryDeduplicator
                 StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void EnsureReferencesHaveMaterializedBacking
+    private static List<HistoryOccurrence> SelectIndependentReferenceBackings
     (
         IEnumerable<HistoryOccurrence> occurrences
     )
     {
+        var backings = new List<HistoryOccurrence>();
         var contentGroups = occurrences.GroupBy(
             occurrence => (occurrence.Entry.ContentHash, occurrence.Entry.ContentLength));
         foreach (var contentGroup in contentGroups)
         {
-            var hasReference = false;
-            var hasMaterialized = false;
-            foreach (var occurrence in contentGroup)
-            {
-                hasReference |= string.Equals(
+            var hasReference = contentGroup.Any(occurrence => string.Equals(
                     occurrence.Entry.Representation,
                     ArchiveHistoryEntryRepresentation.Reference,
-                    StringComparison.Ordinal);
-                hasMaterialized |= string.Equals(
+                    StringComparison.Ordinal));
+            if (!hasReference) { continue; }
+
+            var backing = contentGroup
+                .Where(occurrence => occurrence.IsIndependentMaterialization && string.Equals(
                     occurrence.Entry.Representation,
                     ArchiveHistoryEntryRepresentation.Materialized,
-                    StringComparison.Ordinal);
-            }
+                    StringComparison.Ordinal))
+                .OrderBy(occurrence => occurrence.Entry.RelativePath, StringComparer.Ordinal)
+                .FirstOrDefault();
 
-            if (hasReference && !hasMaterialized)
+            if (backing is null)
             {
                 throw new YabtSyncException(
                     $"History references for hash '{contentGroup.Key.ContentHash}' have no " +
-                    "materialized backing object.");
+                    "independent materialized backing object.");
             }
+
+            backings.Add(backing);
         }
+
+        return backings;
     }
 
     private static void EnsureActualAndReferenceDescribeSameOccurrence
@@ -1145,6 +1184,8 @@ internal sealed class HistoryDeduplicator
                     ArchiveHistoryEntryRepresentation.Reference,
                     StringComparison.Ordinal) ?
                 "it is already represented by a deduplication reference" :
+                !occurrence.IsIndependentMaterialization ?
+                    "its storage is shared with another object or path" :
                 occurrence.Entry.ContentLength <= tinyFileMaximumBytes ?
                     $"its length is at or below the {tinyFileMaximumBytes}-byte threshold" :
                     "no space-saving duplicate was selected";
@@ -1224,7 +1265,8 @@ internal sealed class HistoryDeduplicator
         ArchiveHistoryManifestEntry Entry,
         string PhysicalKey,
         string StoredObjectContentHash,
-        bool IsDeduplicationEligible
+        bool IsDeduplicationEligible,
+        bool IsIndependentMaterialization = false
     );
 
     private sealed record HistoryScan

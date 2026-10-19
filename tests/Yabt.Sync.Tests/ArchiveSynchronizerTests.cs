@@ -6020,6 +6020,13 @@ public sealed class ArchiveSynchronizerTests
 
         public int MaximumConcurrentReads => Volatile.Read(ref _maximumConcurrentReads);
 
+        public Task<bool> IsIndependentMaterializationAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => ((IArchiveMutableObjectStore)_innerStore)
+            .IsIndependentMaterializationAsync(key, cancellationToken);
+
         public void ResetMaximumConcurrentReads()
         {
             Assert.AreEqual(0, CurrentConcurrentReads);
@@ -6265,6 +6272,13 @@ public sealed class ArchiveSynchronizerTests
         public Func<string, Exception?>? OpenReadExceptionFactory { get; set; }
 
         public Func<string, string, CancellationToken, Task>? AfterMoveAsync { get; set; }
+
+        public Task<bool> IsIndependentMaterializationAsync
+        (
+            string key,
+            CancellationToken cancellationToken = default
+        ) => ((IArchiveMutableObjectStore)_innerStore)
+            .IsIndependentMaterializationAsync(key, cancellationToken);
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
             _innerStore.EnsureReadyAsync(cancellationToken);

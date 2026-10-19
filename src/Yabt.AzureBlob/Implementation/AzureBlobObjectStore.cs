@@ -22,6 +22,19 @@ internal sealed class AzureBlobObjectStore
     private readonly object _contextLock = new();
     private AzureBlobObjectStoreContext? _context;
 
+    public Task<bool> IsIndependentMaterializationAsync
+    (
+        string key,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(IsIndependentMaterializationAsync));
+
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = NormalizeObjectKey(key);
+        return Task.FromResult(true);
+    }
+
     public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogTrace(nameof(EnsureReadyAsync));

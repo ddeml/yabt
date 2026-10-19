@@ -201,11 +201,19 @@ internal sealed class FileSystemRestoreTarget
                     Namespace.ValidatePath(ObjectPath.Parse(relativePath));
                     Directory.CreateDirectory(destinationDirectory);
                     EnsureNoReparsePointInExistingPath(destinationDirectory);
-                    if (lastModifiedUtc.HasValue)
+                    using
+                    (
+                        var stagingHandle = File.OpenHandle
+                        (
+                            fullStagingPath, FileMode.Open, FileAccess.Write, FileShare.Read
+                        )
+                    )
                     {
-                        File.SetLastWriteTimeUtc(
-                            fullStagingPath,
-                            lastModifiedUtc.Value.UtcDateTime);
+                        FileSystemFileIdentity.RequireIndependent(stagingHandle, fullStagingPath);
+                        if (lastModifiedUtc.HasValue)
+                        {
+                            File.SetLastWriteTimeUtc(stagingHandle, lastModifiedUtc.Value.UtcDateTime);
+                        }
                     }
 
                     _logger.LogRestoreDestinationControlMetadataOperation(

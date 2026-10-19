@@ -29,6 +29,21 @@ internal sealed class WebDavObjectStore
     private static readonly HttpMethod PropFindMethod = new("PROPFIND");
     private static readonly XNamespace DavNamespace = "DAV:";
 
+    public Task<bool> IsIndependentMaterializationAsync
+    (
+        string key,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(IsIndependentMaterializationAsync));
+
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = NormalizeObjectKey(key);
+        // The provider relies on independent resources at distinct keys. Server-side filesystem
+        // aliases are not observable through the supported WebDAV resource operations.
+        return Task.FromResult(true);
+    }
+
     public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogTrace(nameof(EnsureReadyAsync));
