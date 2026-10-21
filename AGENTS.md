@@ -987,12 +987,15 @@ Review marker comments in code carry specific meanings:
 - `//TODO` comments are intended for the human maintainer. Ignore them unless
   the user explicitly asks to address TODO comments.
 
-## Review Workflow
+## Delivery And Feedback Workflow
 
-The user is reviewing these changes as if they are a PR and will provide
-incremental feedback.
+Richard no longer performs routine manual code reviews. In this repository,
+deliver completed task changes through focused commits and push them to the
+configured upstream after the required checks pass. Do not wait for manual
+review or another routine commit/push approval unless the user explicitly asks
+for a different workflow for that task.
 
-When addressing feedback:
+When implementing changes or addressing feedback:
 
 - Treat the newest feedback as authoritative.
 - Keep changes focused and easy to review.
@@ -1004,7 +1007,10 @@ When addressing feedback:
 - Remove feedback comments when the requested change is fully implemented and
   verified, but keep the original feedback text in the commit message for
   historical context.
-- Please leave git index untouched unless the user explicitly requests
-  otherwise. If you need to change a file that is already staged, make the
-  change but do not stage it. The user will review the change and stage it if
-  they approve.
+- Stage and commit only the completed task's changes, then push them to the
+  current branch's configured upstream after the required checks pass.
+- Preserve unrelated and concurrently changed work, including preexisting
+  staged changes. Do not include that work in the task's commits or overwrite it.
+- Report the final commit IDs, target branch and remote, validation results, and
+  confirmed push result. If a real blocker prevents completion, report it
+  precisely rather than claiming success.
