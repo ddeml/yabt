@@ -147,11 +147,17 @@ internal sealed class RestorePathVerifier
         foreach (var name in names)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (sourceEntries.UnavailableNames.Contains(name) ||
+                restoreEntries.UnavailableNames.Contains(name))
+            {
+                continue;
+            }
+
             var hasSourceEntry = sourceEntries.Entries.TryGetValue(name, out var sourceEntry);
             var hasRestoreEntry = restoreEntries.Entries.TryGetValue(name, out var restoreEntry);
             if (!hasSourceEntry)
             {
-                if (!sourceEntries.Completed || sourceEntries.UnavailableNames.Contains(name))
+                if (!sourceEntries.Completed)
                 {
                     continue;
                 }
@@ -167,7 +173,7 @@ internal sealed class RestorePathVerifier
             }
             if (!hasRestoreEntry)
             {
-                if (!restoreEntries.Completed || restoreEntries.UnavailableNames.Contains(name))
+                if (!restoreEntries.Completed)
                 {
                     continue;
                 }
@@ -631,6 +637,8 @@ internal sealed class RestorePathVerifier
 
     private sealed class ComparisonCounts
     {
+        private readonly HashSet<string> _uncomparedPaths = new(StringComparer.Ordinal);
+
         public int SourceOnlyCount { get; set; }
 
         public int DifferentCount { get; set; }
@@ -641,7 +649,7 @@ internal sealed class RestorePathVerifier
 
         public int ComparedDirectoryCount { get; set; }
 
-        public int UncomparedItemCount => Failures.Count;
+        public int UncomparedItemCount => _uncomparedPaths.Count;
 
         public List<VerificationFailure> Failures { get; } = [];
 
@@ -652,6 +660,7 @@ internal sealed class RestorePathVerifier
             ILogger logger
         )
         {
+            _uncomparedPaths.Add(relativePath);
             Failures.Add(new(relativePath, reason));
             if (logger.IsEnabled(LogLevel.Information))
             {

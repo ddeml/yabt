@@ -12,7 +12,7 @@ change, for follow-up work in **Codex-Sandbox-01**.
   source-read failure handling, `verify-restore` , and Azure transfer/retry
   configuration. The handoff commit carries those pending changes alongside this
   document.
-- Status: **R01-R06 and R09 are implemented for their documented scopes; other
+- Status: **R01-R07 and R09 are implemented for their documented scopes; other
   findings remain open**. Recording and committing the baseline did not implement
   the proposed fixes. R09 was added during the follow-up discussion on
   2026-09-21.
@@ -59,7 +59,7 @@ were not claimed as completed runtime reproductions in the review.
 | R04 | P1 | Backup accepts overlapping source and target roots | CLI reproduction and overlap/recovery regression tests | Implemented (best effort) |
 | R05 | P2 | Filesystem shape/casing changes prevent backup completion | CLI reproductions and transition/recovery regression tests | Implemented |
 | R06 | P2 | Folder-policy settings are accepted but ignored | Warning, validation, and round-trip regression tests | Implemented (warn and ignore) |
-| R07 | P2 | Unavailable restore-only entry can crash `verify-restore` | Static control-flow finding | Open |
+| R07 | P2 | Unavailable restore-only entry can crash `verify-restore` | CLI reproduction and unavailable-entry regression tests | Implemented |
 | R08 | Investigate | Cancellation may release a lock before mutation finishes | Static concurrency concern | Open |
 | R09 | P1 | Hard-linked archive files share mutable contents and distort deduplication savings | CLI reproduction and hard-link/recovery regression tests | Implemented |
 | I01 | Improvement | ZIP buffers accumulate across a backup | Lifetime inspection | Open |
@@ -508,12 +508,45 @@ increments `RestoreOnlyCount` and dereferences `restoreEntry` when Information
 logging is enabled. Without that logging, it still misclassifies the unavailable
 item. Existing tests using `NullLogger` miss the exception path.
 
-**Proposed direction:** Handle unavailable names from either side before
-classifying source-only or restore-only entries.
+**Reproduction (2026-10-21):** The Release CLI from the R06 baseline was run
+against an empty source and a restore tree containing a directory junction.
+With the default Information logging enabled, it reported the unavailable
+reparse point and then terminated with an unhandled `NullReferenceException`
+inside `CompareDirectoryAsync` . The fixture's external target remained intact.
 
-**Acceptance checks:** Use an Information-enabled logger and restore-only
-inaccessible/reparse entries. Verification must report uncompared entries,
-return a nonidentical result, and avoid throwing or double-counting.
+**Implemented resolution:** Handle unavailable names from either side before
+classifying source-only or restore-only entries. Existing incomplete-listing
+guards remain in place because a failed enumeration cannot prove absence.
+Continue comparing readable siblings and return a nonidentical result whenever
+any path could not be compared. The CLI maps that result to exit code 1.
+
+`UncomparedItemCount` now counts distinct ordinal relative paths while the
+diagnostics retain every failure reason from both sides. The same path therefore
+counts once when both sides fail to inspect a link or open a file. Equal leaf
+names in different folders still count separately. This changes neither archive
+layout nor durable metadata, and verification remains read-only.
+
+**Regression coverage:** Ten new cases exercise unavailable source/restore
+entries against missing paths, ordinary files, directories, and another link.
+The fixtures use Windows junctions or Unix symbolic links and include both
+Information-enabled logging and a null logger. Readable equal, different, and
+one-sided siblings remain comparable after an unavailable entry. Nested paths
+with the same leaf name count separately, while an exclusively locked file on
+both sides counts once and retains both operating-system failure reasons.
+External target contents remain unchanged. All 22 focused verifier tests pass.
+
+**Verification (2026-10-21):** Full Release solution testing completed with
+**864 passed, 0 failed, and 3 Linux-only tests skipped** on Windows:
+
+```powershell
+dotnet test yabt.sln --no-restore --configuration Release `
+  --verbosity minimal -m:1 --disable-build-servers
+```
+
+The rebuilt CLI completed the junction reproduction with exit code 1, one
+uncompared path, zero falsely classified one-sided items, and one compared
+healthy sibling. It preserved the external target bytes. `git diff --check`
+passes. Native Unix symbolic-link behavior was not exercised on this host.
 
 ### R08: Cancellation may release ownership before mutation finishes
 
@@ -710,7 +743,7 @@ Related observations to evaluate during this work:
 3. Add targeted regression tests for R01-R04, confirm failures, and address
    those safety findings first. Use only disposable data for the destructive
    reproductions.
-4. R05 and R06 are implemented; resolve R07 next. Investigate R08 with
+4. R05-R07 are implemented. Investigate R08 with
    deterministic coordination rather than timing-dependent sleeps.
 5. Measure I01-I03, then refactor under the resulting tests and provider
    contracts.

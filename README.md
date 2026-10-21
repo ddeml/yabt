@@ -102,6 +102,14 @@ file-access failures do not stop the traversal: the final nonzero result lists
 every uncompared path, both full file paths involved, and the underlying
 operating-system reason.
 
+An unavailable entry on either side, including a junction or symbolic link,
+is reported as uncompared before source-only or restore-only classification.
+Linked entries are not traversed. Each relative path counts once as uncompared
+even when both sides fail; all failure reasons remain in the diagnostics. Readable
+siblings are still compared, and incomplete directory listings never establish
+that an unobserved item is missing. Any uncompared path yields a nonzero exit
+code, regardless of the logging level.
+
 Add `--log-file` to any command to write a uniquely named diagnostic log in the
 platform's per-user log directory as well as logging to the console. The default
 directory is `%LOCALAPPDATA%\Yabt\Logs` on Windows, `$XDG_STATE_HOME/yabt/logs`

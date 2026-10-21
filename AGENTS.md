@@ -764,6 +764,7 @@ Command surface:
 - `restore`
 - `scan`
 - `verify`
+- `verify-restore`
 - `pack`
 - `reconcile`
 - `deduplicate`
@@ -796,6 +797,15 @@ path-safety, and reconciliation preflight, then uses bounded object-level
 preparation and commits each validated file as a recoverable checkpoint.
 Direction-specific action consumers remain appropriate inside the shared
 reconciliation pipeline.
+
+`verify-restore` is read-only and compares filesystem trees byte-for-byte.
+Treat unavailable entries on either side as uncompared before classifying
+source-only or restore-only items. Never infer absence from an incomplete
+directory listing. Count each uncompared relative path once using ordinal
+identity, preserve every side's failure reason, and continue comparing readable
+siblings. Any uncompared path makes verification nonidentical regardless of
+logging level. Descendant directory links remain unavailable and are not
+traversed by this verifier.
 
 ## Coding Style
 
