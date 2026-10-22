@@ -23,8 +23,8 @@ public sealed class JsonHistoryManifestSerializerTests
             });
         var secondEntry = CreateEntry("2026-08-19/folder/a.txt");
 
-        var forwardManifest = serializer.Create([firstEntry, secondEntry]);
-        var reverseManifest = serializer.Create([secondEntry, firstEntry]);
+        using var forwardManifest = serializer.Create([firstEntry, secondEntry]);
+        using var reverseManifest = serializer.Create([secondEntry, firstEntry]);
         var forwardJson = await WriteToStringAsync(serializer, forwardManifest);
         var reverseJson = await WriteToStringAsync(serializer, reverseManifest);
 
@@ -45,7 +45,7 @@ public sealed class JsonHistoryManifestSerializerTests
     public async Task ReadAsyncRoundTripsAllRebuildableMetadata()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         ([
             CreateEntry(
                 "2026-08-19/file.txt",
@@ -57,7 +57,7 @@ public sealed class JsonHistoryManifestSerializerTests
         await serializer.WriteAsync(manifest, json);
         json.Position = 0;
 
-        var restored = await serializer.ReadAsync(json);
+        using var restored = await serializer.ReadAsync(json);
         var entry = restored.Entries.Single();
 
         Assert.AreEqual(manifest.ManifestHash, restored.ManifestHash);
@@ -73,7 +73,7 @@ public sealed class JsonHistoryManifestSerializerTests
     public async Task ReadAsyncRoundTripsEmptyMaterializedObject()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         ([
             CreateEntry("2026-08-19/empty.txt", contentLength: 0),
         ]);
@@ -82,7 +82,7 @@ public sealed class JsonHistoryManifestSerializerTests
         await serializer.WriteAsync(manifest, json);
         var serializedJson = Encoding.UTF8.GetString(json.ToArray());
         json.Position = 0;
-        var restored = await serializer.ReadAsync(json);
+        using var restored = await serializer.ReadAsync(json);
 
         Assert.AreEqual(0, restored.Entries.Single().ContentLength);
         StringAssert.Contains(serializedJson, "\"contentLength\": 0");
@@ -93,7 +93,7 @@ public sealed class JsonHistoryManifestSerializerTests
     {
         var serializer = CreateSerializer();
         var originalContentHash = CreateContentHash("content");
-        var manifest = serializer.Create([CreateEntry("2026-08-19/file.txt")]);
+        using var manifest = serializer.Create([CreateEntry("2026-08-19/file.txt")]);
         var json = await WriteToStringAsync(serializer, manifest);
         var changedJson = json.Replace(
             originalContentHash,
@@ -111,7 +111,7 @@ public sealed class JsonHistoryManifestSerializerTests
     public async Task ReadAsyncRejectsUnknownProperty()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create([CreateEntry("2026-08-19/file.txt")]);
+        using var manifest = serializer.Create([CreateEntry("2026-08-19/file.txt")]);
         var json = await WriteToStringAsync(serializer, manifest);
         var changedJson = json.Insert(
             json.IndexOf('{', StringComparison.Ordinal) + 1,
@@ -128,7 +128,7 @@ public sealed class JsonHistoryManifestSerializerTests
     public async Task ReadAsyncRejectsUnsupportedSchemaVersion()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create([CreateEntry("2026-08-19/file.txt")]);
+        using var manifest = serializer.Create([CreateEntry("2026-08-19/file.txt")]);
         var json = await WriteToStringAsync(serializer, manifest);
         var changedJson = json.Replace(
             "\"schemaVersion\": 1",

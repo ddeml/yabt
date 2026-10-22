@@ -12,8 +12,8 @@ change, for follow-up work in **Codex-Sandbox-01**.
   source-read failure handling, `verify-restore` , and Azure transfer/retry
   configuration. The handoff commit carries those pending changes alongside this
   document.
-- Status: **R01-R09 and I03 are implemented for their documented scopes; other
-  findings remain open**. Recording and committing the baseline did not implement
+- Status: **R01-R09 and I01-I03 are implemented for their documented scopes;
+  I04 remains open**. Recording and committing the baseline did not implement
   the proposed fixes. R09 was added during the follow-up discussion on
   2026-09-21.
 - Scope: correctness, archive safety, recovery, and scalability. This was a code
@@ -62,8 +62,8 @@ were not claimed as completed runtime reproductions in the review.
 | R07 | P2 | Unavailable restore-only entry can crash `verify-restore` | CLI reproduction and unavailable-entry regression tests | Implemented |
 | R08 | P1 | Cancellation releases a lock before mutation finishes | Gated filesystem mutation reproduction and ownership regression tests | Implemented |
 | R09 | P1 | Hard-linked archive files share mutable contents and distort deduplication savings | CLI reproduction and hard-link/recovery regression tests | Implemented |
-| I01 | Improvement | ZIP buffers accumulate across a backup | Lifetime inspection | Open |
-| I02 | Improvement | ZIP restore repeatedly parses the central directory | Inspection and isolated probe | Open |
+| I01 | Improvement | ZIP buffers accumulate across a backup | Generated large-stream and projection-lifetime regression tests | Implemented |
+| I02 | Improvement | ZIP restore repeatedly parses the central directory | Entry-read instrumentation and large-manifest round-trip tests | Implemented |
 | I03 | Improvement | Current-live restore traverses history unnecessarily | Traversal-count and unreadable-subtree regression tests | Implemented |
 | I04 | Improvement | Synchronizer responsibilities and provider test coverage | Architectural review | Open |
 
@@ -741,25 +741,79 @@ measure a generated 64 MiB hash input without retaining it, check bounded writer
 chunks, and exercise disk-only history manifest creation and invalid-catalog
 rebuild cleanup.
 
-File-count-dependent ZIP metadata and scalable manifest processing remain in
-stage 5, coordinated with I02. Payload buffering and projection lifetime are
-separate from those retained metadata structures.
+**Stage 5 implemented:** Package, live-change, logical-state, and history
+manifest readers process one JSON entry at a time. Their replayable entry
+collections, canonical sorting, path lookup, ZIP entry metadata, and history
+deduplication plans use disposable SQLite indexes through Microsoft.Data.Sqlite.
+Nested consumers share one operation database with bounded page caches. This is
+scratch storage, never durable archive evidence or a metadata cache.
+
+The package manifest's former 16 MiB cap is removed. Adjacent and embedded
+copies remain byte-identical and are compared as streams. Tests round-trip a
+real package containing 20,000 generated files and a manifest above 16 MiB,
+with disk-only payload buffering. Other cases cover chunked/nonseekable JSON,
+large individual entries, malformed documents, canceled reads, provider-specific
+key equality, and cleanup after repeated backup/verify/restore operations.
+
+Temporary records preserve zero/null required values and exact UTF-16 strings;
+regressions guard the serializer's otherwise lossy handling of unpaired
+surrogates. This private encoding does not alter durable JSON formats.
+
+Temporary storage is checked at the provider boundary against known source,
+archive, and restore roots before use. Later spills and option reloads recheck
+locations, and approved source links cannot expose active scratch directories.
+A common temporary parent containing separate data fixtures remains supported.
+These remain bounded best-effort location checks, not a physical snapshot.
+
+Resource claims are specific: payload buffering shares the configured memory
+budget; manifest entries and ZIP directories no longer require whole-document
+RAM. Individual records, diagnostic failure lists, and general synchronization
+plans still consume memory. There is no total process-memory guarantee or
+arbitrary maximum archive/manifest size; unavailable temporary disk space is an
+ordinary contextual I/O failure.
 
 ### I02: Avoid repeated ZIP central-directory parsing
 
-[StagedZipRestorePackage.cs](../src/Yabt.Format.Zip/Implementation/StagedZipRestorePackage.cs)
-, `OpenEntryAsync` , opens a fresh `ZipArchive` and calls `GetEntry` for each
-output. Restoring N entries consequently repeats central-directory parsing with
-quadratic aggregate work.
+The earlier implementation opened a fresh `ZipArchive` and called `GetEntry`
+for each output. Restoring N entries consequently repeated central-directory
+parsing with quadratic aggregate work. An isolated .NET 10 probe counted about
+2.1/6.6/22.9 MB of reads for 100/200/400 one-byte entries from ZIPs of only
+10.9/21.8/43.6 KB.
 
-An isolated .NET 10 in-memory probe matching this pattern counted approximately
-2.1/6.6/22.9 MB of reads for 100/200/400 one-byte entries, from ZIPs of only
-10.9/21.8/43.6 KB. This corroborates the access-pattern cost; it is not an
-end-to-end restore benchmark.
+**Implemented with I01 stage 5:** The staged package parses its central directory
+once into the operation's temporary disk index. Each opened payload uses an
+independent bounded byte range, framework Deflate decompression, and CRC/length
+validation. Local headers must agree with indexed evidence. Concurrent readers
+do not share a cursor or need to rebuild the directory.
 
-Consider a bounded pool of reusable readers per staged package, with explicit
-ownership for concurrent extraction. Measure allocations and restore time while
-preserving full package validation and concurrency bounds.
+The writer streams standard ZIP64 records and spools the central directory,
+including support for more than 65,535 entries and offsets above 4 GiB. A real
+streamed 4 GiB + 12,344-byte payload round-trip uses one 256 KiB source buffer
+and validates the complete decompressed content and CRC. Tests also
+exercise interoperability with .NET ZIP readers/writers, malformed headers,
+truncation, CRC mismatches, independent readers, cancellation, and direct
+instrumentation proving zero central-directory rereads after initial staging.
+The large-manifest regression covers complete backup/restore handler behavior;
+it is not a remote-service performance benchmark.
+
+The `yabt-zip-change-v2` fingerprint domain prevents new generated bytes from
+reusing the preceding writer's immutable package names. A first backup after
+upgrading can therefore historize old ZIP artifacts and create one new
+generation even for unchanged source content. Durable JSON schemas and format
+version remain unchanged, and existing valid packages remain readable.
+
+**Final I01/I02 verification (2026-10-22):** The full Release solution suite
+passed on CodexSandbox01 with **1,038 passed, 0 failed, and 3 existing Linux-only
+tests skipped**. The final run reported no build warnings.
+
+```powershell
+dotnet test yabt.sln --no-restore --configuration Release --verbosity minimal `
+  -m:1 --disable-build-servers
+```
+
+Independent review covered projection/manifest ownership and the ZIP framing,
+range, length, and CRC logic. `git diff --check` and CRLF checks pass. Native Linux
+execution and real remote-service performance remain outside this Windows run.
 
 ### I03: Prune history before current-live restore traversal
 
@@ -803,25 +857,42 @@ were not exercised on this host.
 
 ### I04: Separate orchestration responsibilities and strengthen provider tests
 
-`ArchiveSynchronizer` is approaching 6,000 lines. Useful boundaries include
-backup execution, restore planning/execution, and manifest transactions. Shared
-filesystem identity, containment, and availability rules would address the
-recurring assumptions behind R01-R05.
+`ArchiveSynchronizer` is roughly 6,000 lines and owns backup comparison,
+restore planning/execution, projection lifetimes, recovery markers, manifest
+publication, and historization coordination. The concern is the difficulty of
+reviewing interactions among those invariants and testing failures in isolation.
+This finding does not establish an additional data-loss defect.
 
-Refactor after targeted regressions establish behavior. Prefer cohesive
-components with ownership of real invariants over additional forwarding
-abstractions. Add provider contract tests and controlled failures around
-hierarchy, moves, conditional mutations, and lock lifetime; the Azure provider
-tests at review time mostly exercised configuration and client construction
-rather than actual storage operations.
+Provider test coverage is uneven. Filesystem and synchronizer regressions now
+cover many real safety cases, but Azure tests still concentrate on options,
+client construction, naming, and readiness. They do not establish equivalent
+coverage for real hierarchical enumeration, conditional mutations, remote moves,
+and lock loss. WebDAV has local HTTP readiness/path tests but similar gaps in
+complete mutation sequences.
 
-Related observations to evaluate during this work:
+**Proposed next steps:**
 
-- Restore scans every planned history move before every committed file; index
-  blockers by path/ancestor to avoid O(writes x history moves) checks.
-- Restore path comparison is selected by operating system rather than actual
-  filesystem case sensitivity. Include case-insensitive non-Windows volumes and
-  case-sensitive Windows directories when portability work expands.
+1. Establish reusable provider contract cases for folder-local traversal, exact
+   key identity, file/prefix conflicts, whole-folder moves, conditional writes
+   and deletes, and lock lifetime/loss. Exercise disposable filesystem fixtures,
+   Azure through Azurite or an explicitly configured test account, and WebDAV
+   through a controlled server. Add fault injection at mutation boundaries.
+2. Extract restore planning first into a cohesive component that owns validation
+   and the disposable plan. Keep destination comparison and native path rules
+   in provider implementations. Preserve the current behavior with existing and
+   new failure/cancellation tests.
+3. Extract backup execution and restore execution separately. Give manifest
+   publication/recovery a focused transaction component with explicit ordering
+   and ownership; avoid a set of forwarding-only wrappers or a new framework.
+4. Review remaining scale costs with measurements: restore blocker lookup and
+   retained operation plans are candidates. Do not silently combine algorithm
+   changes with the initial structural extraction.
+
+Earlier OS-wide path-comparison concerns have already been addressed through
+provider-owned namespaces. I04 should preserve that separation, including the
+new temporary-storage location checks. Native Linux execution and real remote
+service behavior need their own environments; passing local mocks is not
+substitute evidence.
 
 ## Suggested Codex-Sandbox-01 sequence
 
@@ -835,8 +906,8 @@ Related observations to evaluate during this work:
    reproductions.
 4. R05-R09 are implemented. R08 uses deterministic coordination to verify
    cancellation ownership rather than timing-dependent sleeps.
-5. I03 is implemented. Measure I01 and I02, then refactor under the resulting
-   tests and provider contracts.
+5. I01-I03 are implemented. Start I04 with provider contract coverage, then
+   extract orchestration responsibilities under the resulting regressions.
 6. Update each finding's status with the fixing commit and verification
    evidence. Do not mark an item resolved merely because the pre-existing suite
    passes.

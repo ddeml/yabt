@@ -372,6 +372,7 @@ internal sealed class SpillableTemporaryContent
 
     private FileStream CreateFile()
     {
+        TemporaryStorageValidation.ValidateDirectory(_temporaryDirectory);
         var options = new FileStreamOptions
         {
             Mode = FileMode.CreateNew,

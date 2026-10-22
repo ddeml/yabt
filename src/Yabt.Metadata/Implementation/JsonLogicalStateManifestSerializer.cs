@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Options;
+using Yabt.Common;
 using Yabt.Core.Models;
 
 namespace Yabt.Metadata.Implementation;
@@ -14,6 +16,14 @@ internal sealed class JsonLogicalStateManifestSerializer(JsonSerializerOptions _
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
 
+    private readonly IOptionsMonitor<TemporaryContentOptions>? _temporaryOptions;
+
+    public JsonLogicalStateManifestSerializer(IOptionsMonitor<TemporaryContentOptions> temporaryOptions)
+        : this(JsonMetadataOptions.Create())
+    {
+        _temporaryOptions = Check.NotNull(temporaryOptions);
+    }
+
     public JsonLogicalStateManifestSerializer()
         : this(JsonMetadataOptions.Create())
     {
@@ -27,6 +37,7 @@ internal sealed class JsonLogicalStateManifestSerializer(JsonSerializerOptions _
         ArgumentNullException.ThrowIfNull(entries);
 
         var canonicalEntries = CreateCanonicalEntries(entries);
+        using var entryOwnership = new ManifestEntryOwnership(canonicalEntries, entries);
         var manifest = new ArchiveLogicalStateManifest
         (
             ArchiveLogicalStateManifest.ExpectedDocumentType,
@@ -35,10 +46,10 @@ internal sealed class JsonLogicalStateManifestSerializer(JsonSerializerOptions _
             string.Empty
         );
 
-        return manifest with
+        return entryOwnership.Complete(manifest with
         {
             ManifestHash = ComputeManifestHash(manifest, canonicalEntries),
-        };
+        });
     }
 
     public async Task WriteAsync
@@ -52,6 +63,7 @@ internal sealed class JsonLogicalStateManifestSerializer(JsonSerializerOptions _
         ArgumentNullException.ThrowIfNull(destination);
 
         var validatedManifest = ValidateManifest(manifest);
+        using var entryOwnership = new ManifestEntryOwnership(validatedManifest.Entries, manifest.Entries);
         try
         {
             await JsonSerializer.SerializeAsync(
@@ -75,32 +87,44 @@ internal sealed class JsonLogicalStateManifestSerializer(JsonSerializerOptions _
     )
     {
         ArgumentNullException.ThrowIfNull(source);
-
-        ArchiveLogicalStateManifest? manifest;
+        StreamedManifestDocument<ArchiveLogicalStateManifestEntry> document;
+        ArchiveLogicalStateManifest manifest;
         try
         {
-            manifest = await JsonSerializer.DeserializeAsync<ArchiveLogicalStateManifest>(
+            document = await StreamedManifestJson.ReadAsync<ArchiveLogicalStateManifestEntry>
+            (
                 source,
+                ["documentType", "schemaVersion", "entries", "manifestHash"],
                 _strictJsonOptions,
-                cancellationToken);
+                _temporaryOptions?.CurrentValue,
+                cancellationToken
+            );
+            try
+            {
+                manifest = document.Header.RootElement.Deserialize<ArchiveLogicalStateManifest>(_strictJsonOptions) ??
+                    throw new JsonException("Logical state manifest JSON did not contain a manifest object.");
+                manifest = manifest with { Entries = document.Entries };
+            }
+            catch (Exception)
+            {
+                document.Dispose();
+                throw;
+            }
         }
         catch (Exception ex)
         {
-            throw new YabtMetadataException(
-                "Logical state manifest JSON could not be deserialized.",
-                ex);
+            throw new YabtMetadataException("Logical state manifest JSON could not be deserialized.", ex);
         }
-
-        if (manifest is null)
+        using (document)
         {
-            throw new YabtMetadataException(
-                "Logical state manifest JSON did not contain a manifest object.");
-        }
 
-        return ValidateManifest(manifest);
+            var validated = ValidateManifest(manifest);
+            document.TransferEntries();
+            return validated;
+        }
     }
 
-    private static ArchiveLogicalStateManifest ValidateManifest
+    private ArchiveLogicalStateManifest ValidateManifest
     (
         ArchiveLogicalStateManifest manifest
     )
@@ -126,9 +150,8 @@ internal sealed class JsonLogicalStateManifestSerializer(JsonSerializerOptions _
                 "Logical state manifest JSON does not contain an entries collection.");
         }
 
-        var serializedEntries = manifest.Entries.ToArray();
-        var canonicalEntries = CreateCanonicalEntries(serializedEntries);
-        EnsureEntriesAreCanonical(serializedEntries, canonicalEntries);
+        var canonicalEntries = ValidateCanonicalEntries(manifest.Entries);
+        using var entryOwnership = new ManifestEntryOwnership(canonicalEntries, manifest.Entries);
 
         if (!ArchiveHash.IsValid(manifest.ManifestHash))
         {
@@ -143,79 +166,80 @@ internal sealed class JsonLogicalStateManifestSerializer(JsonSerializerOptions _
                 "Logical state manifest self-hash does not match its contents.");
         }
 
-        return manifest with
+        return entryOwnership.Complete(manifest with
         {
             Entries = canonicalEntries,
-        };
+        });
     }
 
-    private static ArchiveLogicalStateManifestEntry[] CreateCanonicalEntries
+    private TemporaryManifestEntries<ArchiveLogicalStateManifestEntry> CreateCanonicalEntries
     (
         IEnumerable<ArchiveLogicalStateManifestEntry> entries
-    )
+    ) => ManifestEntryStorage.CreateCanonical
+    (
+        entries,
+        CreateCanonicalEntry,
+        entry => entry.LogicalRelativePath,
+        "Logical state manifest",
+        "entry path",
+        _strictJsonOptions,
+        _temporaryOptions?.CurrentValue
+    );
+
+    private TemporaryManifestEntries<ArchiveLogicalStateManifestEntry> ValidateCanonicalEntries
+    (
+        IEnumerable<ArchiveLogicalStateManifestEntry> entries
+    ) => ManifestEntryStorage.ValidateCanonical
+    (
+        entries,
+        CreateCanonicalEntry,
+        entry => entry.LogicalRelativePath,
+        static (left, right) => left == right,
+        "Logical state manifest",
+        "entry path",
+        _strictJsonOptions,
+        _temporaryOptions?.CurrentValue
+    );
+
+    private static ArchiveLogicalStateManifestEntry CreateCanonicalEntry(ArchiveLogicalStateManifestEntry entry)
     {
-        var canonicalEntries = new List<ArchiveLogicalStateManifestEntry>();
-        foreach (var entry in entries)
+        if (entry is null)
         {
-            if (entry is null)
-            {
-                throw new YabtMetadataException(
-                    "Logical state manifest entries cannot contain null values.");
-            }
-
-            string logicalRelativePath;
-            try
-            {
-                logicalRelativePath = ArchiveLayout.NormalizeObjectKey(
-                    entry.LogicalRelativePath);
-            }
-            catch (Exception ex)
-            {
-                throw new YabtMetadataException(
-                    $"Logical state manifest entry path '{entry.LogicalRelativePath}' is invalid.",
-                    ex);
-            }
-
-            if (string.IsNullOrEmpty(logicalRelativePath))
-            {
-                throw new YabtMetadataException(
-                    "Logical state manifest entry paths cannot be empty.");
-            }
-
-            ValidateStatFingerprint(entry.StatFingerprint, logicalRelativePath);
-            if (!ArchiveHash.IsValid(entry.ContentHash))
-            {
-                throw new YabtMetadataException(
-                    $"Logical state manifest entry '{logicalRelativePath}' content hash " +
-                    "is not a valid xxHash128 hash.");
-            }
-
-            canonicalEntries.Add(entry with
-            {
-                LogicalRelativePath = logicalRelativePath,
-            });
+            throw new YabtMetadataException(
+                "Logical state manifest entries cannot contain null values.");
         }
 
-        canonicalEntries.Sort(static (left, right) =>
-            string.Compare(
-                left.LogicalRelativePath,
-                right.LogicalRelativePath,
-                StringComparison.Ordinal));
-
-        for (var index = 1; index < canonicalEntries.Count; index++)
+        string logicalRelativePath;
+        try
         {
-            if (string.Equals(
-                    canonicalEntries[index - 1].LogicalRelativePath,
-                    canonicalEntries[index].LogicalRelativePath,
-                    StringComparison.Ordinal))
-            {
-                throw new YabtMetadataException(
-                    "Logical state manifest contains duplicate entry path " +
-                    $"'{canonicalEntries[index].LogicalRelativePath}'.");
-            }
+            logicalRelativePath = ArchiveLayout.NormalizeObjectKey(
+                entry.LogicalRelativePath);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtMetadataException(
+                $"Logical state manifest entry path '{entry.LogicalRelativePath}' is invalid.",
+                ex);
         }
 
-        return [.. canonicalEntries];
+        if (string.IsNullOrEmpty(logicalRelativePath))
+        {
+            throw new YabtMetadataException(
+                "Logical state manifest entry paths cannot be empty.");
+        }
+
+        ValidateStatFingerprint(entry.StatFingerprint, logicalRelativePath);
+        if (!ArchiveHash.IsValid(entry.ContentHash))
+        {
+            throw new YabtMetadataException(
+                $"Logical state manifest entry '{logicalRelativePath}' content hash " +
+                "is not a valid xxHash128 hash.");
+        }
+
+        return entry with
+        {
+            LogicalRelativePath = logicalRelativePath,
+        };
     }
 
     private static void ValidateStatFingerprint
@@ -236,37 +260,6 @@ internal sealed class JsonLogicalStateManifestSerializer(JsonSerializerOptions _
             throw new YabtMetadataException(
                 $"Logical state manifest entry '{logicalRelativePath}' stat fingerprint " +
                 "is not a canonical stat-v1 fingerprint.");
-        }
-    }
-
-    private static void EnsureEntriesAreCanonical
-    (
-        ArchiveLogicalStateManifestEntry[] serializedEntries,
-        ArchiveLogicalStateManifestEntry[] canonicalEntries
-    )
-    {
-        for (var index = 0; index < serializedEntries.Length; index++)
-        {
-            var serializedEntry = serializedEntries[index];
-            var canonicalEntry = canonicalEntries[index];
-
-            if (!string.Equals(
-                    serializedEntry.LogicalRelativePath,
-                    canonicalEntry.LogicalRelativePath,
-                    StringComparison.Ordinal) ||
-                !string.Equals(
-                    serializedEntry.StatFingerprint,
-                    canonicalEntry.StatFingerprint,
-                    StringComparison.Ordinal) ||
-                !string.Equals(
-                    serializedEntry.ContentHash,
-                    canonicalEntry.ContentHash,
-                    StringComparison.Ordinal))
-            {
-                throw new YabtMetadataException(
-                    "Logical state manifest entries are not in canonical path order or " +
-                    "contain noncanonical values.");
-            }
         }
     }
 

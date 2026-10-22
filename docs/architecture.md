@@ -481,12 +481,29 @@ because they never upload. ZIP follows the same one-read rule: when an entry
 lacks enough metadata or a provider hash, its bytes are hashed while that same
 read is written into the package. ZIP package construction attempts every
 independent source entry and aggregates source-read failures. An eagerly built
-fallback package retains one spillable backing for replay, so nested incomplete-metadata packages can
-retain several temporary files while sharing the configured memory budget.
+fallback package retains one spillable backing for replay. Nested packages with
+incomplete metadata can retain several temporary files while sharing the
+configured memory budget.
 Backup projections own their materializations explicitly. Sibling consistency
 checks complete when the last artifact in a group is processed; that group and
 its nested scopes then release their backing. Failure and cancellation also
 release projection ownership after started materialization has finished.
+
+Large manifests are streamed into operation-owned SQLite entry collections.
+Canonical sorting and lookup use disk indexes; hashing consumes canonical JSON
+incrementally. Serialization preserves the durable JSON/Brotli representation.
+A manifest model owns its replayable entries and must be disposed. Sibling
+manifests and nested projections share an operation index with bounded page
+caches; SQLite files contain no exclusive or durable archive evidence.
+
+ZIP creation streams payloads and spools central-directory records, then writes
+standard ZIP64 end records. Restore stages package bytes through temporary
+content, parses its central directory once, and retains offsets in the temporary
+index. Independently positioned entry streams validate local headers, CRC and
+length without rebuilding the directory. No reader pool or per-entry copy of
+the central directory is required. General synchronization plans and individual
+metadata records can still consume memory; the payload budget is not a total
+process-memory guarantee.
 
 Backup classifies source-object open and stream-read failures separately from
 target-provider or mutation failures. It continues reconciliation after

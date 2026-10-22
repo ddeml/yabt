@@ -17,8 +17,10 @@ public sealed record ArchiveManifest
     [property: JsonRequired] IEnumerable<ArchiveManifestEntry> Entries,
     [property: JsonRequired] long TotalBytes,
     [property: JsonRequired] string ManifestHash
-)
+) : IDisposable
 {
     public const string ExpectedDocumentType = "yabt.packageManifest";
     public const int ExpectedSchemaVersion = 1;
+
+    public void Dispose() => (Entries as IDisposable)?.Dispose();
 }

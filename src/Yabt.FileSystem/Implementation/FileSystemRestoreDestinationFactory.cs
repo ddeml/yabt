@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Yabt.Common;
 using Yabt.Core.Abstractions;
 
 namespace Yabt.FileSystem.Implementation;
@@ -30,7 +31,9 @@ internal sealed class FileSystemRestoreDestinationFactory
         _destinationLogger.LogTrace(nameof(CreateComparisonReplayStream));
 
         // A private replay is independent of archive staging and is removed when its owner closes it.
-        var temporaryPath = Path.Combine(Path.GetTempPath(), $"yabt-source-replay-{Guid.NewGuid():N}.tmp");
+        var temporaryDirectory = Path.GetTempPath();
+        TemporaryStorageValidation.ValidateDirectory(temporaryDirectory);
+        var temporaryPath = Path.Combine(temporaryDirectory, $"yabt-source-replay-{Guid.NewGuid():N}.tmp");
         var options = new FileStreamOptions
         {
             Mode = FileMode.CreateNew,

@@ -25,8 +25,8 @@ public sealed class JsonLogicalStateManifestSerializerTests
             new DateTimeOffset(2026, 8, 24, 11, 0, 0, TimeSpan.Zero)
         );
 
-        var forwardManifest = serializer.Create([firstEntry, secondEntry]);
-        var reverseManifest = serializer.Create([secondEntry, firstEntry]);
+        using var forwardManifest = serializer.Create([firstEntry, secondEntry]);
+        using var reverseManifest = serializer.Create([secondEntry, firstEntry]);
         var forwardJson = await WriteToStringAsync(serializer, forwardManifest);
         var reverseJson = await WriteToStringAsync(serializer, reverseManifest);
 
@@ -59,12 +59,12 @@ public sealed class JsonLogicalStateManifestSerializerTests
             "contents",
             new DateTimeOffset(2026, 8, 24, 12, 34, 56, TimeSpan.Zero)
         );
-        var manifest = serializer.Create([entry]);
+        using var manifest = serializer.Create([entry]);
         await using var stream = new MemoryStream();
         await serializer.WriteAsync(manifest, stream);
         stream.Position = 0;
 
-        var restored = await serializer.ReadAsync(stream);
+        using var restored = await serializer.ReadAsync(stream);
         var restoredEntry = restored.Entries.Single();
 
         Assert.AreEqual(manifest.ManifestHash, restored.ManifestHash);
@@ -77,7 +77,7 @@ public sealed class JsonLogicalStateManifestSerializerTests
     public async Task ReadAsyncRejectsUnknownProperties()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create([]);
+        using var manifest = serializer.Create([]);
         var json = await WriteToStringAsync(serializer, manifest);
         var changedJson = json.Replace(
             "\"schemaVersion\": 1,",
@@ -97,7 +97,7 @@ public sealed class JsonLogicalStateManifestSerializerTests
     public async Task ReadAsyncRejectsDuplicateJsonProperties()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create([]);
+        using var manifest = serializer.Create([]);
         var json = await WriteToStringAsync(serializer, manifest);
         var duplicateJson = json.Replace
         (
@@ -115,7 +115,7 @@ public sealed class JsonLogicalStateManifestSerializerTests
     public async Task ReadAsyncRejectsUnsupportedDocumentType()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create([]);
+        using var manifest = serializer.Create([]);
         var json = await WriteToStringAsync(serializer, manifest);
         var changedJson = json.Replace(
             ArchiveLogicalStateManifest.ExpectedDocumentType,
@@ -135,7 +135,7 @@ public sealed class JsonLogicalStateManifestSerializerTests
     public async Task ReadAsyncRejectsUnsupportedSchemaVersion()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create([]);
+        using var manifest = serializer.Create([]);
         var json = await WriteToStringAsync(serializer, manifest);
         var changedJson = json.Replace(
             "\"schemaVersion\": 1",
@@ -157,7 +157,7 @@ public sealed class JsonLogicalStateManifestSerializerTests
         var serializer = CreateSerializer();
         var originalHash = CreateContentHash("original");
         var changedHash = CreateContentHash("changed");
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         ([
             new
             (
@@ -256,7 +256,7 @@ public sealed class JsonLogicalStateManifestSerializerTests
     public async Task WriteAsyncRejectsNoncanonicalEntryOrder()
     {
         var serializer = CreateSerializer();
-        var canonicalManifest = serializer.Create
+        using var canonicalManifest = serializer.Create
         ([
             CreateEntry
             (

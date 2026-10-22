@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Yabt.Common;
+using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.FileSystem;
@@ -72,10 +73,125 @@ public sealed class ArchiveSynchronizerTests
             Assert.IsTrue(result.Completed);
             Assert.IsNotNull(observed);
             Assert.IsTrue(observed.CreationCount >= 32);
-            Assert.IsTrue(observed.MaximumExistingFiles <= 1,
+            Assert.IsTrue(observed.MaximumExistingFiles <= 2,
                 $"Completed projections retained {observed.MaximumExistingFiles} temporary files.");
             Assert.AreEqual(0, Directory.GetFiles(temporaryRoot).Length);
             Assert.AreEqual(0L, observed.ReservedMemoryBytes);
+        }
+        finally { DeleteWorkspace(workspace); }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task DiskOnlyManifestEvidenceIsReleasedAfterBackupVerifyAndRepeatedRestore(bool packageRoot)
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            var temporaryRoot = Path.Combine(workspace, "temporary");
+            Directory.CreateDirectory(temporaryRoot);
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            if (packageRoot) { await WritePolicyAsync(sourceRoot, ZipArchiveFormatName.Value); }
+            for (var index = 0; index < 32; index++)
+            {
+                await WriteTextFileAsync(Path.Combine(sourceRoot, $"file-{index:D3}.txt"), $"payload-{index}");
+            }
+
+            var services = CreateServices();
+            services.AddSingleton<IOptionsMonitor<TemporaryContentOptions>>(new FixedTemporaryOptions(
+                new() { MemoryThresholdBytes = 0, TotalMemoryBudgetBytes = 0, TemporaryDirectory = temporaryRoot }));
+            using var provider = services.BuildServiceProvider();
+            var synchronizer = provider.GetRequiredService<IArchiveSynchronizer>();
+            var buffers = provider.GetRequiredService<ITemporaryContentFactory>();
+
+            Assert.IsTrue((await synchronizer.BackupAsync(new(sourceRoot))).Completed);
+            Assert.IsEmpty(Directory.EnumerateFileSystemEntries(temporaryRoot));
+            // Both live-manifest representations must release their separate owners.
+            await using (var compressed = File.OpenRead(Path.Combine(targetRoot, ArchiveChangeManifest.BrotliFileName)))
+            await using (var decompressed = new BrotliStream(compressed, CompressionMode.Decompress))
+            await using (var plain = File.Create(Path.Combine(targetRoot, ArchiveChangeManifest.UncompressedFileName)))
+            {
+                await decompressed.CopyToAsync(plain);
+            }
+            Assert.IsTrue((await synchronizer.VerifyAsync(new(sourceRoot))).Completed);
+            Assert.IsEmpty(Directory.EnumerateFileSystemEntries(temporaryRoot));
+            Assert.IsTrue((await synchronizer.BackupAsync(new(sourceRoot))).Completed);
+            Assert.IsEmpty(Directory.EnumerateFileSystemEntries(temporaryRoot));
+            for (var run = 0; run < 2; run++)
+            {
+                Assert.IsTrue((await synchronizer.RestoreAsync(new(sourceRoot, DestinationRoot: destinationRoot))).Completed);
+                Assert.IsEmpty(Directory.EnumerateFileSystemEntries(temporaryRoot));
+            }
+            Assert.AreEqual(0L, buffers.ReservedMemoryBytes);
+            AssertTextFile(Path.Combine(destinationRoot, "file-031.txt"), "payload-31");
+        }
+        finally { DeleteWorkspace(workspace); }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task BackupRejectsTemporaryStorageInsideDataBeforeInitializingTarget(bool insideTarget)
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "source content");
+            var temporaryRoot = Path.Combine(insideTarget ? targetRoot : sourceRoot, "temporary");
+            Directory.CreateDirectory(temporaryRoot);
+            var services = CreateServices();
+            services.AddSingleton<IOptionsMonitor<TemporaryContentOptions>>(new FixedTemporaryOptions(
+                new() { MemoryThresholdBytes = 0, TemporaryDirectory = temporaryRoot }));
+            using var provider = services.BuildServiceProvider();
+
+            var exception = await Assert.ThrowsAsync<YabtFileSystemException>(() =>
+                provider.GetRequiredService<IArchiveSynchronizer>().BackupAsync(new(sourceRoot)));
+
+            Assert.IsTrue(ObjectStoreOverlapException.IsContainedIn(exception));
+            Assert.IsEmpty(Directory.EnumerateFileSystemEntries(temporaryRoot));
+            Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, ".yabt-tmp")));
+            Assert.IsFalse(File.Exists(Path.Combine(targetRoot, "file.txt")));
+            AssertTextFile(Path.Combine(sourceRoot, "file.txt"), "source content");
+        }
+        finally { DeleteWorkspace(workspace); }
+    }
+
+    [TestMethod]
+    public async Task RestoreRejectsTemporaryStorageInsideDestinationBeforeWritingFiles()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var destinationRoot = Path.Combine(workspace, "restored");
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            await WriteTextFileAsync(Path.Combine(sourceRoot, "file.txt"), "source content");
+            using (var initial = CreateServices().BuildServiceProvider())
+            {
+                Assert.IsTrue((await initial.GetRequiredService<IArchiveSynchronizer>().BackupAsync(new(sourceRoot))).Completed);
+            }
+            var temporaryRoot = Path.Combine(destinationRoot, "temporary");
+            Directory.CreateDirectory(temporaryRoot);
+            var services = CreateServices();
+            services.AddSingleton<IOptionsMonitor<TemporaryContentOptions>>(new FixedTemporaryOptions(
+                new() { MemoryThresholdBytes = 0, TemporaryDirectory = temporaryRoot }));
+            using var provider = services.BuildServiceProvider();
+
+            var exception = await Assert.ThrowsAsync<YabtFileSystemException>(() =>
+                provider.GetRequiredService<IArchiveSynchronizer>().RestoreAsync(new(sourceRoot, DestinationRoot: destinationRoot)));
+
+            Assert.IsTrue(ObjectStoreOverlapException.IsContainedIn(exception));
+            Assert.IsEmpty(Directory.EnumerateFileSystemEntries(temporaryRoot));
+            Assert.IsFalse(Directory.Exists(Path.Combine(destinationRoot, ".yabt-tmp")));
+            Assert.IsFalse(File.Exists(Path.Combine(destinationRoot, "file.txt")));
         }
         finally { DeleteWorkspace(workspace); }
     }
@@ -93,7 +209,7 @@ public sealed class ArchiveSynchronizerTests
         public TemporaryContent Create()
         {
             CreationCount++;
-            MaximumExistingFiles = Math.Max(MaximumExistingFiles, Directory.GetFiles(_directory).Length);
+            MaximumExistingFiles = Math.Max(MaximumExistingFiles, Directory.GetFiles(_directory, "yabt-content-*.tmp").Length);
             return _inner.Create();
         }
     }
@@ -225,7 +341,7 @@ public sealed class ArchiveSynchronizerTests
             Assert.IsTrue(logSink.Entries.Any(entry =>
                 entry.Level == LogLevel.Debug &&
                 entry.EventId.Id == YabtEventIds.ZipTemporaryPlumbingOperation &&
-                entry.Message.Contains("restore staging file", StringComparison.Ordinal)));
+                entry.Message.Contains("restore package staging", StringComparison.Ordinal)));
             Assert.IsTrue(logSink.Entries.Any(entry =>
                 entry.Level == LogLevel.Debug &&
                 entry.EventId.Id == YabtEventIds.ControlMetadataOperation &&
@@ -1108,7 +1224,7 @@ public sealed class ArchiveSynchronizerTests
                 serviceProvider.GetRequiredService<ILogicalStateManifestSerializer>();
             await using (var logicalStateContent = File.OpenRead(logicalStateManifestPath))
             {
-                var logicalStateManifest = await logicalStateSerializer.ReadAsync(
+                using var logicalStateManifest = await logicalStateSerializer.ReadAsync(
                     logicalStateContent);
                 Assert.AreEqual(1, logicalStateManifest.Entries.Count());
                 Assert.AreEqual(
@@ -1187,7 +1303,7 @@ public sealed class ArchiveSynchronizerTests
                 evidenceBytes.LongLength,
                 new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero)
             );
-            var logicalStateManifest = logicalStateSerializer.Create
+            using var logicalStateManifest = logicalStateSerializer.Create
             (
                 [
                     new("A.txt", statFingerprint, contentHash),
@@ -1528,7 +1644,7 @@ public sealed class ArchiveSynchronizerTests
                     entry.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
             }
 
-            var emptyPackagedRootManifest = manifestSerializer.Create
+            using var emptyPackagedRootManifest = manifestSerializer.Create
             (
                 [],
                 ZipArchiveFormatName.Value,

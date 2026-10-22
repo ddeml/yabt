@@ -239,6 +239,14 @@ public sealed class SourceReadinessTests
             CancellationToken cancellationToken = default
         ) => _inner.LocateSourceAsync(input, requireRoot, cancellationToken);
 
+        public void ValidateTemporaryStorageLocations
+        (
+            string temporaryDirectory,
+            ArchiveSourceLocation? source,
+            IObjectStore archiveStore,
+            IRestoreDestination? destination = null
+        ) => _inner.ValidateTemporaryStorageLocations(temporaryDirectory, source, archiveStore, destination);
+
         public void ConfigureSourceTraversal(ArchiveSourceLocation source, IObjectStore targetStore) =>
             _inner.ConfigureSourceTraversal(source, targetStore);
 

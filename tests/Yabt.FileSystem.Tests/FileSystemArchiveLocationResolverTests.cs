@@ -303,6 +303,76 @@ public sealed class FileSystemArchiveLocationResolverTests
         StringAssert.Contains(exception.Message, "could not safely resolve filesystem path");
     }
 
+    [TestMethod]
+    [DataRow("source", "selected source data")]
+    [DataRow("archive", "archive storage")]
+    [DataRow("restore", "restore destination")]
+    public async Task TemporaryStorageRejectsDataDescendantsBeforeCreatingAnything
+    (
+        string parent,
+        string description
+    )
+    {
+        using var fixture = new LocationFixture();
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "source"));
+        using var services = CreateServices(fixture.Root).BuildServiceProvider();
+        var resolver = services.GetRequiredService<IArchiveLocationResolver>();
+        var source = await resolver.LocateSourceAsync(Path.Combine(fixture.Root, "source"));
+        var archive = services.GetRequiredService<ISourceRootObjectStoreResolver>()
+            .ResolveSourceRoot(Path.Combine(fixture.Root, "archive"));
+        var destination = services.GetRequiredService<IRestoreDestinationFactory>()
+            .Create(Path.Combine(fixture.Root, "restore"));
+        var temporaryPath = Path.Combine(fixture.Root, parent, "temporary");
+
+        var exception = Assert.ThrowsExactly<YabtFileSystemException>
+        (
+            () => resolver.ValidateTemporaryStorageLocations(temporaryPath, source, archive, destination)
+        );
+
+        StringAssert.Contains(exception.Message, description);
+        Assert.IsInstanceOfType<ObjectStoreOverlapException>(exception.InnerException);
+        Assert.IsFalse(Directory.Exists(temporaryPath));
+    }
+
+    [TestMethod]
+    public async Task TemporaryStorageAllowsCommonAncestorsAndSiblingFoldersBelowTheDescriptorRoot()
+    {
+        using var fixture = new LocationFixture();
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "source"));
+        using var services = CreateServices(fixture.Root).BuildServiceProvider();
+        var resolver = services.GetRequiredService<IArchiveLocationResolver>();
+        var source = await resolver.LocateSourceAsync(Path.Combine(fixture.Root, "source"));
+        var archive = services.GetRequiredService<ISourceRootObjectStoreResolver>()
+            .ResolveSourceRoot(Path.Combine(fixture.Root, "archive"));
+
+        resolver.ValidateTemporaryStorageLocations(fixture.Root, source, archive);
+        resolver.ValidateTemporaryStorageLocations(Path.Combine(fixture.Root, "temporary"), source, archive);
+
+        Assert.IsFalse(Directory.Exists(Path.Combine(fixture.Root, "temporary")));
+    }
+
+    [TestMethod]
+    public async Task TemporaryStorageResolvesAliasesIntoSelectedData()
+    {
+        using var fixture = new LocationFixture();
+        var sourcePath = Directory.CreateDirectory(Path.Combine(fixture.Root, "source")).FullName;
+        var aliasPath = Path.Combine(fixture.Root, "alias");
+        fixture.LinkDirectory(aliasPath, sourcePath);
+        using var services = CreateServices(fixture.Root).BuildServiceProvider();
+        var resolver = services.GetRequiredService<IArchiveLocationResolver>();
+        var source = await resolver.LocateSourceAsync(sourcePath);
+        var archive = services.GetRequiredService<ISourceRootObjectStoreResolver>()
+            .ResolveSourceRoot(Path.Combine(fixture.Root, "archive"));
+
+        var exception = Assert.ThrowsExactly<YabtFileSystemException>
+        (
+            () => resolver.ValidateTemporaryStorageLocations(Path.Combine(aliasPath, "temporary"), source, archive)
+        );
+
+        Assert.IsInstanceOfType<ObjectStoreOverlapException>(exception.InnerException);
+        Assert.IsFalse(Directory.Exists(Path.Combine(sourcePath, "temporary")));
+    }
+
     private static ServiceCollection CreateServices
     (
         string rootPath,

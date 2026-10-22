@@ -20,11 +20,13 @@ internal sealed class TemporaryContentFactory
     {
         var options = _options.CurrentValue;
         _ = options.GetEffectiveTotalMemoryBudgetBytes();
+        var directory = options.GetEffectiveTemporaryDirectory();
+        TemporaryStorageValidation.ValidateDirectory(directory);
         return new SpillableTemporaryContent
         (
             this,
             options.GetEffectiveMemoryThresholdBytes(),
-            options.GetEffectiveTemporaryDirectory()
+            directory
         );
     }
 

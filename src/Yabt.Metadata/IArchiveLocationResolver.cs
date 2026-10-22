@@ -20,6 +20,15 @@ public interface IArchiveLocationResolver
     /// </summary>
     void ValidateBackupLocations(ArchiveSourceLocation source, IObjectStore targetStore);
 
+    /// <summary>Rejects temporary files inside known read or write trees without scanning them.</summary>
+    void ValidateTemporaryStorageLocations
+    (
+        string temporaryDirectory,
+        ArchiveSourceLocation? source,
+        IObjectStore archiveStore,
+        IRestoreDestination? destination = null
+    );
+
     void ConfigureSourceTraversal(ArchiveSourceLocation source, IObjectStore targetStore);
 
     Task<FolderPolicy> ReadPolicyAsync

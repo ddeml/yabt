@@ -283,6 +283,16 @@ public sealed class LateBackupOverlapTests
             // This provider discovers the alias only while opening the later object.
         }
 
+        public void ValidateTemporaryStorageLocations
+        (
+            string temporaryDirectory,
+            ArchiveSourceLocation? source,
+            IObjectStore archiveStore,
+            IRestoreDestination? destination = null
+        )
+        {
+        }
+
         public void ConfigureSourceTraversal(ArchiveSourceLocation source, IObjectStore targetStore)
         {
         }

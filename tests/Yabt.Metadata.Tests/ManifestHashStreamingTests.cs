@@ -94,8 +94,9 @@ public sealed class ManifestHashStreamingTests
         switch (kind)
         {
             case "change":
+            {
                 var changeSerializer = services.GetRequiredService<IChangeManifestSerializer>();
-                var change = changeSerializer.Create
+                using var change = changeSerializer.Create
                 (
                     paths.Select(path => new ArchiveChangeManifestEntry
                     (
@@ -109,16 +110,20 @@ public sealed class ManifestHashStreamingTests
                 );
                 await changeSerializer.WriteAsync(change, output);
                 return change.ManifestHash;
+            }
 
             case "history":
+            {
                 var historySerializer = services.GetRequiredService<IHistoryManifestSerializer>();
-                var history = historySerializer.Create(paths.Select(path => HistoryEntry(path)));
+                using var history = historySerializer.Create(paths.Select(path => HistoryEntry(path)));
                 await historySerializer.WriteAsync(history, output);
                 return history.ManifestHash;
+            }
 
             case "logical":
+            {
                 var logicalSerializer = services.GetRequiredService<ILogicalStateManifestSerializer>();
-                var logical = logicalSerializer.Create(paths.Select(path => new ArchiveLogicalStateManifestEntry
+                using var logical = logicalSerializer.Create(paths.Select(path => new ArchiveLogicalStateManifestEntry
                 (
                     path,
                     ArchiveChangeFingerprint.Create(7, Timestamp),
@@ -126,10 +131,12 @@ public sealed class ManifestHashStreamingTests
                 )));
                 await logicalSerializer.WriteAsync(logical, output);
                 return logical.ManifestHash;
+            }
 
             case "package":
+            {
                 var packageSerializer = services.GetRequiredService<IManifestSerializer>();
-                var package = packageSerializer.Create
+                using var package = packageSerializer.Create
                 (
                     "folder",
                     Timestamp,
@@ -150,8 +157,10 @@ public sealed class ManifestHashStreamingTests
                 );
                 await packageSerializer.WriteAsync(package, output);
                 return package.ManifestHash;
+            }
 
             case "reference":
+            {
                 var metadata = Enumerable.Range(0, 24_000).ToDictionary
                 (
                     index => $"property-{index:D6}",
@@ -170,6 +179,7 @@ public sealed class ManifestHashStreamingTests
                 );
                 await referenceSerializer.WriteAsync(reference, output);
                 return reference.ReferenceHash;
+            }
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(kind));

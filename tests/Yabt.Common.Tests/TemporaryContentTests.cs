@@ -407,6 +407,35 @@ public sealed class TemporaryContentTests
         Assert.AreEqual(0L, factory.ReservedMemoryBytes);
     }
 
+    [TestMethod]
+    public void LocationValidationRunsOnReloadAndAgainBeforeSpilling()
+    {
+        using var provider = CreateServices(threshold: 1);
+        var factory = provider.GetRequiredService<ITemporaryContentFactory>();
+        var monitor = (TemporaryContentTestOptionsMonitor)provider.
+            GetRequiredService<IOptionsMonitor<TemporaryContentOptions>>();
+        var rejected = false;
+        var validatedPaths = new List<string>();
+        using var validation = TemporaryStorageValidation.BeginOperation(path =>
+        {
+            validatedPaths.Add(path);
+            if (rejected) { throw new IOException("Temporary location is now unsafe."); }
+        });
+        using var content = factory.Create();
+        content.WriteByte(1);
+        rejected = true;
+
+        Assert.ThrowsExactly<IOException>(() => content.WriteByte(2));
+        Assert.HasCount(2, validatedPaths);
+        Assert.IsEmpty(Directory.GetFiles(_temporaryDirectory));
+        var changedDirectory = Path.Combine(_temporaryDirectory, "reloaded");
+        monitor.Set(new() { TemporaryDirectory = changedDirectory });
+
+        Assert.ThrowsExactly<IOException>(() => factory.Create());
+        Assert.AreEqual(changedDirectory, validatedPaths[^1]);
+        Assert.IsFalse(Directory.Exists(changedDirectory));
+    }
+
     private ServiceProvider CreateServices
     (
         int threshold,

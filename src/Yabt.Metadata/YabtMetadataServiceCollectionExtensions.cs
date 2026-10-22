@@ -13,6 +13,7 @@ public static class YabtMetadataServiceCollectionExtensions
         string? configSectionPath = null
     )
     {
+        services.AddYabtTemporaryContent();
         var options = services.AddOptions<YabtMetadataOptions>();
         if (configSectionPath is not null)
         {

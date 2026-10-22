@@ -75,7 +75,7 @@ public sealed class ZipArchiveFormatHandlerTests
 
         var serializer = provider.GetRequiredService<IManifestSerializer>();
         using var manifestStream = new MemoryStream(manifestBytes);
-        var manifest = await serializer.ReadAsync(manifestStream);
+        using var manifest = await serializer.ReadAsync(manifestStream);
         Assert.IsNull(FolderPolicyDiagnostics.GetConfigurationSource(manifest.Policy));
         CollectionAssert.AreEqual(new[] { "*.secret" }, manifest.Policy.ExcludePatterns?.ToArray());
         Assert.AreEqual
@@ -229,7 +229,7 @@ public sealed class ZipArchiveFormatHandlerTests
 
         var manifestSerializer = serviceProvider.GetRequiredService<IManifestSerializer>();
         embeddedBytes.Position = 0;
-        var manifest = await manifestSerializer.ReadAsync(embeddedBytes);
+        using var manifest = await manifestSerializer.ReadAsync(embeddedBytes);
         Assert.AreEqual(ArchiveManifest.ExpectedDocumentType, manifest.DocumentType);
         Assert.AreEqual(ZipArchiveFormatVersion.Value, manifest.FormatVersion);
         Assert.AreEqual(projectedObject.RelativePath, manifest.PackageName);
@@ -430,7 +430,7 @@ public sealed class ZipArchiveFormatHandlerTests
         )));
         var adjacentManifest = GetManifestObject(projectedObjects);
         await using var adjacentContent = await adjacentManifest.OpenContentAsync(default);
-        var manifest = await manifestSerializer.ReadAsync(adjacentContent.Content);
+        using var manifest = await manifestSerializer.ReadAsync(adjacentContent.Content);
 
         var nestedEntry = manifest.Entries.Single();
         Assert.AreEqual(ArchiveManifestEntryKinds.FormatArtifact, nestedEntry.Kind);
@@ -668,13 +668,13 @@ public sealed class ZipArchiveFormatHandlerTests
         var reorderedManifestBytes = await ReadContentBytesAsync(GetManifestObject(reordered));
         CollectionAssert.AreEqual(manifestBytes, reorderedManifestBytes);
         await using var source = new MemoryStream(manifestBytes);
-        var manifest = await serviceProvider.GetRequiredService<IManifestSerializer>().ReadAsync(source);
+        using var manifest = await serviceProvider.GetRequiredService<IManifestSerializer>().ReadAsync(source);
         Assert.IsNotNull(manifest.Policy.DirectoryLinks);
         Assert.AreEqual(links["zeta"], manifest.Policy.DirectoryLinks["zeta"]);
     }
 
     [TestMethod]
-    public async Task ProjectBackupAsyncEmptyDirectoryLinksPreserveLegacyPackageBytesAndIdentity()
+    public async Task ProjectBackupAsyncEmptyDirectoryLinksPreserveVersion2PackageBytesAndIdentity()
     {
         using var serviceProvider = CreateServices().BuildServiceProvider();
         var handler = serviceProvider.GetRequiredService<IArchiveFormatHandler>();
@@ -693,16 +693,9 @@ public sealed class ZipArchiveFormatHandlerTests
             },
         }));
 
-        // Captured from the pre-directoryLinks Release handler with the same empty source.
-        Assert.AreEqual("Legacy.xxh128-4qf4v1m2jhoh7l7coulojglhro.zip", GetPackageObject(legacy).RelativePath);
-        if (OperatingSystem.IsWindows())
-        {
-            // ZIP creator-platform and external-attribute headers differ across operating systems.
-            Assert.AreEqual("xxh128:oZZliSHL3-FInSCvVmHJLQ", ArchiveHash.Compute(
-                await ReadContentBytesAsync(GetPackageObject(legacy))));
-        }
-        Assert.AreEqual("xxh128:jaST3fDRsAzzPKl0sNIOiQ", ArchiveHash.Compute(
-            await ReadContentBytesAsync(GetManifestObject(legacy))));
+        // The streaming ZIP64 representation has a new fingerprint domain, so
+        // it cannot reuse an immutable name previously assigned to other bytes.
+        Assert.AreNotEqual("Legacy.xxh128-4qf4v1m2jhoh7l7coulojglhro.zip", GetPackageObject(legacy).RelativePath);
         Assert.AreEqual(GetPackageObject(legacy).RelativePath, GetPackageObject(empty).RelativePath);
         CollectionAssert.AreEqual(
             await ReadContentBytesAsync(GetPackageObject(legacy)),
@@ -857,7 +850,7 @@ public sealed class ZipArchiveFormatHandlerTests
     }
 
     [TestMethod]
-    public async Task ProjectBackupAsyncRejectsManifestLargerThanRestoreSafetyLimit()
+    public async Task ProjectBackupAsyncStreamsManifestBeyondFormerSizeLimit()
     {
         var oversizedManifestSerializer = new OversizedManifestSerializer();
         var services = CreateServices();
@@ -876,24 +869,26 @@ public sealed class ZipArchiveFormatHandlerTests
         var packageObject = GetPackageObject(projectedObjects);
         var manifestObject = GetManifestObject(projectedObjects);
 
-        var packageException = await Assert.ThrowsExactlyAsync<YabtFormatZipException>(async () =>
+        await using var packageContent = await packageObject.OpenContentAsync(default);
+        await using var manifestContent = await manifestObject.OpenContentAsync(default);
+        using var archive = new ZipArchive(packageContent.Content, ZipArchiveMode.Read, leaveOpen: true);
+        var embedded = archive.GetEntry(ArchivePackageManifestFileNames.EmbeddedEntryName);
+        Assert.IsNotNull(embedded);
+        Assert.AreEqual(16L * 1024 * 1024 + 1, manifestContent.Content.Length);
+        Assert.AreEqual(manifestContent.Content.Length, embedded.Length);
+        await using var embeddedContent = embedded.Open();
+        var firstBuffer = new byte[81920];
+        var secondBuffer = new byte[firstBuffer.Length];
+        int count;
+        while ((count = await manifestContent.Content.ReadAsync(firstBuffer)) != 0)
         {
-            await using var content = await packageObject.OpenContentAsync(default);
-        });
-        var manifestException = await Assert.ThrowsExactlyAsync<YabtFormatZipException>(async () =>
-        {
-            await using var content = await manifestObject.OpenContentAsync(default);
-        });
-
-        StringAssert.Contains(packageException.Message, "exceeds");
-        StringAssert.Contains(packageException.Message, "restore safety limit");
-        Assert.AreEqual(packageException.Message, manifestException.Message);
+            await embeddedContent.ReadExactlyAsync(secondBuffer.AsMemory(0, count));
+            Assert.IsTrue(firstBuffer.AsSpan(0, count).SequenceEqual(secondBuffer.AsSpan(0, count)));
+        }
+        Assert.AreEqual(-1, embeddedContent.ReadByte());
         Assert.AreEqual(1, oversizedManifestSerializer.WriteCount);
-        Assert.IsFalse(oversizedManifestSerializer.SerializationCompleted);
-        Assert.IsTrue(
-            oversizedManifestSerializer.AcceptedByteCount <= 16 * 1024 * 1024,
-            $"The serializer wrote {oversizedManifestSerializer.AcceptedByteCount} bytes " +
-                "before the package manifest size limit stopped it.");
+        Assert.IsTrue(oversizedManifestSerializer.SerializationCompleted);
+        Assert.AreEqual(manifestContent.Content.Length, oversizedManifestSerializer.AcceptedByteCount);
     }
 
     [TestMethod]

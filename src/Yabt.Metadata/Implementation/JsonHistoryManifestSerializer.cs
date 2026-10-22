@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.Options;
+using Yabt.Common;
 using Yabt.Core.Models;
 
 namespace Yabt.Metadata.Implementation;
@@ -6,6 +8,19 @@ namespace Yabt.Metadata.Implementation;
 internal sealed class JsonHistoryManifestSerializer(JsonSerializerOptions _jsonOptions) :
     IHistoryManifestSerializer
 {
+    private readonly JsonSerializerOptions _strictJsonOptions = new(_jsonOptions)
+    {
+        AllowDuplicateProperties = false,
+    };
+
+    private readonly IOptionsMonitor<TemporaryContentOptions>? _temporaryOptions;
+
+    public JsonHistoryManifestSerializer(IOptionsMonitor<TemporaryContentOptions> temporaryOptions)
+        : this(JsonMetadataOptions.Create())
+    {
+        _temporaryOptions = Check.NotNull(temporaryOptions);
+    }
+
     public JsonHistoryManifestSerializer()
         : this(JsonMetadataOptions.Create())
     {
@@ -16,6 +31,7 @@ internal sealed class JsonHistoryManifestSerializer(JsonSerializerOptions _jsonO
         ArgumentNullException.ThrowIfNull(entries);
 
         var canonicalEntries = CreateCanonicalEntries(entries);
+        using var entryOwnership = new ManifestEntryOwnership(canonicalEntries, entries);
         var manifest = new ArchiveHistoryManifest
         (
             ArchiveHistoryManifest.ExpectedDocumentType,
@@ -24,10 +40,10 @@ internal sealed class JsonHistoryManifestSerializer(JsonSerializerOptions _jsonO
             string.Empty
         );
 
-        return manifest with
+        return entryOwnership.Complete(manifest with
         {
             ManifestHash = ComputeManifestHash(manifest, canonicalEntries),
-        };
+        });
     }
 
     public async Task WriteAsync
@@ -41,12 +57,13 @@ internal sealed class JsonHistoryManifestSerializer(JsonSerializerOptions _jsonO
         ArgumentNullException.ThrowIfNull(destination);
 
         var validatedManifest = ValidateManifest(manifest);
+        using var entryOwnership = new ManifestEntryOwnership(validatedManifest.Entries, manifest.Entries);
         try
         {
             await JsonSerializer.SerializeAsync(
                 destination,
                 validatedManifest,
-                _jsonOptions,
+                _strictJsonOptions,
                 cancellationToken);
         }
         catch (Exception ex)
@@ -62,29 +79,44 @@ internal sealed class JsonHistoryManifestSerializer(JsonSerializerOptions _jsonO
     )
     {
         ArgumentNullException.ThrowIfNull(source);
-
-        ArchiveHistoryManifest? manifest;
+        StreamedManifestDocument<ArchiveHistoryManifestEntry> document;
+        ArchiveHistoryManifest manifest;
         try
         {
-            manifest = await JsonSerializer.DeserializeAsync<ArchiveHistoryManifest>(
+            document = await StreamedManifestJson.ReadAsync<ArchiveHistoryManifestEntry>
+            (
                 source,
-                _jsonOptions,
-                cancellationToken);
+                ["documentType", "schemaVersion", "entries", "manifestHash"],
+                _strictJsonOptions,
+                _temporaryOptions?.CurrentValue,
+                cancellationToken
+            );
+            try
+            {
+                manifest = document.Header.RootElement.Deserialize<ArchiveHistoryManifest>(_strictJsonOptions) ??
+                    throw new JsonException("History manifest JSON did not contain a manifest object.");
+                manifest = manifest with { Entries = document.Entries };
+            }
+            catch (Exception)
+            {
+                document.Dispose();
+                throw;
+            }
         }
         catch (Exception ex)
         {
             throw new YabtMetadataException("History manifest JSON could not be deserialized.", ex);
         }
-
-        if (manifest is null)
+        using (document)
         {
-            throw new YabtMetadataException("History manifest JSON did not contain a manifest object.");
-        }
 
-        return ValidateManifest(manifest);
+            var validated = ValidateManifest(manifest);
+            document.TransferEntries();
+            return validated;
+        }
     }
 
-    private static ArchiveHistoryManifest ValidateManifest(ArchiveHistoryManifest manifest)
+    private ArchiveHistoryManifest ValidateManifest(ArchiveHistoryManifest manifest)
     {
         if (!string.Equals(
                 manifest.DocumentType,
@@ -104,9 +136,8 @@ internal sealed class JsonHistoryManifestSerializer(JsonSerializerOptions _jsonO
             throw new YabtMetadataException("History manifest JSON does not contain an entries collection.");
         }
 
-        var serializedEntries = manifest.Entries.ToArray();
-        var canonicalEntries = CreateCanonicalEntries(serializedEntries);
-        EnsureEntriesAreCanonical(serializedEntries, canonicalEntries);
+        var canonicalEntries = ValidateCanonicalEntries(manifest.Entries);
+        using var entryOwnership = new ManifestEntryOwnership(canonicalEntries, manifest.Entries);
 
         if (!ArchiveHash.IsValid(manifest.ManifestHash))
         {
@@ -120,74 +151,50 @@ internal sealed class JsonHistoryManifestSerializer(JsonSerializerOptions _jsonO
             throw new YabtMetadataException("History manifest self-hash does not match its contents.");
         }
 
-        return manifest with
+        return entryOwnership.Complete(manifest with
         {
             Entries = canonicalEntries,
-        };
+        });
     }
 
-    private static ArchiveHistoryManifestEntry[] CreateCanonicalEntries
+    private TemporaryManifestEntries<ArchiveHistoryManifestEntry> CreateCanonicalEntries
     (
         IEnumerable<ArchiveHistoryManifestEntry> entries
-    )
-    {
-        var canonicalEntries = new List<ArchiveHistoryManifestEntry>();
-        foreach (var entry in entries)
-        {
-            if (entry is null)
-            {
-                throw new YabtMetadataException(
-                    "History manifest entries cannot contain null values.");
-            }
-
-            canonicalEntries.Add(JsonHistoryMetadataValidation.CreateCanonicalEntry(
-                entry,
-                $"History manifest entry '{entry.RelativePath}'"));
-        }
-
-        canonicalEntries.Sort(static (left, right) =>
-            string.Compare(left.RelativePath, right.RelativePath, StringComparison.Ordinal));
-
-        var storedPaths = new HashSet<string>(StringComparer.Ordinal);
-        for (var index = 0; index < canonicalEntries.Count; index++)
-        {
-            var entry = canonicalEntries[index];
-            if (index > 0 && string.Equals(
-                    canonicalEntries[index - 1].RelativePath,
-                    entry.RelativePath,
-                    StringComparison.Ordinal))
-            {
-                throw new YabtMetadataException(
-                    $"History manifest contains duplicate entry path '{entry.RelativePath}'.");
-            }
-
-            if (!storedPaths.Add(entry.StoredRelativePath))
-            {
-                throw new YabtMetadataException(
-                    $"History manifest contains duplicate stored path '{entry.StoredRelativePath}'.");
-            }
-        }
-
-        return [.. canonicalEntries];
-    }
-
-    private static void EnsureEntriesAreCanonical
+    ) => ManifestEntryStorage.CreateCanonical
     (
-        ArchiveHistoryManifestEntry[] serializedEntries,
-        ArchiveHistoryManifestEntry[] canonicalEntries
-    )
+        entries,
+        CreateCanonicalEntry,
+        entry => entry.RelativePath,
+        "History manifest",
+        "entry path",
+        _strictJsonOptions,
+        _temporaryOptions?.CurrentValue,
+        entry => entry.StoredRelativePath
+    );
+
+    private TemporaryManifestEntries<ArchiveHistoryManifestEntry> ValidateCanonicalEntries
+    (
+        IEnumerable<ArchiveHistoryManifestEntry> entries
+    ) => ManifestEntryStorage.ValidateCanonical
+    (
+        entries,
+        CreateCanonicalEntry,
+        entry => entry.RelativePath,
+        JsonHistoryMetadataValidation.EntriesAreEqual,
+        "History manifest",
+        "entry path",
+        _strictJsonOptions,
+        _temporaryOptions?.CurrentValue,
+        entry => entry.StoredRelativePath
+    );
+
+    private static ArchiveHistoryManifestEntry CreateCanonicalEntry(ArchiveHistoryManifestEntry entry)
     {
-        for (var index = 0; index < serializedEntries.Length; index++)
+        if (entry is null)
         {
-            if (!JsonHistoryMetadataValidation.EntriesAreEqual(
-                    serializedEntries[index],
-                    canonicalEntries[index]))
-            {
-                throw new YabtMetadataException(
-                    "History manifest entries are not in canonical path order or contain " +
-                    "noncanonical values.");
-            }
+            throw new YabtMetadataException("History manifest entries cannot contain null values.");
         }
+        return JsonHistoryMetadataValidation.CreateCanonicalEntry(entry, $"History manifest entry '{entry.RelativePath}'");
     }
 
     private static string ComputeManifestHash

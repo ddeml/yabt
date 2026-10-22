@@ -20,15 +20,15 @@ internal sealed class ZipArchiveFormatHandler
     ILogger<ZipArchiveFormatHandler> _logger,
     IOptionsMonitor<ZipArchiveFormatOptions> _options,
     IManifestSerializer _manifestSerializer,
-    ITemporaryContentFactory _temporaryContentFactory
+    ITemporaryContentFactory _temporaryContentFactory,
+    IOptionsMonitor<TemporaryContentOptions> _temporaryOptions
 ) : IArchiveFormatHandler
 {
     private const int DefaultHashBufferSize = 81_920;
     private const string EmptyFolderMarkerFingerprint = "yabt-empty-v1:present";
-    private const int MaximumManifestLength = 16 * 1024 * 1024;
 
     private static readonly byte[] PackageFingerprintDomain =
-        Encoding.UTF8.GetBytes("yabt-zip-change-v1");
+        Encoding.UTF8.GetBytes("yabt-zip-change-v2");
 
     // ZIP entry timestamps cannot represent dates before 1980. When a source provider does not
     // supply a modification time, use this fixed value instead of the current time so repeated
@@ -146,9 +146,10 @@ internal sealed class ZipArchiveFormatHandler
 
         await request.SourceStore.EnsureReadyAsync(cancellationToken);
 
-        var sourceObjects = await ListSourceObjectsAsync(
-            request,
-            cancellationToken);
+        var index = TemporaryIndex.Create(_temporaryOptions.CurrentValue);
+        lifetime.Add(index);
+        var sourceEntries = await ListSourceObjectsAsync(request, index, cancellationToken);
+        IEnumerable<ZipSourceObject> sourceObjects = sourceEntries.EnumerateOrdered();
         var compressionLevel = _options.CurrentValue.CompressionLevel ?? default;
         ZipPackageBuildResult? prebuiltPackage = null;
         if (sourceObjects.Any(sourceObject => sourceObject.ChangeFingerprint is null))
@@ -160,6 +161,7 @@ internal sealed class ZipArchiveFormatHandler
             (
                 request.SourceStore,
                 sourceObjects,
+                index,
                 compressionLevel,
                 cancellationToken
             );
@@ -186,6 +188,7 @@ internal sealed class ZipArchiveFormatHandler
                 (
                     request.SourceStore,
                     sourceObjects,
+                    index,
                     compressionLevel,
                     sourcePath,
                     packageCreationTimeUtc,
@@ -281,176 +284,41 @@ internal sealed class ZipArchiveFormatHandler
             ArchiveLayout.CombinePrefixAndRelativePath(
                 GetParentPrefix(artifact.RelativePath),
                 packageFolderName);
-        var stagedPackage = await StageRestorePackageAsync(
-            artifact,
-            cancellationToken);
-        var retainStagedPackage = false;
+        var stagedPackage = await StageRestorePackageAsync(artifact, cancellationToken);
+        ArchiveManifest? manifest = null;
+        var retained = false;
         try
         {
-            var files = new List<ArchiveProjectedObject>();
-            var filePaths = new HashSet<string>(StringComparer.Ordinal);
-            var directoryPaths = new HashSet<string>(StringComparer.Ordinal);
-
-            await using var packageContent = stagedPackage.OpenPackage();
-            using var archive = new ZipArchive(
-                packageContent,
-                ZipArchiveMode.Read,
-                leaveOpen: true);
-            ZipArchiveEntry? embeddedManifestEntry = null;
-            foreach (var entry in archive.Entries)
+            if (!stagedPackage.Entries.ContainsKey(ArchivePackageManifestFileNames.EmbeddedEntryName))
             {
-                ValidateZipEntry(entry, artifact.RelativePath);
-                _ = NormalizeZipEntryPath(entry.FullName);
-                if (!string.Equals(
-                        entry.FullName,
-                        ArchivePackageManifestFileNames.EmbeddedEntryName,
-                        StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (embeddedManifestEntry is not null)
-                {
-                    throw new YabtFormatZipException(
-                        $"ZIP package '{artifact.RelativePath}' has multiple embedded package manifests.");
-                }
-
-                embeddedManifestEntry = entry;
+                throw new YabtFormatZipException($"ZIP package '{artifact.RelativePath}' has no embedded package manifest.");
             }
-
-            if (embeddedManifestEntry is null)
-            {
-                throw new YabtFormatZipException(
-                    $"ZIP package '{artifact.RelativePath}' has no embedded package manifest.");
-            }
-            ArchiveManifest manifest;
             _logger.LogZipEmbeddedManifestRead(artifact.RelativePath);
-            await using (var manifestContent = embeddedManifestEntry.Open())
-            using (var boundedManifestContent = new MemoryStream(
-                await ReadBoundedManifestContentAsync(
-                    manifestContent,
-                    $"ZIP package '{artifact.RelativePath}' embedded manifest",
-                    cancellationToken),
-                writable: false))
+            await using (var manifestContent = await stagedPackage.OpenEntryAsync(
+                ArchivePackageManifestFileNames.EmbeddedEntryName, cancellationToken))
             {
-                manifest = await _manifestSerializer.ReadAsync(
-                    boundedManifestContent,
-                    cancellationToken);
+                manifest = await _manifestSerializer.ReadAsync(manifestContent.Content, cancellationToken);
             }
-
-            ValidateRestoreManifest(
-                manifest,
-                artifact);
-            var payloadEntries = new Dictionary<string, ZipArchiveEntry>(StringComparer.Ordinal);
-            foreach (var entry in archive.Entries)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (ReferenceEquals(entry, embeddedManifestEntry)) { continue; }
-
-                ValidateZipEntry(entry, artifact.RelativePath);
-                var entryRelativePath = NormalizeZipEntryPath(entry.FullName);
-                if (string.IsNullOrEmpty(entry.Name) ||
-                    !string.Equals(
-                        entryRelativePath,
-                        entry.FullName,
-                        StringComparison.Ordinal) ||
-                    !payloadEntries.TryAdd(entryRelativePath, entry))
-                {
-                    throw new YabtFormatZipException(
-                        $"ZIP package '{artifact.RelativePath}' contains unsupported or duplicate " +
-                        $"entry '{entry.FullName}'.");
-                }
-            }
-
-            foreach (var manifestEntry in manifest.Entries)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!payloadEntries.Remove(
-                        manifestEntry.StoredPath,
-                        out var entry))
-                {
-                    throw new YabtFormatZipException(
-                        $"ZIP package '{artifact.RelativePath}' is missing manifest entry " +
-                        $"'{manifestEntry.StoredPath}'.");
-                }
-
-                if (entry.Length != manifestEntry.Length)
-                {
-                    throw new YabtFormatZipException(
-                        $"ZIP package '{artifact.RelativePath}' entry '{entry.FullName}' has length " +
-                        $"{entry.Length}, but the embedded manifest records {manifestEntry.Length}.");
-                }
-
-                var restorePath = ArchiveLayout.CombinePrefixAndRelativePath(
-                    packageOutputPrefix,
-                    manifestEntry.RelativePath);
-                if (string.Equals(
-                        manifestEntry.Kind,
-                        ArchiveManifestEntryKinds.Directory,
-                        StringComparison.Ordinal))
-                {
-                    AddRestoreDirectory(
-                        restorePath,
-                        filePaths,
-                        directoryPaths);
-                    continue;
-                }
-
-                AddRestoreFilePath(
-                    restorePath,
-                    filePaths,
-                    directoryPaths);
-                var entryName = entry.FullName;
-                var projection = manifestEntry.Projection is null ?
-                    null :
-                    manifestEntry.Projection with
-                    {
-                        LogicalPath = ArchiveLayout.CombinePrefixAndRelativePath(
-                            packageOutputPrefix,
-                            manifestEntry.Projection.LogicalPath),
-                    };
-                files.Add(new
-                (
-                    restorePath,
-                    currentCancellationToken => stagedPackage.OpenEntryAsync(
-                        entryName,
-                        currentCancellationToken),
-                    manifestEntry.Length,
-                    manifestEntry.LastModifiedUtc,
-                    manifestEntry.ContentHash,
-                    GetRestoreChangeFingerprint(manifestEntry),
-                    projection
-                ));
-            }
-
-            if (payloadEntries.Count != 0)
-            {
-                var unexpectedPath = payloadEntries.Keys.Min(StringComparer.Ordinal);
-                throw new YabtFormatZipException(
-                    $"ZIP package '{artifact.RelativePath}' contains entry '{unexpectedPath}' " +
-                    "that is absent from its embedded manifest.");
-            }
-
-            var result = new ArchiveRestoreProjection(
-                files,
-                directoryPaths.Order(StringComparer.Ordinal),
-                stagedPackage);
-            retainStagedPackage = true;
+            ValidateRestoreManifest(manifest, artifact);
+            ValidatePackageEntries(stagedPackage, manifest, artifact.RelativePath, cancellationToken);
+            var result = await CreateRestoreProjectionAsync(
+                manifest, packageOutputPrefix, stagedPackage.OpenEntryAsync, stagedPackage,
+                adjacentManifest: null, validate: null, cancellationToken);
+            retained = true;
             return result;
         }
         catch (Exception ex)
         {
             if (ex is YabtFormatZipException) { throw; }
-
             throw new YabtFormatZipException(
-                $"ZIP package '{artifact.RelativePath}' could not be safely prepared for restore.",
-                ex);
+                $"ZIP package '{artifact.RelativePath}' could not be safely prepared for restore.", ex);
         }
         finally
         {
-            if (!retainStagedPackage)
+            if (!retained)
             {
-                await stagedPackage.DisposeAsync();
+                try { manifest?.Dispose(); }
+                finally { await stagedPackage.DisposeAsync(); }
             }
         }
     }
@@ -461,18 +329,11 @@ internal sealed class ZipArchiveFormatHandler
         CancellationToken cancellationToken
     )
     {
-        var temporaryPath = Path.Combine
-        (
-            Path.GetTempPath(),
-            $"yabt-zip-restore-{Guid.NewGuid():N}.tmp"
-        );
-        var retainTemporaryPath = false;
+        var stagedContent = _temporaryContentFactory.Create();
+        TemporaryIndex? index = null;
+        var retained = false;
         try
         {
-            _logger.LogZipTemporaryPlumbingOperation(
-                "Creating restore staging file",
-                temporaryPath);
-            await using var stagedContent = CreateRestoreStagingFileStream(temporaryPath);
             var hash = new XxHash128();
             long contentLength = 0;
             _logger.LogZipRestoreArtifactRead(artifact.RelativePath);
@@ -480,102 +341,150 @@ internal sealed class ZipArchiveFormatHandler
             var buffer = new byte[DefaultHashBufferSize];
             while (true)
             {
-                var bytesRead = await packageContent.Content.ReadAsync(
-                    buffer,
-                    cancellationToken);
+                var bytesRead = await packageContent.Content.ReadAsync(buffer, cancellationToken);
                 if (bytesRead == 0) { break; }
-
                 hash.Append(buffer.AsSpan(0, bytesRead));
-                contentLength += bytesRead;
-                await stagedContent.WriteAsync(
-                    buffer.AsMemory(0, bytesRead),
-                    cancellationToken);
+                contentLength = checked(contentLength + bytesRead);
+                await stagedContent.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
             }
-
-            await stagedContent.FlushAsync(cancellationToken);
+            if (artifact.ContentLength.HasValue && artifact.ContentLength.Value != contentLength)
+            {
+                throw new YabtFormatZipException(
+                    $"ZIP package '{artifact.RelativePath}' has length {contentLength}, but {artifact.ContentLength.Value} bytes were expected.");
+            }
+            if (!string.Equals(artifact.ContentHash, ArchiveHash.Format(hash.GetHashAndReset()), StringComparison.Ordinal))
+            {
+                throw new YabtFormatZipException($"ZIP package '{artifact.RelativePath}' failed its content hash check.");
+            }
+            await stagedContent.SealAsync(cancellationToken);
             _logger.LogZipTemporaryPlumbingOperation(
-                "Finished writing restore staging file",
-                temporaryPath);
-            if (artifact.ContentLength.HasValue &&
-                artifact.ContentLength.Value != contentLength)
+                stagedContent.IsFileBacked ? "Sealed restore package staging on disk" : "Sealed restore package staging in memory",
+                artifact.RelativePath);
+            index = TemporaryIndex.Create(_temporaryOptions.CurrentValue);
+            var entries = index.CreateDictionary<ZipEntryRecord>();
+            await using (var package = stagedContent.OpenRead())
             {
-                throw new YabtFormatZipException(
-                    $"ZIP package '{artifact.RelativePath}' has length {contentLength}, " +
-                        $"but {artifact.ContentLength.Value} bytes were expected.");
+                foreach (var entry in IndexedZipReader.ReadEntries(package, cancellationToken))
+                {
+                    ValidateZipEntry(entry, artifact.RelativePath);
+                    var normalized = NormalizeZipEntryPath(entry.FullName);
+                    if (entry.Name.Length == 0 || !string.Equals(normalized, entry.FullName, StringComparison.Ordinal) ||
+                        !entries.TryAdd(entry.FullName, entry))
+                    {
+                        throw new YabtFormatZipException(
+                            $"ZIP package '{artifact.RelativePath}' contains unsupported or duplicate entry '{entry.FullName}'.");
+                    }
+                }
             }
-
-            var actualHash = ArchiveHash.Format(hash.GetHashAndReset());
-            if (!string.Equals(
-                    artifact.ContentHash,
-                    actualHash,
-                    StringComparison.Ordinal))
-            {
-                throw new YabtFormatZipException(
-                    $"ZIP package '{artifact.RelativePath}' failed its content hash check.");
-            }
-
-            var stagedPackage = new StagedZipRestorePackage(
-                temporaryPath,
-                artifact.RelativePath,
-                _logger);
-            retainTemporaryPath = true;
-            return stagedPackage;
+            var result = new StagedZipRestorePackage(stagedContent, index, entries, artifact.RelativePath, _logger);
+            retained = true;
+            return result;
         }
         catch (Exception ex)
         {
-            if (ex is YabtFormatZipException) { throw; }
-
-            throw new YabtFormatZipException(
-                $"ZIP package '{artifact.RelativePath}' could not be staged for restore.",
-                ex);
+            if (ex is YabtFormatZipException or OperationCanceledException) { throw; }
+            throw new YabtFormatZipException($"ZIP package '{artifact.RelativePath}' could not be staged for restore.", ex);
         }
         finally
         {
-            if (!retainTemporaryPath)
+            if (!retained)
             {
-                TryDeleteRestoreTemporaryPath(temporaryPath);
+                try { index?.Dispose(); }
+                finally { await stagedContent.DisposeAsync(); }
             }
         }
     }
 
-    private static FileStream CreateRestoreStagingFileStream(string path)
+    private static void ValidatePackageEntries
+    (
+        StagedZipRestorePackage package,
+        ArchiveManifest manifest,
+        string packagePath,
+        CancellationToken cancellationToken
+    )
     {
-        var options = new FileStreamOptions
+        if (!package.Entries.ContainsKey(ArchivePackageManifestFileNames.EmbeddedEntryName))
         {
-            Mode = FileMode.CreateNew,
-            Access = FileAccess.ReadWrite,
-            Share = FileShare.None,
-            BufferSize = DefaultHashBufferSize,
-            Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
-        };
-        if (!OperatingSystem.IsWindows())
-        {
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            throw new YabtFormatZipException($"ZIP package '{packagePath}' has no embedded package manifest.");
         }
-
-        return new(path, options);
+        long count = 0;
+        foreach (var manifestEntry in manifest.Entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!package.Entries.TryGetValue(manifestEntry.StoredPath, out var entry) || entry.Length != manifestEntry.Length)
+            {
+                throw new YabtFormatZipException($"ZIP package '{packagePath}' does not match manifest entry '{manifestEntry.StoredPath}'.");
+            }
+            count++;
+        }
+        if (count != package.Entries.LongCount - 1)
+        {
+            throw new YabtFormatZipException($"ZIP package '{packagePath}' contains unexpected entries absent from its manifest.");
+        }
     }
 
-    private void TryDeleteRestoreTemporaryPath(string path)
+    private async Task<ArchiveRestoreProjection> CreateRestoreProjectionAsync
+    (
+        ArchiveManifest manifest,
+        string outputPrefix,
+        Func<string, CancellationToken, Task<ArchiveObjectContent>> openEntry,
+        IAsyncDisposable materialization,
+        TemporaryContent? adjacentManifest,
+        Func<CancellationToken, Task>? validate,
+        CancellationToken cancellationToken
+    )
     {
-        _logger.LogTrace(nameof(TryDeleteRestoreTemporaryPath));
-        _logger.LogZipTemporaryPlumbingOperation(
-            "Deleting restore staging file",
-            path);
-
+        var index = TemporaryIndex.Create(_temporaryOptions.CurrentValue);
+        var lifetime = new ZipRestoreProjectionLifetime(materialization, manifest, index, adjacentManifest);
         try
         {
-            File.Delete(path);
+            using var filePaths = index.CreateSet();
+            var directoryPaths = index.CreateSet();
+            foreach (var entry in manifest.Entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var restorePath = ArchiveLayout.CombinePrefixAndRelativePath(outputPrefix, entry.RelativePath);
+                if (string.Equals(entry.Kind, ArchiveManifestEntryKinds.Directory, StringComparison.Ordinal))
+                {
+                    AddRestoreDirectory(restorePath, filePaths, directoryPaths);
+                }
+                else
+                {
+                    AddRestoreFilePath(restorePath, filePaths, directoryPaths);
+                }
+            }
+            if (filePaths.LongCount == 0 && validate is not null) { await validate(cancellationToken); }
+            return new ArchiveRestoreProjection(EnumerateFiles(), directoryPaths, lifetime);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            _logger.LogIgnoringZipRestoreTemporaryPathDeleteException(ex, path);
+            await lifetime.DisposeAsync();
+            throw;
+        }
+
+        IEnumerable<ArchiveProjectedObject> EnumerateFiles()
+        {
+            foreach (var entry in manifest.Entries)
+            {
+                if (string.Equals(entry.Kind, ArchiveManifestEntryKinds.Directory, StringComparison.Ordinal)) { continue; }
+                var projection = entry.Projection is null ? null : entry.Projection with
+                {
+                    LogicalPath = ArchiveLayout.CombinePrefixAndRelativePath(outputPrefix, entry.Projection.LogicalPath)
+                };
+                yield return new
+                (
+                    ArchiveLayout.CombinePrefixAndRelativePath(outputPrefix, entry.RelativePath),
+                    cancellationToken => openEntry(entry.StoredPath, cancellationToken),
+                    entry.Length, entry.LastModifiedUtc, entry.ContentHash,
+                    GetRestoreChangeFingerprint(entry), projection
+                );
+            }
         }
     }
 
     private static void ValidateZipEntry
     (
-        ZipArchiveEntry entry,
+        ZipEntryRecord entry,
         string packageRelativePath
     )
     {
@@ -692,8 +601,8 @@ internal sealed class ZipArchiveFormatHandler
     private static void AddRestoreFilePath
     (
         string relativePath,
-        HashSet<string> filePaths,
-        HashSet<string> directoryPaths
+        DiskSet filePaths,
+        DiskSet directoryPaths
     )
     {
         if (!filePaths.Add(relativePath) || directoryPaths.Contains(relativePath))
@@ -719,8 +628,8 @@ internal sealed class ZipArchiveFormatHandler
     private static void AddRestoreDirectory
     (
         string relativePath,
-        HashSet<string> filePaths,
-        HashSet<string> directoryPaths
+        DiskSet filePaths,
+        DiskSet directoryPaths
     )
     {
         if (string.IsNullOrEmpty(relativePath)) { return; }
@@ -798,14 +707,15 @@ internal sealed class ZipArchiveFormatHandler
         return true;
     }
 
-    private async Task<IReadOnlyList<ZipSourceObject>> ListSourceObjectsAsync
+    private async Task<DiskEntryCollection<ZipSourceObject>> ListSourceObjectsAsync
     (
         ArchiveProjectionRequest request,
+        TemporaryIndex index,
         CancellationToken cancellationToken
     )
     {
         var sourcePrefix = ArchiveLayout.NormalizeObjectPrefix(request.SourcePrefix);
-        var sourceObjects = new List<ZipSourceObject>();
+        var sourceObjects = index.CreateCollection<ZipSourceObject>();
         await AddFolderSourceObjectsAsync
         (
             request.SourceStore,
@@ -815,9 +725,7 @@ internal sealed class ZipArchiveFormatHandler
             cancellationToken
         );
 
-        return sourceObjects
-            .OrderBy(candidate => candidate.RelativePath, StringComparer.Ordinal)
-            .ToArray();
+        return sourceObjects;
     }
 
     private async Task AddFolderSourceObjectsAsync
@@ -825,7 +733,7 @@ internal sealed class ZipArchiveFormatHandler
         IReadOnlyObjectStore sourceStore,
         string? sourcePrefix,
         string? folderPrefix,
-        List<ZipSourceObject> sourceObjects,
+        DiskEntryCollection<ZipSourceObject> sourceObjects,
         CancellationToken cancellationToken
     )
     {
@@ -875,7 +783,7 @@ internal sealed class ZipArchiveFormatHandler
                 sourceItem.Object.ContentHash,
                 sourceItem.Object.Projection,
                 IsEmptyFolderMarker: false
-            ));
+            ), relativePath);
         }
 
         if (hasItems) { return; }
@@ -896,7 +804,7 @@ internal sealed class ZipArchiveFormatHandler
             ContentHash: ArchiveHash.Compute([]),
             Projection: null,
             IsEmptyFolderMarker: true
-        ));
+        ), markerRelativePath);
     }
 
     private static ZipSourceObjectFingerprintResult GetSourceObjectFingerprint
@@ -944,14 +852,16 @@ internal sealed class ZipArchiveFormatHandler
     private async Task<ZipPackageBuildResult> BuildPackageEntriesAsync
     (
         IReadOnlyObjectStore sourceStore,
-        IReadOnlyList<ZipSourceObject> sourceObjects,
+        IEnumerable<ZipSourceObject> sourceObjects,
+        TemporaryIndex index,
         CompressionLevel compressionLevel,
         CancellationToken cancellationToken
     )
     {
         var package = _temporaryContentFactory.Create();
-        var archive = new ZipArchive(package, ZipArchiveMode.Create, leaveOpen: true);
-        var completedSourceObjects = new List<ZipSourceObject>(sourceObjects.Count);
+        var directory = _temporaryContentFactory.Create();
+        var archive = new StreamingZipWriter(package, directory);
+        var completedSourceObjects = index.CreateCollection<ZipSourceObject>();
         var sourceReadFailures = new List<Exception>();
         byte[]? hashBuffer = null;
         try
@@ -976,11 +886,10 @@ internal sealed class ZipArchiveFormatHandler
                         var markerEntry = archive.CreateEntry
                         (
                             sourceObject.RelativePath,
-                            compressionLevel
+                            compressionLevel,
+                            ToZipEntryLastModifiedUtc(sourceObject.LastModifiedUtc)
                         );
-                        markerEntry.LastWriteTime = ToZipEntryLastModifiedUtc(
-                            sourceObject.LastModifiedUtc);
-                        await using var markerContent = markerEntry.Open();
+                        await using var markerContent = markerEntry;
                         completedSourceObjects.Add(sourceObject with
                         {
                             Length = 0,
@@ -1016,11 +925,10 @@ internal sealed class ZipArchiveFormatHandler
                         var entry = archive.CreateEntry
                         (
                             sourceObject.RelativePath,
-                            compressionLevel
+                            compressionLevel,
+                            ToZipEntryLastModifiedUtc(sourceObject.LastModifiedUtc)
                         );
-                        entry.LastWriteTime = ToZipEntryLastModifiedUtc(
-                            sourceObject.LastModifiedUtc);
-                        await using var entryContent = entry.Open();
+                        await using var entryContent = entry;
                         var hash = new XxHash128();
                         hashBuffer ??= new byte[GetEffectiveHashBufferSize()];
                         long length = 0;
@@ -1060,7 +968,8 @@ internal sealed class ZipArchiveFormatHandler
                         completedSourceObjects.Add(sourceObject with
                         {
                             Length = length,
-                            ContentHash = ArchiveHash.Format(hash.GetHashAndReset()),
+                            ContentHash = ArchiveHash.Format(hash.GetCurrentHash()),
+                            ChangeFingerprint = sourceObject.ChangeFingerprint ?? ArchiveHash.Format(hash.GetCurrentHash()),
                         });
                     }
                 }
@@ -1073,21 +982,10 @@ internal sealed class ZipArchiveFormatHandler
                     sourceReadFailures);
             }
 
-            for (var index = 0; index < completedSourceObjects.Count; index++)
-            {
-                var completedSourceObject = completedSourceObjects[index];
-                if (completedSourceObject.ChangeFingerprint is null)
-                {
-                    completedSourceObjects[index] = completedSourceObject with
-                    {
-                        ChangeFingerprint = completedSourceObject.ContentHash,
-                    };
-                }
-            }
-
             return new
             (
                 package,
+                directory,
                 archive,
                 completedSourceObjects
             );
@@ -1095,7 +993,12 @@ internal sealed class ZipArchiveFormatHandler
         catch (Exception)
         {
             try { archive.Dispose(); }
-            finally { await package.DisposeAsync(); }
+            finally
+            {
+                try { await directory.DisposeAsync(); }
+                finally { await package.DisposeAsync(); }
+                completedSourceObjects.Dispose();
+            }
             throw;
         }
     }
@@ -1103,7 +1006,8 @@ internal sealed class ZipArchiveFormatHandler
     private async Task<ZipPackageMaterializedContent> BuildMaterializedPackageAsync
     (
         IReadOnlyObjectStore sourceStore,
-        IReadOnlyList<ZipSourceObject> sourceObjects,
+        IEnumerable<ZipSourceObject> sourceObjects,
+        TemporaryIndex index,
         CompressionLevel compressionLevel,
         string sourcePath,
         DateTimeOffset createdAtUtc,
@@ -1117,6 +1021,7 @@ internal sealed class ZipArchiveFormatHandler
         (
             sourceStore,
             sourceObjects,
+            index,
             compressionLevel,
             cancellationToken
         );
@@ -1150,9 +1055,8 @@ internal sealed class ZipArchiveFormatHandler
             var manifestEntries = package.SourceObjects
                 .Select(sourceObject => CreateManifestEntry(
                     sourceObject,
-                    sourcePath))
-                .ToArray();
-            var manifest = _manifestSerializer.Create
+                    sourcePath));
+            using var manifest = _manifestSerializer.Create
             (
                 sourcePath,
                 createdAtUtc,
@@ -1166,38 +1070,23 @@ internal sealed class ZipArchiveFormatHandler
             var serializedManifest = _temporaryContentFactory.Create();
             try
             {
-                using var limitedManifest = new ManifestSizeLimitedStream(
-                    serializedManifest, packageName, MaximumManifestLength);
-                try
-                {
-                    await _manifestSerializer.WriteAsync(manifest, limitedManifest, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    if (!limitedManifest.LimitExceeded) { throw; }
-                    throw new YabtFormatZipException(
-                        $"ZIP package manifest for '{packageName}' exceeds the " +
-                            $"{MaximumManifestLength} byte restore safety limit.", ex);
-                }
-                if (serializedManifest.Length > MaximumManifestLength)
-                {
-                    throw new YabtFormatZipException(
-                        $"ZIP package manifest for '{packageName}' exceeds the " +
-                            $"{MaximumManifestLength} byte restore safety limit.");
-                }
+                await _manifestSerializer.WriteAsync(manifest, serializedManifest, cancellationToken);
                 await serializedManifest.SealAsync(cancellationToken);
                 var manifestEntry = package.Archive.CreateEntry
                 (
                     ArchivePackageManifestFileNames.EmbeddedEntryName,
-                    compressionLevel
+                    compressionLevel,
+                    ToZipEntryLastModifiedUtc(createdAtUtc)
                 );
-                manifestEntry.LastWriteTime = ToZipEntryLastModifiedUtc(createdAtUtc);
-                await using (var manifestEntryContent = manifestEntry.Open())
+                await using (var manifestEntryContent = manifestEntry)
                 await using (var manifestContent = serializedManifest.OpenRead())
                 {
                     await manifestContent.CopyToAsync(manifestEntryContent, cancellationToken);
                 }
+                await package.Archive.CompleteAsync(cancellationToken);
                 package.Archive.Dispose();
+                await package.Directory.DisposeAsync();
+                package.SourceObjects.Dispose();
                 await package.Content.SealAsync(cancellationToken);
                 return new(package.Content, serializedManifest);
             }
@@ -1209,8 +1098,7 @@ internal sealed class ZipArchiveFormatHandler
         }
         catch (Exception)
         {
-            try { package.Archive.Dispose(); }
-            finally { await package.Content.DisposeAsync(); }
+            await package.DisposeAsync();
             throw;
         }
     }
@@ -1347,7 +1235,7 @@ internal sealed class ZipArchiveFormatHandler
 
     private static ZipPackageFingerprint ComputePackageFingerprint
     (
-        IReadOnlyList<ZipSourceObject> sourceObjects,
+        IEnumerable<ZipSourceObject> sourceObjects,
         CompressionLevel compressionLevel,
         string sourcePath,
         FolderPolicy policy
@@ -1472,107 +1360,46 @@ internal sealed class ZipArchiveFormatHandler
 
         ValidateProjectionPair(packageArtifact, manifestArtifact);
         _logger.LogZipAdjacentManifestRead(manifestArtifact.RelativePath);
-        var manifestBytes = await ReadAndValidateManifestArtifactAsync(
-            manifestArtifact,
-            cancellationToken);
-        ArchiveManifest manifest;
-        using (var manifestContent = new MemoryStream(manifestBytes, writable: false))
-        {
-            manifest = await _manifestSerializer.ReadAsync(
-                manifestContent,
-                cancellationToken);
-        }
-
-        ValidateRestoreManifest(manifest, packageArtifact);
-        var packageProjection = packageArtifact.Projection ??
-            throw new YabtFormatZipException(
-                $"ZIP package '{packageArtifact.RelativePath}' has no projection provenance.");
-        if (!string.Equals(
-                manifest.SourcePath,
-                packageProjection.LogicalPath,
-                StringComparison.Ordinal))
-        {
-            throw new YabtFormatZipException(
-                $"ZIP package '{packageArtifact.RelativePath}' has a logical path that differs " +
-                    "from its adjacent manifest.");
-        }
-
-        var materialization = new ZipRestoreProjectionMaterialization
-        (
-            cancellationToken => StageAndValidateRestorePackageAsync(
-                packageArtifact,
-                manifest,
-                manifestBytes,
-                cancellationToken)
-        );
-        var retainMaterialization = false;
+        var manifestContent = await ReadAndValidateManifestArtifactAsync(manifestArtifact, cancellationToken);
+        ArchiveManifest? manifest = null;
+        ZipRestoreProjectionMaterialization? materialization = null;
+        var retained = false;
         try
         {
-            var files = new List<ArchiveProjectedObject>();
-            var filePaths = new HashSet<string>(StringComparer.Ordinal);
-            var directoryPaths = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var manifestEntry in manifest.Entries)
+            await using (var content = manifestContent.OpenRead())
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var restorePath = ArchiveLayout.CombinePrefixAndRelativePath(
-                    manifest.SourcePath,
-                    manifestEntry.RelativePath);
-                if (string.Equals(
-                        manifestEntry.Kind,
-                        ArchiveManifestEntryKinds.Directory,
-                        StringComparison.Ordinal))
-                {
-                    AddRestoreDirectory(
-                        restorePath,
-                        filePaths,
-                        directoryPaths);
-                    continue;
-                }
-
-                AddRestoreFilePath(
-                    restorePath,
-                    filePaths,
-                    directoryPaths);
-                var storedPath = manifestEntry.StoredPath;
-                var projection = manifestEntry.Projection is null ?
-                    null :
-                    manifestEntry.Projection with
-                    {
-                        LogicalPath = ArchiveLayout.CombinePrefixAndRelativePath(
-                            manifest.SourcePath,
-                            manifestEntry.Projection.LogicalPath),
-                    };
-                files.Add(new
-                (
-                    restorePath,
-                    currentCancellationToken => materialization.OpenEntryAsync(
-                        storedPath,
-                        currentCancellationToken),
-                    manifestEntry.Length,
-                    manifestEntry.LastModifiedUtc,
-                    manifestEntry.ContentHash,
-                    GetRestoreChangeFingerprint(manifestEntry),
-                    projection
-                ));
+                manifest = await _manifestSerializer.ReadAsync(content, cancellationToken);
             }
-
-            if (files.Count == 0)
+            ValidateRestoreManifest(manifest, packageArtifact);
+            var packageProjection = packageArtifact.Projection ??
+                throw new YabtFormatZipException($"ZIP package '{packageArtifact.RelativePath}' has no projection provenance.");
+            if (!string.Equals(manifest.SourcePath, packageProjection.LogicalPath, StringComparison.Ordinal))
             {
-                await materialization.ValidateAsync(cancellationToken);
+                throw new YabtFormatZipException(
+                    $"ZIP package '{packageArtifact.RelativePath}' has a logical path that differs from its adjacent manifest.");
             }
-
-            var result = new ArchiveRestoreProjection(
-                files,
-                directoryPaths.Order(StringComparer.Ordinal),
-                materialization);
-            retainMaterialization = true;
+            materialization = new ZipRestoreProjectionMaterialization(
+                cancellationToken => StageAndValidateRestorePackageAsync(
+                    packageArtifact, manifest, manifestContent, cancellationToken));
+            var result = await CreateRestoreProjectionAsync(
+                manifest, manifest.SourcePath, materialization.OpenEntryAsync,
+                materialization, manifestContent, materialization.ValidateAsync, cancellationToken);
+            retained = true;
             return result;
         }
         finally
         {
-            if (!retainMaterialization)
+            if (!retained)
             {
-                await materialization.DisposeAsync();
+                try
+                {
+                    if (materialization is not null) { await materialization.DisposeAsync(); }
+                }
+                finally
+                {
+                    try { manifest?.Dispose(); }
+                    finally { await manifestContent.DisposeAsync(); }
+                }
             }
         }
     }
@@ -1610,212 +1437,86 @@ internal sealed class ZipArchiveFormatHandler
         }
     }
 
-    private static async Task<byte[]> ReadAndValidateManifestArtifactAsync
+    private async Task<TemporaryContent> ReadAndValidateManifestArtifactAsync
     (
         ArchiveProjectedObject manifestArtifact,
         CancellationToken cancellationToken
     )
     {
-        if (!ArchiveHash.IsValid(manifestArtifact.ContentHash) ||
-            manifestArtifact.ContentLength is < 0 or > MaximumManifestLength)
+        if (!ArchiveHash.IsValid(manifestArtifact.ContentHash) || manifestArtifact.ContentLength is < 0)
         {
             throw new YabtFormatZipException(
-                $"Adjacent package manifest '{manifestArtifact.RelativePath}' does not have " +
-                    "valid bounded content evidence.");
+                $"Adjacent package manifest '{manifestArtifact.RelativePath}' does not have valid content evidence.");
         }
-
-        await using var artifactContent = await manifestArtifact.OpenContentAsync(cancellationToken);
-        using var content = new MemoryStream();
-        var hash = new XxHash128();
-        var buffer = new byte[DefaultHashBufferSize];
-        long contentLength = 0;
-        while (true)
+        var content = _temporaryContentFactory.Create();
+        try
         {
-            var bytesRead = await artifactContent.Content.ReadAsync(
-                buffer,
-                cancellationToken);
-            if (bytesRead == 0) { break; }
-
-            contentLength += bytesRead;
-            if (contentLength > MaximumManifestLength)
+            await using var artifact = await manifestArtifact.OpenContentAsync(cancellationToken);
+            var hash = new XxHash128();
+            var buffer = new byte[DefaultHashBufferSize];
+            long length = 0;
+            while (true)
+            {
+                var count = await artifact.Content.ReadAsync(buffer, cancellationToken);
+                if (count == 0) { break; }
+                length = checked(length + count);
+                hash.Append(buffer.AsSpan(0, count));
+                await content.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
+            }
+            if (manifestArtifact.ContentLength.HasValue && manifestArtifact.ContentLength.Value != length ||
+                !string.Equals(manifestArtifact.ContentHash, ArchiveHash.Format(hash.GetHashAndReset()), StringComparison.Ordinal))
             {
                 throw new YabtFormatZipException(
-                    $"Adjacent package manifest '{manifestArtifact.RelativePath}' exceeds the " +
-                        $"{MaximumManifestLength} byte safety limit.");
+                    $"Adjacent package manifest '{manifestArtifact.RelativePath}' failed its content evidence check.");
             }
-
-            hash.Append(buffer.AsSpan(0, bytesRead));
-            await content.WriteAsync(
-                buffer.AsMemory(0, bytesRead),
-                cancellationToken);
+            await content.SealAsync(cancellationToken);
+            return content;
         }
-
-        if (manifestArtifact.ContentLength.HasValue &&
-            manifestArtifact.ContentLength.Value != contentLength ||
-            !string.Equals(
-                manifestArtifact.ContentHash,
-                ArchiveHash.Format(hash.GetHashAndReset()),
-                StringComparison.Ordinal))
+        catch (Exception)
         {
-            throw new YabtFormatZipException(
-                $"Adjacent package manifest '{manifestArtifact.RelativePath}' failed its " +
-                    "content evidence check.");
+            await content.DisposeAsync();
+            throw;
         }
-
-        return content.ToArray();
-    }
-
-    private static async Task<byte[]> ReadBoundedManifestContentAsync
-    (
-        Stream source,
-        string description,
-        CancellationToken cancellationToken
-    )
-    {
-        using var content = new MemoryStream();
-        var buffer = new byte[DefaultHashBufferSize];
-        while (true)
-        {
-            var bytesRead = await source.ReadAsync(buffer, cancellationToken);
-            if (bytesRead == 0) { break; }
-
-            if (content.Length + bytesRead > MaximumManifestLength)
-            {
-                throw new YabtFormatZipException(
-                    $"{description} exceeds the {MaximumManifestLength} byte safety limit.");
-            }
-
-            await content.WriteAsync(
-                buffer.AsMemory(0, bytesRead),
-                cancellationToken);
-        }
-
-        return content.ToArray();
     }
 
     private async Task<StagedZipRestorePackage> StageAndValidateRestorePackageAsync
     (
         ArchiveProjectedObject packageArtifact,
         ArchiveManifest manifest,
-        byte[] adjacentManifestBytes,
+        TemporaryContent adjacentManifest,
         CancellationToken cancellationToken
     )
     {
-        var stagedPackage = await StageRestorePackageAsync(
-            packageArtifact,
-            cancellationToken);
-        var retainStagedPackage = false;
+        var staged = await StageRestorePackageAsync(packageArtifact, cancellationToken);
+        var retained = false;
         try
         {
-            await using var packageContent = stagedPackage.OpenPackage();
-            using var archive = new ZipArchive(
-                packageContent,
-                ZipArchiveMode.Read,
-                leaveOpen: true);
-            ZipArchiveEntry? embeddedManifestEntry = null;
-            var payloadEntries = new Dictionary<string, ZipArchiveEntry>(StringComparer.Ordinal);
-            foreach (var entry in archive.Entries)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                ValidateZipEntry(entry, packageArtifact.RelativePath);
-                if (string.Equals(
-                        entry.FullName,
-                        ArchivePackageManifestFileNames.EmbeddedEntryName,
-                        StringComparison.Ordinal))
-                {
-                    if (embeddedManifestEntry is not null)
-                    {
-                        throw new YabtFormatZipException(
-                            $"ZIP package '{packageArtifact.RelativePath}' has multiple embedded " +
-                                "package manifests.");
-                    }
-
-                    embeddedManifestEntry = entry;
-                    continue;
-                }
-
-                var entryRelativePath = NormalizeZipEntryPath(entry.FullName);
-                if (string.IsNullOrEmpty(entry.Name) ||
-                    !string.Equals(
-                        entryRelativePath,
-                        entry.FullName,
-                        StringComparison.Ordinal) ||
-                    !payloadEntries.TryAdd(entryRelativePath, entry))
-                {
-                    throw new YabtFormatZipException(
-                        $"ZIP package '{packageArtifact.RelativePath}' contains unsupported or " +
-                            $"duplicate entry '{entry.FullName}'.");
-                }
-            }
-
-            if (embeddedManifestEntry is null)
-            {
-                throw new YabtFormatZipException(
-                    $"ZIP package '{packageArtifact.RelativePath}' has no embedded package manifest.");
-            }
-
-            byte[] embeddedManifestBytes;
+            ValidatePackageEntries(staged, manifest, packageArtifact.RelativePath, cancellationToken);
             _logger.LogZipEmbeddedManifestRead(packageArtifact.RelativePath);
-            await using (var embeddedManifestContent = embeddedManifestEntry.Open())
-            using (var buffer = new MemoryStream())
+            await using var embedded = await staged.OpenEntryAsync(
+                ArchivePackageManifestFileNames.EmbeddedEntryName, cancellationToken);
+            await using var adjacent = adjacentManifest.OpenRead();
+            var embeddedBuffer = new byte[DefaultHashBufferSize];
+            var adjacentBuffer = new byte[DefaultHashBufferSize];
+            while (true)
             {
-                var readBuffer = new byte[DefaultHashBufferSize];
-                while (true)
-                {
-                    var bytesRead = await embeddedManifestContent.ReadAsync(
-                        readBuffer,
-                        cancellationToken);
-                    if (bytesRead == 0) { break; }
-
-                    if (buffer.Length + bytesRead > MaximumManifestLength)
-                    {
-                        throw new YabtFormatZipException(
-                            $"ZIP package '{packageArtifact.RelativePath}' embedded manifest " +
-                                $"exceeds the {MaximumManifestLength} byte safety limit.");
-                    }
-
-                    await buffer.WriteAsync(
-                        readBuffer.AsMemory(0, bytesRead),
-                        cancellationToken);
-                }
-
-                embeddedManifestBytes = buffer.ToArray();
-            }
-
-            if (!embeddedManifestBytes.AsSpan().SequenceEqual(adjacentManifestBytes))
-            {
-                throw new YabtFormatZipException(
-                    $"ZIP package '{packageArtifact.RelativePath}' embedded and adjacent manifests differ.");
-            }
-
-            foreach (var manifestEntry in manifest.Entries)
-            {
-                if (!payloadEntries.Remove(manifestEntry.StoredPath, out var entry) ||
-                    entry.Length != manifestEntry.Length)
+                var count = await embedded.Content.ReadAsync(embeddedBuffer, cancellationToken);
+                var adjacentCount = await adjacent.ReadAtLeastAsync(
+                    adjacentBuffer.AsMemory(0, count == 0 ? 1 : count), count == 0 ? 1 : count,
+                    throwOnEndOfStream: false, cancellationToken);
+                if (count != adjacentCount || !embeddedBuffer.AsSpan(0, count).SequenceEqual(adjacentBuffer.AsSpan(0, adjacentCount)))
                 {
                     throw new YabtFormatZipException(
-                        $"ZIP package '{packageArtifact.RelativePath}' does not match manifest " +
-                            $"entry '{manifestEntry.StoredPath}'.");
+                        $"ZIP package '{packageArtifact.RelativePath}' embedded and adjacent manifests differ.");
                 }
+                if (count == 0) { break; }
             }
-
-            if (payloadEntries.Count != 0)
-            {
-                var unexpectedPath = payloadEntries.Keys.Min(StringComparer.Ordinal);
-                throw new YabtFormatZipException(
-                    $"ZIP package '{packageArtifact.RelativePath}' contains unexpected entry " +
-                        $"'{unexpectedPath}'.");
-            }
-
-            retainStagedPackage = true;
-            return stagedPackage;
+            retained = true;
+            return staged;
         }
         finally
         {
-            if (!retainStagedPackage)
-            {
-                await stagedPackage.DisposeAsync();
-            }
+            if (!retained) { await staged.DisposeAsync(); }
         }
     }
 
@@ -1891,10 +1592,9 @@ internal sealed class ZipArchiveFormatHandler
 
     private static DateTimeOffset GetPackageCreationTimeUtc
     (
-        IReadOnlyList<ZipSourceObject> sourceObjects
-    ) => sourceObjects.Count == 0 ?
-        DateTimeOffset.UnixEpoch :
-        sourceObjects.Max(sourceObject => sourceObject.LastModifiedUtc);
+        IEnumerable<ZipSourceObject> sourceObjects
+    ) => sourceObjects.Select(sourceObject => sourceObject.LastModifiedUtc)
+        .DefaultIfEmpty(DateTimeOffset.UnixEpoch).Max();
 
     private static DateTimeOffset ToZipEntryLastModifiedUtc(DateTimeOffset value)
     {
@@ -1988,14 +1688,20 @@ internal sealed class ZipArchiveFormatHandler
     private sealed record ZipPackageBuildResult
     (
         TemporaryContent Content,
-        ZipArchive Archive,
-        IReadOnlyList<ZipSourceObject> SourceObjects
+        TemporaryContent Directory,
+        StreamingZipWriter Archive,
+        DiskEntryCollection<ZipSourceObject> SourceObjects
     ) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
             try { Archive.Dispose(); }
-            finally { await Content.DisposeAsync(); }
+            finally
+            {
+                try { await Directory.DisposeAsync(); }
+                finally { await Content.DisposeAsync(); }
+                SourceObjects.Dispose();
+            }
         }
     }
 
@@ -2127,7 +1833,6 @@ internal sealed class ZipArchiveFormatHandler
             finally
             {
                 _gate.Release();
-                _gate.Dispose();
             }
         }
 
@@ -2151,86 +1856,4 @@ internal sealed class ZipArchiveFormatHandler
         }
     }
 
-    private sealed class ManifestSizeLimitedStream
-    (
-        Stream _inner,
-        string _packageName,
-        long _maximumLength
-    ) : Stream
-    {
-        public override bool CanRead => _inner.CanRead;
-        public override bool CanWrite => _inner.CanWrite;
-        public override bool CanSeek => _inner.CanSeek;
-        public override long Length => _inner.Length;
-        public override long Position { get => _inner.Position; set => _inner.Position = value; }
-        public override void Flush() => _inner.Flush();
-        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
-        public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
-
-        public bool LimitExceeded { get; private set; }
-
-        public override void SetLength(long value)
-        {
-            EnsureLength(value);
-            _inner.SetLength(value);
-        }
-
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            EnsureWriteLength(count);
-            _inner.Write(buffer, offset, count);
-        }
-
-        public override void Write(ReadOnlySpan<byte> buffer)
-        {
-            EnsureWriteLength(buffer.Length);
-            _inner.Write(buffer);
-        }
-
-        public override Task WriteAsync
-        (
-            byte[] buffer,
-            int offset,
-            int count,
-            CancellationToken cancellationToken
-        )
-        {
-            EnsureWriteLength(count);
-            return _inner.WriteAsync(buffer, offset, count, cancellationToken);
-        }
-
-        public override ValueTask WriteAsync
-        (
-            ReadOnlyMemory<byte> buffer,
-            CancellationToken cancellationToken = default
-        )
-        {
-            EnsureWriteLength(buffer.Length);
-            return _inner.WriteAsync(buffer, cancellationToken);
-        }
-
-        public override void WriteByte(byte value)
-        {
-            EnsureWriteLength(1);
-            _inner.WriteByte(value);
-        }
-
-        private void EnsureWriteLength(int count)
-        {
-            var resultingLength = Math.Max(
-                Length,
-                checked(Position + count));
-            EnsureLength(resultingLength);
-        }
-
-        private void EnsureLength(long length)
-        {
-            if (length <= _maximumLength) { return; }
-
-            LimitExceeded = true;
-            throw new IOException(
-                $"ZIP package manifest for '{_packageName}' exceeded its {_maximumLength} " +
-                    "byte output limit.");
-        }
-    }
 }

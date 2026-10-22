@@ -106,6 +106,52 @@ internal sealed class FileSystemArchiveLocationResolver
         return new(message, path: sourcePath, innerException: new ObjectStoreOverlapException(message));
     }
 
+    public void ValidateTemporaryStorageLocations
+    (
+        string temporaryDirectory,
+        ArchiveSourceLocation? source,
+        IObjectStore archiveStore,
+        IRestoreDestination? destination = null
+    )
+    {
+        _logger.LogTrace(nameof(ValidateTemporaryStorageLocations));
+
+        var temporaryRoot = ResolvePhysicalPath(temporaryDirectory, requireKnownLinkTargets: false);
+        if (source is not null)
+        {
+            RejectTemporaryStorageUnder
+            (
+                temporaryRoot,
+                ToNativePath(source.Root.RootPath, source.SourcePrefix),
+                "selected source data"
+            );
+        }
+        if (archiveStore is ILocalObjectStore localArchive)
+        {
+            RejectTemporaryStorageUnder(temporaryRoot, localArchive.RootPath, "archive storage");
+        }
+        if (destination is not null)
+        {
+            RejectTemporaryStorageUnder(temporaryRoot, destination.RootPath, "restore destination");
+        }
+    }
+
+    private void RejectTemporaryStorageUnder(string temporaryRoot, string protectedPath, string description)
+    {
+        var protectedRoot = ResolvePhysicalPath(protectedPath, requireKnownLinkTargets: false);
+        if (!FileSystemObjectStoreNamespace.IsNativePathUnder
+        (
+            temporaryRoot, protectedRoot, allowUnknownComparison: true
+        )) { return; }
+
+        var message = $"Temporary storage '{temporaryRoot}' is inside {description} '{protectedRoot}'. " +
+            "Choose a temporary directory outside the operation's data trees.";
+        throw new YabtFileSystemException
+        (
+            message, path: temporaryRoot, innerException: new ObjectStoreOverlapException(message)
+        );
+    }
+
     public void ConfigureSourceTraversal(ArchiveSourceLocation source, IObjectStore targetStore)
     {
         _logger.LogTrace(nameof(ConfigureSourceTraversal));

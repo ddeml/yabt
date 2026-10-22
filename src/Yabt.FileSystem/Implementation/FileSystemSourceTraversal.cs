@@ -1,3 +1,4 @@
+using Yabt.Common;
 using Yabt.Core;
 using Yabt.Core.Models;
 
@@ -180,6 +181,28 @@ internal sealed class FileSystemSourceTraversal
             if (nearestForbiddenIdentity is not null)
             {
                 RejectAmbiguousAliasBoundary(identity, nearestForbiddenIdentity, linkPath);
+            }
+        }
+
+        foreach (var temporaryDirectory in TemporaryStorageValidation.GetDirectories())
+        {
+            var physicalTemporaryPath = FileSystemDirectoryIdentity.ResolvePhysicalPath(temporaryDirectory);
+            // A common temporary ancestor is safe: only files created inside a traversed
+            // directory can become source payloads. Do not apply the symmetric archive rule.
+            if
+            (
+                IsSameOrDescendant(physicalTemporaryPath, identity.PhysicalPath) ||
+                ReadExistingAncestorIdentities(physicalTemporaryPath).Any
+                (
+                    ancestor => string.Equals(identity.Id, ancestor.Id, StringComparison.Ordinal)
+                )
+            )
+            {
+                var message = $"Source directory link '{linkPath}' contains temporary storage '{temporaryDirectory}'.";
+                throw new YabtFileSystemException
+                (
+                    message, path: linkPath, innerException: new ObjectStoreOverlapException(message)
+                );
             }
         }
 

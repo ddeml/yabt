@@ -159,7 +159,7 @@ public sealed class PathIdentityTests
         var archiveBytes = Encoding.UTF8.GetBytes("archive object whose exact path cannot be represented");
         await UploadBytesAsync(archive, archivePath, archiveBytes);
         var serializer = fixture.Services.GetRequiredService<IChangeManifestSerializer>();
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         (
             [new
             (

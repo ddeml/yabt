@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Options;
+using Yabt.Common;
 using Yabt.Core.Models;
 
 namespace Yabt.Metadata.Implementation;
@@ -13,6 +15,14 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
         PropertyNameCaseInsensitive = false,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
+
+    private readonly IOptionsMonitor<TemporaryContentOptions>? _temporaryOptions;
+
+    public JsonChangeManifestSerializer(IOptionsMonitor<TemporaryContentOptions> temporaryOptions)
+        : this(JsonMetadataOptions.Create())
+    {
+        _temporaryOptions = Check.NotNull(temporaryOptions);
+    }
 
     public JsonChangeManifestSerializer()
         : this(JsonMetadataOptions.Create())
@@ -40,6 +50,7 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             entries,
             ArchiveChangeManifest.ExpectedSchemaVersion
         );
+        using var entryOwnership = new ManifestEntryOwnership(canonicalEntries, entries);
         var manifest = new ArchiveChangeManifest
         (
             ArchiveChangeManifest.ExpectedDocumentType,
@@ -51,14 +62,14 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             rootDescriptorContentLength
         );
 
-        return manifest with
+        return entryOwnership.Complete(manifest with
         {
             ManifestHash = ComputeManifestHash
             (
                 manifest,
                 canonicalEntries
             ),
-        };
+        });
     }
 
     public async Task WriteAsync
@@ -76,6 +87,7 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             manifest,
             allowPreviousSchemas: false
         );
+        using var entryOwnership = new ManifestEntryOwnership(validatedManifest.Entries, manifest.Entries);
         try
         {
             await JsonSerializer.SerializeAsync(
@@ -97,35 +109,44 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
     )
     {
         ArgumentNullException.ThrowIfNull(source);
-
-        ArchiveChangeManifest? manifest;
+        StreamedManifestDocument<ArchiveChangeManifestEntry> document;
+        ArchiveChangeManifest manifest;
         try
         {
-            using var document = await JsonDocument.ParseAsync(
+            document = await StreamedManifestJson.ReadAsync<ArchiveChangeManifestEntry>
+            (
                 source,
-                cancellationToken: cancellationToken);
-            manifest = document.RootElement.Deserialize<ArchiveChangeManifest>(
-                _strictJsonOptions);
-            ValidateSchemaPropertyPresence(document.RootElement, manifest);
+                ["documentType", "schemaVersion", "entries", "manifestHash", "rootFormat", "rootDescriptorContentHash", "rootDescriptorContentLength"],
+                _strictJsonOptions,
+                _temporaryOptions?.CurrentValue,
+                cancellationToken
+            );
+            try
+            {
+                manifest = document.Header.RootElement.Deserialize<ArchiveChangeManifest>(_strictJsonOptions) ??
+                    throw new JsonException("Change manifest JSON did not contain a manifest object.");
+                manifest = manifest with { Entries = document.Entries };
+                ValidateSchemaPropertyPresence(document.Header.RootElement, manifest, document.HasEntryProjectionProperty);
+            }
+            catch (Exception)
+            {
+                document.Dispose();
+                throw;
+            }
         }
         catch (Exception ex)
         {
             throw new YabtMetadataException("Change manifest JSON could not be deserialized.", ex);
         }
-
-        if (manifest is null)
+        using (document)
         {
-            throw new YabtMetadataException("Change manifest JSON did not contain a manifest object.");
+            var validated = ValidateManifest(manifest, allowPreviousSchemas: true);
+            document.TransferEntries();
+            return validated;
         }
-
-        return ValidateManifest
-        (
-            manifest,
-            allowPreviousSchemas: true
-        );
     }
 
-    private static ArchiveChangeManifest ValidateManifest
+    private ArchiveChangeManifest ValidateManifest
     (
         ArchiveChangeManifest manifest,
         bool allowPreviousSchemas
@@ -146,13 +167,12 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             throw new YabtMetadataException("Change manifest JSON does not contain an entries collection.");
         }
 
-        var serializedEntries = manifest.Entries.ToArray();
-        var canonicalEntries = CreateCanonicalEntries
+        var canonicalEntries = ValidateCanonicalEntries
         (
-            serializedEntries,
+            manifest.Entries,
             manifest.SchemaVersion
         );
-        EnsureEntriesAreCanonical(serializedEntries, canonicalEntries);
+        using var entryOwnership = new ManifestEntryOwnership(canonicalEntries, manifest.Entries);
         ValidateManifestHash(manifest.ManifestHash);
 
         var expectedHash = ComputeManifestHash
@@ -165,135 +185,109 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
             throw new YabtMetadataException("Change manifest self-hash does not match its contents.");
         }
 
-        return manifest with
+        return entryOwnership.Complete(manifest with
         {
             Entries = canonicalEntries,
-        };
+        });
     }
 
-    private static ArchiveChangeManifestEntry[] CreateCanonicalEntries
+    private TemporaryManifestEntries<ArchiveChangeManifestEntry> CreateCanonicalEntries
     (
         IEnumerable<ArchiveChangeManifestEntry> entries,
         int schemaVersion
-    )
-    {
-        var canonicalEntries = new List<ArchiveChangeManifestEntry>();
-        foreach (var entry in entries)
-        {
-            if (entry is null)
-            {
-                throw new YabtMetadataException("Change manifest entries cannot contain null values.");
-            }
-
-            string relativePath;
-            try
-            {
-                relativePath = ArchiveLayout.NormalizeObjectKey(entry.RelativePath);
-            }
-            catch (Exception ex)
-            {
-                throw new YabtMetadataException(
-                    $"Change manifest entry path '{entry.RelativePath}' is invalid.",
-                    ex);
-            }
-
-            if (string.IsNullOrEmpty(relativePath))
-            {
-                throw new YabtMetadataException("Change manifest entry paths cannot be empty.");
-            }
-
-            if (entry.ArtifactLength < 0)
-            {
-                throw new YabtMetadataException(
-                    $"Change manifest entry '{relativePath}' has a negative artifact length.");
-            }
-
-            ValidateFingerprint(
-                entry.ChangeFingerprint,
-                $"Change manifest entry '{relativePath}' change fingerprint");
-
-            if (entry.ContentHash is not null)
-            {
-                ValidateContentHash(
-                    entry.ContentHash,
-                    $"Change manifest entry '{relativePath}' content hash");
-            }
-            else if (schemaVersion == ArchiveChangeManifest.ExpectedSchemaVersion)
-            {
-                throw new YabtMetadataException(
-                    $"Change manifest entry '{relativePath}' content hash is required by " +
-                        $"schema version {schemaVersion}.");
-            }
-
-            if (schemaVersion != ArchiveChangeManifest.ExpectedSchemaVersion &&
-                entry.Projection is not null)
-            {
-                throw new YabtMetadataException
-                (
-                    $"Schema version {schemaVersion} change manifest entry " +
-                    $"'{relativePath}' must not contain projection provenance."
-                );
-            }
-
-            var projection = entry.Projection is null
-                ? null
-                : CreateCanonicalProjection(entry.Projection, relativePath);
-
-            canonicalEntries.Add(entry with
-            {
-                RelativePath = relativePath,
-                Projection = projection,
-            });
-        }
-
-        canonicalEntries.Sort(static (left, right) =>
-            string.Compare(left.RelativePath, right.RelativePath, StringComparison.Ordinal));
-
-        for (var index = 1; index < canonicalEntries.Count; index++)
-        {
-            if (string.Equals(
-                    canonicalEntries[index - 1].RelativePath,
-                    canonicalEntries[index].RelativePath,
-                    StringComparison.Ordinal))
-            {
-                throw new YabtMetadataException(
-                    $"Change manifest contains duplicate entry path '{canonicalEntries[index].RelativePath}'.");
-            }
-        }
-
-        return [.. canonicalEntries];
-    }
-
-    private static void EnsureEntriesAreCanonical
+    ) => ManifestEntryStorage.CreateCanonical
     (
-        ArchiveChangeManifestEntry[] serializedEntries,
-        ArchiveChangeManifestEntry[] canonicalEntries
-    )
-    {
-        for (var index = 0; index < serializedEntries.Length; index++)
-        {
-            var serializedEntry = serializedEntries[index];
-            var canonicalEntry = canonicalEntries[index];
+        entries,
+        entry => CreateCanonicalEntry(entry, schemaVersion),
+        entry => entry.RelativePath,
+        "Change manifest",
+        "entry path",
+        _strictJsonOptions,
+        _temporaryOptions?.CurrentValue
+    );
 
-            if (!string.Equals(
-                    serializedEntry.RelativePath,
-                    canonicalEntry.RelativePath,
-                    StringComparison.Ordinal) ||
-                !string.Equals(
-                    serializedEntry.ChangeFingerprint,
-                    canonicalEntry.ChangeFingerprint,
-                    StringComparison.Ordinal) ||
-                !string.Equals(
-                    serializedEntry.ContentHash,
-                    canonicalEntry.ContentHash,
-                    StringComparison.Ordinal) ||
-                serializedEntry.ArtifactLength != canonicalEntry.ArtifactLength ||
-                serializedEntry.Projection != canonicalEntry.Projection)
-            {
-                throw new YabtMetadataException(
-                    "Change manifest entries are not in canonical path order or contain noncanonical values.");
-            }
+    private TemporaryManifestEntries<ArchiveChangeManifestEntry> ValidateCanonicalEntries
+    (
+        IEnumerable<ArchiveChangeManifestEntry> entries,
+        int schemaVersion
+    ) => ManifestEntryStorage.ValidateCanonical
+    (
+        entries,
+        entry => CreateCanonicalEntry(entry, schemaVersion),
+        entry => entry.RelativePath,
+        static (left, right) => left == right,
+        "Change manifest",
+        "entry path",
+        _strictJsonOptions,
+        _temporaryOptions?.CurrentValue
+    );
+
+    private static ArchiveChangeManifestEntry CreateCanonicalEntry(ArchiveChangeManifestEntry entry, int schemaVersion)
+    {
+        if (entry is null)
+        {
+            throw new YabtMetadataException("Change manifest entries cannot contain null values.");
         }
+
+        string relativePath;
+        try
+        {
+            relativePath = ArchiveLayout.NormalizeObjectKey(entry.RelativePath);
+        }
+        catch (Exception ex)
+        {
+            throw new YabtMetadataException(
+                $"Change manifest entry path '{entry.RelativePath}' is invalid.",
+                ex);
+        }
+
+        if (string.IsNullOrEmpty(relativePath))
+        {
+            throw new YabtMetadataException("Change manifest entry paths cannot be empty.");
+        }
+
+        if (entry.ArtifactLength < 0)
+        {
+            throw new YabtMetadataException(
+                $"Change manifest entry '{relativePath}' has a negative artifact length.");
+        }
+
+        ValidateFingerprint(
+            entry.ChangeFingerprint,
+            $"Change manifest entry '{relativePath}' change fingerprint");
+
+        if (entry.ContentHash is not null)
+        {
+            ValidateContentHash(
+                entry.ContentHash,
+                $"Change manifest entry '{relativePath}' content hash");
+        }
+        else if (schemaVersion == ArchiveChangeManifest.ExpectedSchemaVersion)
+        {
+            throw new YabtMetadataException(
+                $"Change manifest entry '{relativePath}' content hash is required by " +
+                    $"schema version {schemaVersion}.");
+        }
+
+        if (schemaVersion != ArchiveChangeManifest.ExpectedSchemaVersion &&
+            entry.Projection is not null)
+        {
+            throw new YabtMetadataException
+            (
+                $"Schema version {schemaVersion} change manifest entry " +
+                $"'{relativePath}' must not contain projection provenance."
+            );
+        }
+
+        var projection = entry.Projection is null
+            ? null
+            : CreateCanonicalProjection(entry.Projection, relativePath);
+
+        return entry with
+        {
+            RelativePath = relativePath,
+            Projection = projection,
+        };
     }
 
     private static void ValidateFingerprint(string value, string description)
@@ -374,7 +368,8 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
     private static void ValidateSchemaPropertyPresence
     (
         JsonElement root,
-        ArchiveChangeManifest? manifest
+        ArchiveChangeManifest? manifest,
+        bool hasEntryProjectionProperty
     )
     {
         if (manifest is null || root.ValueKind != JsonValueKind.Object)
@@ -402,21 +397,11 @@ internal sealed class JsonChangeManifestSerializer(JsonSerializerOptions _jsonOp
                 "rootDescriptorContentLength",
                 manifest.SchemaVersion);
 
-            if (!root.TryGetProperty("entries", out var entries) ||
-                entries.ValueKind != JsonValueKind.Array)
+            if (hasEntryProjectionProperty)
             {
-                return;
-            }
-
-            foreach (var entry in entries.EnumerateArray())
-            {
-                if (entry.ValueKind == JsonValueKind.Object &&
-                    entry.TryGetProperty("projection", out _))
-                {
-                    throw new YabtMetadataException(
-                        $"Schema version {manifest.SchemaVersion} change manifest entries " +
-                            "must not contain projection, even when null.");
-                }
+                throw new YabtMetadataException(
+                    $"Schema version {manifest.SchemaVersion} change manifest entries " +
+                        "must not contain projection, even when null.");
             }
         }
     }

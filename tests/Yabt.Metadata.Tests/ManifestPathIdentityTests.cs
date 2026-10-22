@@ -36,12 +36,12 @@ public sealed class ManifestPathIdentityTests
                 Projection: new(path, "zip", 1, ContentHash, ArchiveProjectionArtifactRoles.Package)
             )
         );
-        var manifest = serializer.Create(entries, "mirror");
+        using var manifest = serializer.Create(entries, "mirror");
         await using var json = new MemoryStream();
         await serializer.WriteAsync(manifest, json);
         json.Position = 0;
 
-        var restored = await serializer.ReadAsync(json);
+        using var restored = await serializer.ReadAsync(json);
 
         AssertPreservedPaths(restored.Entries.Select(entry => entry.RelativePath));
         AssertPreservedPaths(restored.Entries.Select(entry => entry.Projection!.LogicalPath));
@@ -53,12 +53,12 @@ public sealed class ManifestPathIdentityTests
         using var provider = CreateServices();
         var serializer = provider.GetRequiredService<ILogicalStateManifestSerializer>();
         var entries = Paths.Select(path => new ArchiveLogicalStateManifestEntry(path, Fingerprint, ContentHash));
-        var manifest = serializer.Create(entries);
+        using var manifest = serializer.Create(entries);
         await using var json = new MemoryStream();
         await serializer.WriteAsync(manifest, json);
         json.Position = 0;
 
-        var restored = await serializer.ReadAsync(json);
+        using var restored = await serializer.ReadAsync(json);
 
         AssertPreservedPaths(restored.Entries.Select(entry => entry.LogicalRelativePath));
     }
@@ -79,12 +79,12 @@ public sealed class ManifestPathIdentityTests
                 ContentHash
             )
         );
-        var manifest = serializer.Create(entries);
+        using var manifest = serializer.Create(entries);
         await using var json = new MemoryStream();
         await serializer.WriteAsync(manifest, json);
         json.Position = 0;
 
-        var restored = await serializer.ReadAsync(json);
+        using var restored = await serializer.ReadAsync(json);
 
         AssertPreservedPaths(restored.Entries.Select(entry => entry.RelativePath));
         AssertPreservedPaths(restored.Entries.Select(entry => entry.StoredRelativePath));
@@ -141,7 +141,7 @@ public sealed class ManifestPathIdentityTests
                 new(path, "zip", 1, ContentHash, ArchiveProjectionArtifactRoles.Package)
             )
         );
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         (
             sourcePath,
             Timestamp,
@@ -156,7 +156,7 @@ public sealed class ManifestPathIdentityTests
         await serializer.WriteAsync(manifest, json);
         json.Position = 0;
 
-        var restored = await serializer.ReadAsync(json);
+        using var restored = await serializer.ReadAsync(json);
 
         Assert.AreEqual(sourcePath, restored.SourcePath);
         Assert.AreEqual(packageName, restored.PackageName);
@@ -218,7 +218,7 @@ public sealed class ManifestPathIdentityTests
     {
         using var provider = CreateServices();
         var serializer = provider.GetRequiredService<IChangeManifestSerializer>();
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         (
             [new("folder/file.txt", Fingerprint, ContentHash: ContentHash)],
             "mirror"

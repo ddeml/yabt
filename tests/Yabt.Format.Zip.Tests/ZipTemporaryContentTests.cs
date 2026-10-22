@@ -199,10 +199,65 @@ public sealed class ZipTemporaryContentTests
             await using var enumerator = projection.GetAsyncEnumerator();
             Assert.IsTrue(await enumerator.MoveNextAsync());
             Assert.AreEqual(1, source.OpenCount);
-            Assert.HasCount(2, Directory.EnumerateFiles(_temporaryDirectory));
+            Assert.HasCount(2, Directory.EnumerateFiles(_temporaryDirectory, "yabt-content-*.tmp"));
         }
 
         Assert.AreEqual(0L, factory.ReservedMemoryBytes);
+        Assert.IsEmpty(Directory.EnumerateFiles(_temporaryDirectory));
+    }
+
+    [TestMethod]
+    public async Task RestoreCancellationAfterSpillingReleasesPartialPackageAndManifest()
+    {
+        using var services = CreateServices(threshold: 1024, memoryBudget: 0);
+        var handler = services.GetRequiredService<IArchiveFormatHandler>();
+        var factory = services.GetRequiredService<ITemporaryContentFactory>();
+        var source = new GeneratedZipSourceStore(1024 * 1024, provideMetadata: true);
+        using var cancellation = new CancellationTokenSource();
+        await using (var backup = handler.ProjectBackupAsync(new(source, SourceDisplayName: "CanceledRestore")))
+        {
+            var artifacts = new List<ArchiveProjectedObject>();
+            await foreach (var artifact in backup)
+            {
+                await using var content = await artifact.OpenContentAsync(default);
+                var validated = artifact with
+                {
+                    ContentLength = content.Content.Length,
+                    ContentHash = await ArchiveHash.ComputeAsync(content.Content)
+                };
+                if (artifact.Projection?.ArtifactRole == ArchiveProjectionArtifactRoles.Package)
+                {
+                    validated = validated with
+                    {
+                        OpenContentAsync = async token => new ArchiveObjectContent(new CancelAfterReadStream
+                        (
+                            await artifact.OpenContentAsync(token),
+                            cancellation,
+                            128 * 1024
+                        ))
+                    };
+                }
+                artifacts.Add(validated);
+            }
+
+            var backupFiles = Directory.EnumerateFiles(_temporaryDirectory).Order().ToArray();
+            await using (var restore = await handler.ProjectRestoreAsync(new
+            (
+                artifacts,
+                restoreAsRoot: true,
+                requireCompleteProjection: true
+            )))
+            {
+                var payload = restore.Objects.Single();
+                await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+                {
+                    await using var ignored = await payload.OpenContentAsync(cancellation.Token);
+                });
+            }
+
+            CollectionAssert.AreEqual(backupFiles, Directory.EnumerateFiles(_temporaryDirectory).Order().ToArray());
+            Assert.AreEqual(0L, factory.ReservedMemoryBytes);
+        }
         Assert.IsEmpty(Directory.EnumerateFiles(_temporaryDirectory));
     }
 
@@ -417,6 +472,48 @@ public sealed class ZipTemporaryContentTests
                 _onDispose();
             }
             base.Dispose(disposing);
+        }
+    }
+
+    private sealed class CancelAfterReadStream
+    (
+        ArchiveObjectContent _owner,
+        CancellationTokenSource _cancellation,
+        long _cancelAfter
+    ) : Stream
+    {
+        private long _read;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => _owner.Content.Length;
+        public override long Position { get => _read; set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_read >= _cancelAfter) { _cancellation.Cancel(); }
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = await _owner.Content.ReadAsync(buffer, cancellationToken);
+            _read += count;
+            return count;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { _owner.Content.Dispose(); }
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await _owner.DisposeAsync();
+            GC.SuppressFinalize(this);
         }
     }
 }

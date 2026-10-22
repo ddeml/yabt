@@ -28,7 +28,7 @@ public sealed class JsonManifestSerializerTests
         var serializer = serviceProvider.GetRequiredService<IManifestSerializer>();
         var projectionId = ArchiveHash.Compute(Encoding.UTF8.GetBytes("outer projection"));
         var nestedProjectionId = ArchiveHash.Compute(Encoding.UTF8.GetBytes("nested projection"));
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         (
             "photos",
             LaterTimestamp,
@@ -87,7 +87,7 @@ public sealed class JsonManifestSerializerTests
             "\"alpha\": true");
 
         await using var source = new MemoryStream(firstJson, writable: false);
-        var restored = await serializer.ReadAsync(source);
+        using var restored = await serializer.ReadAsync(source);
 
         Assert.AreEqual(ArchiveManifest.ExpectedSchemaVersion, restored.SchemaVersion);
         Assert.AreEqual(projectionId, restored.ProjectionId);
@@ -219,7 +219,7 @@ public sealed class JsonManifestSerializerTests
 
         CollectionAssert.AreEqual(json, await WriteAsync(serializer, reordered));
         await using var source = new MemoryStream(json);
-        var restored = await serializer.ReadAsync(source);
+        using var restored = await serializer.ReadAsync(source);
         Assert.IsNotNull(restored.Policy.DirectoryLinks);
         Assert.AreEqual(links["zeta"], restored.Policy.DirectoryLinks["zeta"]);
         Assert.AreEqual(links[" alpha"], restored.Policy.DirectoryLinks[" alpha"]);

@@ -480,6 +480,16 @@ public sealed class ProviderNamespaceTests
         {
         }
 
+        public void ValidateTemporaryStorageLocations
+        (
+            string temporaryDirectory,
+            ArchiveSourceLocation? source,
+            IObjectStore archiveStore,
+            IRestoreDestination? destination = null
+        )
+        {
+        }
+
         public void ConfigureSourceTraversal(ArchiveSourceLocation source, IObjectStore targetStore)
         {
         }

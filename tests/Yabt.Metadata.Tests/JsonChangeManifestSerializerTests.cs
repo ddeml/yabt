@@ -27,8 +27,8 @@ public sealed class JsonChangeManifestSerializerTests
             ContentHash: CreateContentHash("first")
         );
 
-        var forwardManifest = serializer.Create([firstEntry, secondEntry], RootFormat);
-        var reverseManifest = serializer.Create([secondEntry, firstEntry], RootFormat);
+        using var forwardManifest = serializer.Create([firstEntry, secondEntry], RootFormat);
+        using var reverseManifest = serializer.Create([secondEntry, firstEntry], RootFormat);
         var forwardJson = await WriteToStringAsync(serializer, forwardManifest);
         var reverseJson = await WriteToStringAsync(serializer, reverseManifest);
 
@@ -50,7 +50,7 @@ public sealed class JsonChangeManifestSerializerTests
     public async Task ReadAsyncRoundTripsValidatedManifest()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         ([
             new
             (
@@ -64,7 +64,7 @@ public sealed class JsonChangeManifestSerializerTests
         await serializer.WriteAsync(manifest, json);
         json.Position = 0;
 
-        var restored = await serializer.ReadAsync(json);
+        using var restored = await serializer.ReadAsync(json);
         var entry = restored.Entries.Single();
 
         Assert.AreEqual(manifest.ManifestHash, restored.ManifestHash);
@@ -77,7 +77,7 @@ public sealed class JsonChangeManifestSerializerTests
     public async Task ReadAsyncRoundTripsDurableRootFormatEvidence()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         (
             [
                 new
@@ -93,7 +93,7 @@ public sealed class JsonChangeManifestSerializerTests
         await serializer.WriteAsync(manifest, json);
         json.Position = 0;
 
-        var restored = await serializer.ReadAsync(json);
+        using var restored = await serializer.ReadAsync(json);
 
         Assert.AreEqual(ArchiveChangeManifest.ExpectedSchemaVersion, restored.SchemaVersion);
         Assert.AreEqual("zip", restored.RootFormat);
@@ -106,7 +106,7 @@ public sealed class JsonChangeManifestSerializerTests
         var serializer = CreateSerializer();
         var rootDescriptorContentHash = CreateContentHash("root descriptor");
         var projectionId = CreateContentHash("logical projection");
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         (
             [
                 new
@@ -133,7 +133,7 @@ public sealed class JsonChangeManifestSerializerTests
         await serializer.WriteAsync(manifest, json);
         json.Position = 0;
 
-        var restored = await serializer.ReadAsync(json);
+        using var restored = await serializer.ReadAsync(json);
         var projection = restored.Entries.Single().Projection;
 
         Assert.AreEqual(ArchiveChangeManifest.ExpectedSchemaVersion, restored.SchemaVersion);
@@ -168,13 +168,13 @@ public sealed class JsonChangeManifestSerializerTests
         );
         var rootHash = CreateContentHash("root descriptor");
 
-        var withoutEvidence = serializer.Create([baseEntry], RootFormat);
-        var withProjection = serializer.Create
+        using var withoutEvidence = serializer.Create([baseEntry], RootFormat);
+        using var withProjection = serializer.Create
         (
             [baseEntry with { Projection = projection }],
             RootFormat
         );
-        var withAllEvidence = serializer.Create
+        using var withAllEvidence = serializer.Create
         (
             [baseEntry with { Projection = projection }],
             RootFormat,
@@ -197,8 +197,8 @@ public sealed class JsonChangeManifestSerializerTests
             ContentHash: CreateContentHash("content")
         );
 
-        var mirrorManifest = serializer.Create([entry], "mirror");
-        var zipManifest = serializer.Create([entry], "zip");
+        using var mirrorManifest = serializer.Create([entry], "mirror");
+        using var zipManifest = serializer.Create([entry], "zip");
 
         Assert.AreNotEqual(mirrorManifest.ManifestHash, zipManifest.ManifestHash);
     }
@@ -207,7 +207,7 @@ public sealed class JsonChangeManifestSerializerTests
     public async Task ReadAsyncRejectsChangedRootFormat()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         (
             [
                 new
@@ -240,7 +240,7 @@ public sealed class JsonChangeManifestSerializerTests
     public async Task ReadAsyncRejectsDuplicateJsonProperties()
     {
         var serializer = CreateSerializer();
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         (
             [
                 new
@@ -285,7 +285,7 @@ public sealed class JsonChangeManifestSerializerTests
             """;
         await using var legacyStream = new MemoryStream(Encoding.UTF8.GetBytes(legacyJson));
 
-        var manifest = await serializer.ReadAsync(legacyStream);
+        using var manifest = await serializer.ReadAsync(legacyStream);
 
         Assert.AreEqual(ArchiveChangeManifest.LegacySchemaVersion, manifest.SchemaVersion);
         Assert.IsNull(manifest.RootFormat);
@@ -315,7 +315,7 @@ public sealed class JsonChangeManifestSerializerTests
         await using var previousStream = new MemoryStream(
             Encoding.UTF8.GetBytes(previousJson));
 
-        var manifest = await serializer.ReadAsync(previousStream);
+        using var manifest = await serializer.ReadAsync(previousStream);
 
         Assert.AreEqual(ArchiveChangeManifest.PreviousSchemaVersion, manifest.SchemaVersion);
         Assert.AreEqual("mirror", manifest.RootFormat);
@@ -367,8 +367,8 @@ public sealed class JsonChangeManifestSerializerTests
         await using var legacyStream = new MemoryStream(Encoding.UTF8.GetBytes(legacyJson));
         await using var previousStream = new MemoryStream(Encoding.UTF8.GetBytes(previousJson));
 
-        var legacyManifest = await serializer.ReadAsync(legacyStream);
-        var previousManifest = await serializer.ReadAsync(previousStream);
+        using var legacyManifest = await serializer.ReadAsync(legacyStream);
+        using var previousManifest = await serializer.ReadAsync(previousStream);
 
         Assert.IsNull(legacyManifest.Entries.Single().ContentHash);
         Assert.IsNull(previousManifest.Entries.Single().ContentHash);
@@ -714,7 +714,7 @@ public sealed class JsonChangeManifestSerializerTests
     {
         var serializer = CreateSerializer();
         var projectionId = CreateContentHash("projection");
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         (
             [
                 new
@@ -756,7 +756,7 @@ public sealed class JsonChangeManifestSerializerTests
     {
         var serializer = CreateSerializer();
         var originalContentHash = CreateContentHash("original");
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         ([
             new
             (
@@ -903,7 +903,7 @@ public sealed class JsonChangeManifestSerializerTests
         var serializer = CreateSerializer();
         const string providerFingerprint =
             "md5:11111111111111111111111111111111";
-        var manifest = serializer.Create
+        using var manifest = serializer.Create
         ([
             new
             (
@@ -916,7 +916,7 @@ public sealed class JsonChangeManifestSerializerTests
         await serializer.WriteAsync(manifest, stream);
         stream.Position = 0;
 
-        var result = await serializer.ReadAsync(stream);
+        using var result = await serializer.ReadAsync(stream);
 
         Assert.AreEqual(providerFingerprint, result.Entries.Single().ChangeFingerprint);
     }

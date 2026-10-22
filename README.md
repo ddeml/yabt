@@ -242,3 +242,14 @@ files when either limit is reached. Configure
 either memory setting forces disk; a custom temporary directory must already
 exist. The default directory is the OS temporary directory. Disk exhaustion is
 an I/O error; these settings do not limit payload size or total process memory.
+
+Choose temporary storage outside the source, archive, and restore trees. Known
+overlap is rejected before use; a shared parent containing separate directories
+is allowed.
+
+Large manifests use streaming JSON and temporary SQLite entry indexes rather
+than a fixed document-size limit. SQLite is private scratch storage for the
+current operation; archives remain ordinary ZIP/JSON files. ZIP restore indexes
+each central directory once. New ZIPs use standard ZIP64 output and a new
+fingerprint domain, so the first backup after upgrading can create one new
+historical package generation even for unchanged source content.

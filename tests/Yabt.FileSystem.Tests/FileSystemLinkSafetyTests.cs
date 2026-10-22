@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Yabt.Common;
+using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.FileSystem.Implementation;
@@ -270,6 +272,39 @@ public sealed class FileSystemLinkSafetyTests
         Assert.AreEqual(@"C:\folder", FileSystemDirectoryIdentity.NormalizeWindowsPhysicalPath(@"\\?\C:\folder"));
         const string volumePath = @"\\?\Volume{649d0c62-e577-46a3-8c61-24f3bca9e706}\folder";
         Assert.AreEqual(volumePath, FileSystemDirectoryIdentity.NormalizeWindowsPhysicalPath(volumePath));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ApprovedSourceLinkCannotReadTemporaryStorageButMayShareItsAncestor(bool insideLink)
+    {
+        using var fixture = new FileSystemLinkFixture();
+        fixture.LinkDirectory(Path.Combine(fixture.Archive, "linked"), fixture.Outside);
+        await File.WriteAllTextAsync(Path.Combine(fixture.Outside, "file.txt"), "ordinary source");
+        using var services = CreateServices(fixture.Archive);
+        var store = services.GetRequiredService<IObjectStore>();
+        ((ISourceDirectoryTraversal)store).ConfigureSourceTraversal
+        (
+            (_, _) => Task.FromResult(Approve("linked", "../outside"))
+        );
+        using var validation = TemporaryStorageValidation.BeginOperation(_ => { });
+        TemporaryStorageValidation.ValidateDirectory
+        (
+            insideLink ? Path.Combine(fixture.Outside, "temporary") : fixture.Root
+        );
+
+        if (insideLink)
+        {
+            var exception = await Assert.ThrowsExactlyAsync<YabtFileSystemException>(() => ListAsync(store, "linked"));
+            StringAssert.Contains(exception.Message, "contains temporary storage");
+            Assert.IsInstanceOfType<ObjectStoreOverlapException>(exception.InnerException);
+        }
+        else
+        {
+            var files = await ListAsync(store, "linked");
+            Assert.AreEqual("linked/file.txt", files.Single().Object!.Key);
+        }
     }
 
     private static FolderPolicy Approve(string name, string expectedTarget) => new

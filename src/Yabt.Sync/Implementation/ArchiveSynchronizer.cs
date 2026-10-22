@@ -25,6 +25,7 @@ internal sealed class ArchiveSynchronizer
     ILogicalStateManifestSerializer _logicalStateManifestSerializer,
     IOptionsMonitor<YabtSyncOptions> _options,
     ITemporaryContentFactory _temporaryContentFactory,
+    IOptionsMonitor<TemporaryContentOptions> _temporaryOptions,
     TimeProvider _timeProvider
 ) : IArchiveSynchronizer
 {
@@ -136,6 +137,10 @@ internal sealed class ArchiveSynchronizer
             request.DryRun);
 
         var context = await CreateContextAsync(request, cancellationToken);
+        using var temporaryStorage = TemporaryStorageValidation.BeginOperation(path =>
+            _locationResolver.ValidateTemporaryStorageLocations(path, context.SourceLocation, context.TargetStore));
+        TemporaryStorageValidation.ValidateDirectory(_temporaryOptions.CurrentValue.GetEffectiveTemporaryDirectory());
+        using var temporaryIndexOperation = TemporaryIndex.BeginOperation(_temporaryOptions.CurrentValue);
 
         return await ApplyProjectionAsync(
             context,
@@ -171,12 +176,17 @@ internal sealed class ArchiveSynchronizer
         var context = await CreateRestoreContextAsync(request, cancellationToken);
         var restoreTarget = _restoreDestinationFactory.Create(request.DestinationRoot);
         var destinationStore = restoreTarget.Store;
+        using var temporaryStorage = TemporaryStorageValidation.BeginOperation(path =>
+            _locationResolver.ValidateTemporaryStorageLocations(
+                path, context.SourceLocation, context.ArchiveStore, restoreTarget));
+        TemporaryStorageValidation.ValidateDirectory(_temporaryOptions.CurrentValue.GetEffectiveTemporaryDirectory());
+        using var temporaryIndexOperation = TemporaryIndex.BeginOperation(_temporaryOptions.CurrentValue);
         _locationResolver.ValidateRestoreLocations(
             context.SourceLocation,
             restoreTarget,
             context.ArchiveStore);
 
-        var changeManifestLoad = await ReadChangeManifestAsync(
+        using var changeManifestLoad = await ReadChangeManifestAsync(
             context.ArchiveStore,
             recoverInvalidManifest: false,
             cancellationToken);
@@ -221,7 +231,7 @@ internal sealed class ArchiveSynchronizer
             destinationLayout.HistPrefix,
             cancellationToken);
 
-        var restoreObjects = await LoadRestoreObjectsAsync(
+        using var restoreObjects = await LoadRestoreObjectsAsync(
             context,
             changeManifest,
             cancellationToken);
@@ -331,7 +341,7 @@ internal sealed class ArchiveSynchronizer
             .Select(failure => failure.RelativePath)
             .ToHashSet(plan.Namespace.PathComparer);
 
-        var logicalStateManifestLoad = await ReadLogicalStateManifestAsync(
+        using var logicalStateManifestLoad = await ReadLogicalStateManifestAsync(
             destinationStore,
             cancellationToken);
         var reconciliation = await CreateRestoreReconciliationAsync
@@ -650,7 +660,7 @@ internal sealed class ArchiveSynchronizer
     private IArchiveFormatHandler ResolveRestoreRootFormatHandler
     (
         ArchiveChangeManifest changeManifest,
-        IReadOnlyList<ArchiveProjectedObject> restoreObjects
+        RestoreArchiveObjects restoreObjects
     )
     {
         if (changeManifest.RootFormat is not null)
@@ -698,14 +708,15 @@ internal sealed class ArchiveSynchronizer
                 "Run backup once with the current YABT version before restoring it.");
     }
 
-    private async Task<IReadOnlyList<ArchiveProjectedObject>> LoadRestoreObjectsAsync
+    private async Task<RestoreArchiveObjects> LoadRestoreObjectsAsync
     (
         RestoreContext context,
         ArchiveChangeManifest changeManifest,
         CancellationToken cancellationToken
     )
     {
-        var listedObjects = new Dictionary<string, ArchiveObjectInfo>(StringComparer.Ordinal);
+        using var restoreIndex = TemporaryIndex.Create();
+        using var listedObjects = restoreIndex.CreateDictionary<ArchiveObjectInfo>();
         var livePrefix = ArchiveLayout.NormalizeObjectPrefix(context.Descriptor.Layout.LivePrefix);
         var internalKeys = CreateInternalObjectKeys(context.Descriptor.Layout);
         var internalPrefixes = CreateInternalObjectPrefixes(context.Descriptor.Layout);
@@ -744,9 +755,10 @@ internal sealed class ArchiveSynchronizer
             }
         }
 
-        var manifestEntries = new Dictionary<string, ArchiveChangeManifestEntry>(StringComparer.Ordinal);
+        using var manifestEntries = restoreIndex.CreateDictionary<ArchiveChangeManifestEntry>();
         foreach (var entry in changeManifest.Entries)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var relativePath = ArchiveLayout.NormalizeObjectKey(entry.RelativePath);
             if (string.IsNullOrEmpty(relativePath) ||
                 !ArchiveHash.IsValid(entry.ContentHash))
@@ -762,61 +774,65 @@ internal sealed class ArchiveSynchronizer
             }
         }
 
-        var unexpectedObjects = listedObjects.Keys
-            .Where(relativePath => !manifestEntries.ContainsKey(relativePath))
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-        if (unexpectedObjects.Length != 0)
+        var unexpectedObject = listedObjects.Enumerate(cancellationToken)
+            .Select(pair => pair.Key)
+            .FirstOrDefault(relativePath => !manifestEntries.ContainsKey(relativePath));
+        if (unexpectedObject is not null)
         {
             throw new YabtSyncException(
-                $"Archive contains live object '{unexpectedObjects[0]}' that is not covered by the change manifest.");
+                $"Archive contains live object '{unexpectedObject}' that is not covered by the change manifest.");
         }
 
-        var restoreObjects = new List<ArchiveProjectedObject>(manifestEntries.Count);
-        foreach (var pair in manifestEntries.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        var restoreObjects = new RestoreArchiveObjects(context.ArchiveStore, context.Descriptor.Layout);
+        try
         {
-            var archiveKey = context.Descriptor.Layout.ToLiveObjectKey(pair.Key);
-            listedObjects.TryGetValue(pair.Key, out var archiveObjectInfo);
-            if (archiveObjectInfo is null &&
-                !await context.ArchiveStore.ExistsAsync(archiveKey, cancellationToken))
+            foreach (var pair in manifestEntries.Enumerate(cancellationToken))
             {
-                throw new YabtSyncException(
-                    $"Change manifest restore object '{pair.Key}' is missing from the archive.");
-            }
+                var archiveKey = context.Descriptor.Layout.ToLiveObjectKey(pair.Key);
+                listedObjects.TryGetValue(pair.Key, out var archiveObjectInfo);
+                if (archiveObjectInfo is null &&
+                    !await context.ArchiveStore.ExistsAsync(archiveKey, cancellationToken))
+                {
+                    throw new YabtSyncException(
+                        $"Change manifest restore object '{pair.Key}' is missing from the archive.");
+                }
 
-            var lastModifiedUtc = archiveObjectInfo?.LastModifiedUtc;
-            if (ArchiveChangeFingerprint.TryParse(
+                var lastModifiedUtc = archiveObjectInfo?.LastModifiedUtc;
+                if (ArchiveChangeFingerprint.TryParse(
+                        pair.Value.ChangeFingerprint,
+                        out _,
+                        out var sourceLastModifiedUtc))
+                {
+                    lastModifiedUtc = sourceLastModifiedUtc;
+                }
+
+                var contentHash = pair.Value.ContentHash ??
+                    throw new YabtSyncException(
+                        $"Restore object '{pair.Key}' has no content hash.");
+                restoreObjects.Add(new
+                (
+                    pair.Key,
+                    archiveObjectInfo?.ContentLength ?? pair.Value.ArtifactLength,
+                    lastModifiedUtc,
+                    contentHash,
                     pair.Value.ChangeFingerprint,
-                    out _,
-                    out var sourceLastModifiedUtc))
-            {
-                lastModifiedUtc = sourceLastModifiedUtc;
+                    pair.Value.Projection
+                ));
             }
 
-            var contentHash = pair.Value.ContentHash ??
-                throw new YabtSyncException(
-                    $"Restore object '{pair.Key}' has no content hash.");
-            restoreObjects.Add(new
-            (
-                pair.Key,
-                currentCancellationToken => context.ArchiveStore.OpenReadAsync(
-                    archiveKey,
-                    currentCancellationToken),
-                archiveObjectInfo?.ContentLength ?? pair.Value.ArtifactLength,
-                lastModifiedUtc,
-                contentHash,
-                pair.Value.ChangeFingerprint,
-                pair.Value.Projection
-            ));
+            return restoreObjects;
         }
-
-        return restoreObjects;
+        catch (Exception)
+        {
+            restoreObjects.Dispose();
+            throw;
+        }
     }
 
     private async Task<RestorePlan> CreateRestorePlanAsync
     (
         RestoreContext context,
-        IReadOnlyList<ArchiveProjectedObject> restoreObjects,
+        RestoreArchiveObjects restoreObjects,
         IObjectStoreNamespace destinationNamespace,
         bool useProjectionProvenance,
         CancellationToken cancellationToken
@@ -1288,12 +1304,14 @@ internal sealed class ArchiveSynchronizer
         var filesToWrite = restorePlan.Files
             .Where(file => !blockedRestorePaths.Contains(file.RelativePath))
             .ToHashSet();
-        var logicalStateEntries = new Dictionary<string, ArchiveLogicalStateManifestEntry>(
-            pathComparer);
+        using var reconciliationIndex = TemporaryIndex.Create();
+        using var logicalStateEntries = reconciliationIndex.CreateDictionary<ArchiveLogicalStateManifestEntry>(
+            comparer: pathComparer);
         if (logicalStateManifest is not null)
         {
             foreach (var logicalStateEntry in logicalStateManifest.Entries)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!logicalStateEntries.TryAdd(
                         logicalStateEntry.LogicalRelativePath,
                         logicalStateEntry))
@@ -1978,7 +1996,7 @@ internal sealed class ArchiveSynchronizer
                 "Restore mutation did not initialize historization."))
             .CompleteAsync(cancellationToken);
 
-        var nextLogicalStateManifest = await CreateLogicalStateManifestAsync
+        using var nextLogicalStateManifest = await CreateLogicalStateManifestAsync
         (
             destinationStore,
             destinationLayout,
@@ -2364,30 +2382,30 @@ internal sealed class ArchiveSynchronizer
             pathComparer,
             cancellationToken
         );
-        var entries = new List<ArchiveLogicalStateManifestEntry>(plan.Files.Count);
-        foreach (var file in plan.Files)
+        return _logicalStateManifestSerializer.Create(EnumerateEntries());
+
+        IEnumerable<ArchiveLogicalStateManifestEntry> EnumerateEntries()
         {
-            var contentHash = file.ContentHash;
-            if (!destinationState.Files.TryGetValue(file.RelativePath, out var destinationFile) ||
-                !ArchiveChangeFingerprint.TryCreate(
-                    destinationFile.ContentLength,
-                    destinationFile.LastModifiedUtc,
-                    out var statFingerprint) ||
-                contentHash is null ||
-                !ArchiveHash.IsValid(contentHash))
+            foreach (var file in plan.Files)
             {
-                throw new YabtSyncException(
-                    $"Restore destination file '{file.RelativePath}' does not provide complete " +
-                        "logical-state manifest evidence after restore.");
+                cancellationToken.ThrowIfCancellationRequested();
+                var contentHash = file.ContentHash;
+                if (!destinationState.Files.TryGetValue(file.RelativePath, out var destinationFile) ||
+                    !ArchiveChangeFingerprint.TryCreate(
+                        destinationFile.ContentLength,
+                        destinationFile.LastModifiedUtc,
+                        out var statFingerprint) ||
+                    contentHash is null ||
+                    !ArchiveHash.IsValid(contentHash))
+                {
+                    throw new YabtSyncException(
+                        $"Restore destination file '{file.RelativePath}' does not provide complete " +
+                            "logical-state manifest evidence after restore.");
+                }
+
+                yield return new(file.RelativePath, statFingerprint, contentHash);
             }
-
-            entries.Add(new(
-                file.RelativePath,
-                statFingerprint,
-                contentHash));
         }
-
-        return _logicalStateManifestSerializer.Create(entries);
     }
 
     private async Task UploadLogicalStateManifestAsync
@@ -2465,6 +2483,10 @@ internal sealed class ArchiveSynchronizer
         using var configurationWarnings = ConfigurationWarnings.BeginOperation();
 
         var context = await CreateContextAsync(request, cancellationToken);
+        using var temporaryStorage = TemporaryStorageValidation.BeginOperation(path =>
+            _locationResolver.ValidateTemporaryStorageLocations(path, context.SourceLocation, context.TargetStore));
+        TemporaryStorageValidation.ValidateDirectory(_temporaryOptions.CurrentValue.GetEffectiveTemporaryDirectory());
+        using var temporaryIndexOperation = TemporaryIndex.BeginOperation(_temporaryOptions.CurrentValue);
 
         return await ApplyProjectionAsync(
             context,
@@ -2672,16 +2694,19 @@ internal sealed class ArchiveSynchronizer
 
         var changeManifestFileName = GetChangeManifestFileName(
             context.TargetDescriptor.ChangeManifestCompression);
-        var changeManifestLoad = await ReadChangeManifestAsync(
+        using var changeManifestLoad = await ReadChangeManifestAsync(
             context.TargetStore,
             recoverInvalidManifest: writeChanges || byteForByte,
             cancellationToken);
         var previousChangeManifest = changeManifestLoad.Manifest;
-        var previousManifestEntries = previousChangeManifest?.Entries.ToDictionary(
-            entry => entry.RelativePath,
-            StringComparer.Ordinal) ??
-            new Dictionary<string, ArchiveChangeManifestEntry>(StringComparer.Ordinal);
-        var nextManifestEntries = new Dictionary<string, ArchiveChangeManifestEntry>(StringComparer.Ordinal);
+        using var manifestIndex = TemporaryIndex.Create();
+        using var previousManifestEntries = manifestIndex.CreateDictionary<ArchiveChangeManifestEntry>();
+        foreach (var entry in previousChangeManifest?.Entries ?? [])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            previousManifestEntries.Add(entry.RelativePath, entry);
+        }
+        using var nextManifestEntries = manifestIndex.CreateDictionary<ArchiveChangeManifestEntry>();
 
         var targetFolders = new Dictionary<string, TargetFolderState>(StringComparer.Ordinal);
         var absentTargetFolders = new HashSet<string>(StringComparer.Ordinal);
@@ -3359,7 +3384,7 @@ internal sealed class ArchiveSynchronizer
                     cancellationToken);
             }
 
-            var nextChangeManifest = _changeManifestSerializer.Create(
+            using var nextChangeManifest = _changeManifestSerializer.Create(
                 nextManifestEntries.Values,
                 context.Policy.Format,
                 context.SourceDocument?.ContentHash,
@@ -3636,7 +3661,7 @@ internal sealed class ArchiveSynchronizer
         ArchiveHistorizer? historizer,
         ArchiveLayout targetLayout,
         IEnumerable<BackupRepresentationConflict> conflicts,
-        Dictionary<string, ArchiveChangeManifestEntry> previousManifestEntries,
+        DiskDictionary<ArchiveChangeManifestEntry> previousManifestEntries,
         ArchiveSyncSummary summary,
         bool writeChanges,
         bool verifyOnly,
@@ -3820,7 +3845,7 @@ internal sealed class ArchiveSynchronizer
         ArchiveLayout targetLayout,
         Dictionary<string, TargetFolderState> targetFolders,
         IReadOnlySet<string> desiredFolderPaths,
-        Dictionary<string, ArchiveChangeManifestEntry> previousManifestEntries,
+        DiskDictionary<ArchiveChangeManifestEntry> previousManifestEntries,
         ArchiveSyncSummary summary,
         bool writeChanges,
         bool verifyOnly,
@@ -3913,7 +3938,7 @@ internal sealed class ArchiveSynchronizer
         ArchiveHistorizer? historizer,
         ArchiveLayout targetLayout,
         string relativeFolderPath,
-        Dictionary<string, ArchiveChangeManifestEntry> previousManifestEntries,
+        DiskDictionary<ArchiveChangeManifestEntry> previousManifestEntries,
         ArchiveSyncSummary summary,
         bool writeChanges,
         bool verifyOnly,
@@ -4180,6 +4205,7 @@ internal sealed class ArchiveSynchronizer
             return new(existingFileNames, false, null);
         }
 
+        ArchiveChangeManifest? selectedManifest = null;
         try
         {
             if (invalidationMarkerExists)
@@ -4188,30 +4214,38 @@ internal sealed class ArchiveSynchronizer
                     "A prior change-manifest replacement did not complete.");
             }
 
-            ArchiveChangeManifest? selectedManifest = null;
             foreach (var fileName in existingFileNames)
             {
                 var manifest = await ReadChangeManifestFileAsync(
                     targetStore,
                     fileName,
                     cancellationToken);
-                if (selectedManifest is not null &&
-                    !string.Equals(
-                        selectedManifest.ManifestHash,
-                        manifest.ManifestHash,
-                        StringComparison.Ordinal))
+                if (selectedManifest is null)
                 {
-                    throw new InvalidDataException(
-                        "The compressed and uncompressed change manifests describe different live states.");
+                    selectedManifest = manifest;
                 }
-
-                selectedManifest = manifest;
+                else
+                {
+                    using (manifest)
+                    {
+                        if (!string.Equals(
+                                selectedManifest.ManifestHash,
+                                manifest.ManifestHash,
+                                StringComparison.Ordinal))
+                        {
+                            throw new InvalidDataException(
+                                "The compressed and uncompressed change manifests describe different live states.");
+                        }
+                    }
+                }
             }
 
             return new(existingFileNames, false, selectedManifest);
         }
         catch (Exception ex)
         {
+            selectedManifest?.Dispose();
+            cancellationToken.ThrowIfCancellationRequested();
             var evidenceFileNames = invalidationMarkerExists ?
                 existingFileNames.Append(ArchiveChangeManifest.InvalidationMarkerFileName) :
                 existingFileNames;
@@ -5916,8 +5950,10 @@ internal sealed class ArchiveSynchronizer
         IReadOnlyList<string> ExistingFileNames,
         bool InvalidationMarkerExists,
         ArchiveChangeManifest? Manifest
-    )
+    ) : IDisposable
     {
+        public void Dispose() => Manifest?.Dispose();
+
         public bool Exists => ExistingFileNames.Count != 0 || InvalidationMarkerExists;
 
         public bool RequiresInvalidationMarker =>
@@ -5994,7 +6030,10 @@ internal sealed class ArchiveSynchronizer
         bool ManifestExists,
         bool InvalidationMarkerExists,
         ArchiveLogicalStateManifest? Manifest
-    );
+    ) : IDisposable
+    {
+        public void Dispose() => Manifest?.Dispose();
+    }
 
     private sealed record StreamComparison
     (

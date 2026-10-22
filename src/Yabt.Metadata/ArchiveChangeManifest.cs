@@ -12,7 +12,7 @@ public sealed record ArchiveChangeManifest
     string? RootFormat = default,
     string? RootDescriptorContentHash = default,
     long? RootDescriptorContentLength = default
-)
+) : IDisposable
 {
     public const string UncompressedFileName = ".yabt-change-manifest.json";
     public const string BrotliFileName = ".yabt-change-manifest.json.br";
@@ -21,4 +21,6 @@ public sealed record ArchiveChangeManifest
     public const int LegacySchemaVersion = 1;
     public const int PreviousSchemaVersion = 2;
     public const int ExpectedSchemaVersion = 3;
+
+    public void Dispose() => (Entries as IDisposable)?.Dispose();
 }

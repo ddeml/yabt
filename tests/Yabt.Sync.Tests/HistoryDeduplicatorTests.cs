@@ -15,6 +15,93 @@ namespace Yabt.Sync.Tests;
 public sealed class HistoryDeduplicatorTests
 {
     [TestMethod]
+    public async Task DeduplicateAsyncRejectsTemporaryStorageInsideTheArchiveBeforeLocking()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var targetRoot = Path.Combine(workspace, "target");
+            await InitializeArchiveRootAsync(archiveRoot, targetRoot);
+            var temporaryRoot = Directory.CreateDirectory(Path.Combine(targetRoot, "temporary")).FullName;
+            var registrations = CreateServices();
+            registrations.AddSingleton<IConfiguration>
+            (
+                new ConfigurationBuilder().AddInMemoryCollection
+                (
+                    new Dictionary<string, string?> { ["TemporaryContent:TemporaryDirectory"] = temporaryRoot }
+                ).Build()
+            );
+            registrations.AddYabtTemporaryContent("TemporaryContent");
+            using var services = registrations.BuildServiceProvider();
+
+            var exception = await Assert.ThrowsAsync<YabtSyncException>
+            (
+                () => services.GetRequiredService<IHistoryDeduplicator>()
+                    .DeduplicateAsync(new HistoryDeduplicationRequest(archiveRoot))
+            );
+
+            StringAssert.Contains(exception.ToString(), "Temporary storage");
+            Assert.IsEmpty(Directory.GetFiles(temporaryRoot));
+            Assert.IsFalse(Directory.Exists(Path.Combine(targetRoot, ".yabt-tmp")));
+        }
+        finally { DeleteWorkspace(workspace); }
+    }
+
+    [TestMethod]
+    public async Task DeduplicateAsyncRetainsStableBackingsAcrossManyInterleavedContentGroups()
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var targetRoot = Path.Combine(workspace, "target");
+            var temporaryRoot = Directory.CreateDirectory(Path.Combine(workspace, "temporary-content")).FullName;
+            await InitializeArchiveRootAsync(archiveRoot, targetRoot);
+            const int groupCount = 3;
+            const int occurrenceCount = 96;
+            for (var number = occurrenceCount - 1; number >= 0; number--)
+            {
+                var content = CreateContent(6_000 + number % groupCount);
+                await WriteBytesAsync
+                (
+                    Path.Combine(targetRoot, ".yabt-hist", number.ToString("D4"), "file.bin"), content
+                );
+            }
+            var registrations = CreateServices();
+            registrations.AddSingleton<IConfiguration>
+            (
+                new ConfigurationBuilder().AddInMemoryCollection
+                (
+                    new Dictionary<string, string?>
+                    {
+                        ["TemporaryContent:TotalMemoryBudgetBytes"] = "0",
+                        ["TemporaryContent:TemporaryDirectory"] = temporaryRoot,
+                    }
+                ).Build()
+            );
+            registrations.AddYabtTemporaryContent("TemporaryContent");
+            using var services = registrations.BuildServiceProvider();
+            var deduplicator = services.GetRequiredService<IHistoryDeduplicator>();
+
+            var first = await deduplicator.DeduplicateAsync(new(archiveRoot));
+            var second = await deduplicator.DeduplicateAsync(new(archiveRoot));
+
+            Assert.IsTrue(first.Completed);
+            Assert.IsTrue(second.Completed);
+            Assert.AreEqual(occurrenceCount - groupCount, first.ReplacedObjectCount);
+            Assert.AreEqual(0, second.ReplacedObjectCount);
+            for (var group = 0; group < groupCount; group++)
+            {
+                Assert.IsTrue(File.Exists(Path.Combine(targetRoot, ".yabt-hist", group.ToString("D4"), "file.bin")));
+            }
+            Assert.HasCount(groupCount, Directory.GetFiles(targetRoot, "*.bin", SearchOption.AllDirectories));
+            Assert.IsEmpty(Directory.GetFiles(temporaryRoot));
+        }
+        finally { DeleteWorkspace(workspace); }
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task DeduplicateAsyncReplaysManifestsAndReferencesWithDiskOnlyBuffering(bool corruptManifest)
@@ -134,7 +221,7 @@ public sealed class HistoryDeduplicatorTests
             Assert.IsTrue(File.Exists(manifestPath));
             var manifestSerializer = services.GetRequiredService<IHistoryManifestSerializer>();
             await using var manifestStream = File.OpenRead(manifestPath);
-            var manifest = await manifestSerializer.ReadAsync(manifestStream);
+            using var manifest = await manifestSerializer.ReadAsync(manifestStream);
             var entries = manifest.Entries.ToArray();
             Assert.AreEqual(2, entries.Length);
             Assert.AreEqual(1, entries.Count(entry => string.Equals(
@@ -526,7 +613,7 @@ public sealed class HistoryDeduplicatorTests
             Assert.IsTrue(rebuilt.Completed);
             var manifestSerializer = services.GetRequiredService<IHistoryManifestSerializer>();
             await using var manifestStream = File.OpenRead(manifestPath);
-            var manifest = await manifestSerializer.ReadAsync(manifestStream);
+            using var manifest = await manifestSerializer.ReadAsync(manifestStream);
             Assert.AreEqual(1, manifest.Entries.Count());
         }
         finally

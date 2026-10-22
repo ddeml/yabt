@@ -9,9 +9,11 @@ public sealed record ArchiveHistoryManifest
     [property: JsonRequired] int SchemaVersion,
     [property: JsonRequired] IEnumerable<ArchiveHistoryManifestEntry> Entries,
     [property: JsonRequired] string ManifestHash
-)
+) : IDisposable
 {
     public const string InvalidationMarkerFileName = ".yabt-history-manifest.invalid";
     public const string ExpectedDocumentType = "yabt.historyManifest";
     public const int ExpectedSchemaVersion = 1;
+
+    public void Dispose() => (Entries as IDisposable)?.Dispose();
 }

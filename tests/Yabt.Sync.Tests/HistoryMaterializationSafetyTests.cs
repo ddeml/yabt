@@ -152,6 +152,7 @@ public sealed class HistoryMaterializationSafetyTests
     {
         var services = new ServiceCollection();
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddYabtFileSystemObjectStore();
         services.AddYabtMetadata();
         services.AddYabtSync();
         services.AddSingleton<IBackupRootLocator, SyntheticRootLocator>();

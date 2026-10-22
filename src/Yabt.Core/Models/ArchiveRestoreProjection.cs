@@ -1,5 +1,10 @@
 namespace Yabt.Core.Models;
 
+/// <summary>
+/// Owns a restore representation and its replayable object/directory sequences.
+/// Sequences must remain stable and available until this projection is disposed;
+/// they may read temporary indexes and are not eagerly copied into memory.
+/// </summary>
 public sealed class ArchiveRestoreProjection(
     IEnumerable<ArchiveProjectedObject>? objects = default,
     IEnumerable<string>? directories = default,
@@ -8,9 +13,11 @@ public sealed class ArchiveRestoreProjection(
 {
     private IAsyncDisposable? _lifetime = lifetime;
 
-    public IReadOnlyList<ArchiveProjectedObject> Objects { get; } = objects?.ToArray() ?? [];
+    public IReadOnlyCollection<ArchiveProjectedObject> Objects { get; } =
+        new Implementation.ArchiveProjectionCollection<ArchiveProjectedObject>(objects ?? []);
 
-    public IReadOnlyList<string> Directories { get; } = directories?.ToArray() ?? [];
+    public IReadOnlyCollection<string> Directories { get; } =
+        new Implementation.ArchiveProjectionCollection<string>(directories ?? []);
 
     public async ValueTask DisposeAsync()
     {

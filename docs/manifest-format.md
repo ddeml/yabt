@@ -112,10 +112,17 @@ artifact is new or changed, backup revalidates a sibling that matched only quick
 evidence against the same materialized projection. The live change manifest is
 published only after both artifacts describe the same generation.
 
-The current ZIP handler limits each serialized package manifest to 16 MiB.
-Backup checks the limit before it can return package content, and restore
-applies the same bound to both copies. This prevents backup from publishing a
-package that its matching restore implementation can never read.
+Package manifests grow with file count and no longer have a 16 MiB limit.
+Readers stream entries into temporary disk indexes, writers stream canonical
+hashes and JSON, and serialized copies use spillable content. The embedded and
+adjacent copies are still compared byte for byte. This changes resource handling,
+not the JSON schema or integrity rules.
+
+The ZIP writer uses standard ZIP64 records and spools the central directory.
+Its v2 logical fingerprint domain gives newly generated packages distinct names
+from the preceding writer. A first backup after upgrading may historize an old
+package and publish the new representation even when its source is unchanged.
+Restore continues to accept previously generated valid ZIP packages.
 
 Package manifests use document type `yabt.packageManifest` and schema version 1.
 Their fields are:

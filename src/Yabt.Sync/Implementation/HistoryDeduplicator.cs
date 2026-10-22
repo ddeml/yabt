@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Frozen;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -15,11 +16,13 @@ internal sealed class HistoryDeduplicator
 (
     ILogger<HistoryDeduplicator> _logger,
     IBackupRootLocator _backupRootLocator,
+    IArchiveLocationResolver _locationResolver,
     IEnumerable<IBackupRootStoreResolver> storeResolvers,
     IHistoryManifestSerializer _historyManifestSerializer,
     IHistoryReferenceSerializer _historyReferenceSerializer,
     IOptionsMonitor<YabtSyncOptions> _options,
-    ITemporaryContentFactory _temporaryContentFactory
+    ITemporaryContentFactory _temporaryContentFactory,
+    IOptionsMonitor<TemporaryContentOptions> _temporaryOptions
 ) : IHistoryDeduplicator
 {
     private const int BufferSize = 81_920;
@@ -72,6 +75,12 @@ internal sealed class HistoryDeduplicator
                 descriptor,
                 rootLocation.RootPath,
                 request.TargetStoreId);
+            using var temporaryStorage = TemporaryStorageValidation.BeginOperation
+            (
+                path => _locationResolver.ValidateTemporaryStorageLocations(path, source: null, targetStore)
+            );
+            using var indexOperation = TemporaryIndex.BeginOperation(_temporaryOptions.CurrentValue);
+            using var index = TemporaryIndex.Create();
             if (targetStore is not IArchiveMutableObjectStore mutableTargetStore)
             {
                 throw new YabtSyncException(
@@ -108,26 +117,34 @@ internal sealed class HistoryDeduplicator
             var scan = await ScanHistoryAsync(
                 mutableTargetStore,
                 descriptor.Layout,
+                index,
                 operationCancellationToken);
-            var referenceBackings = SelectIndependentReferenceBackings
+            using var referenceBackings = SelectIndependentReferenceBackings
             (
-                scan.Occurrences.Concat(scan.OrphanReferences)
+                scan.Occurrences.Concat(scan.OrphanReferences),
+                index,
+                operationCancellationToken
             );
 
-            var plans = await CreateDeduplicationPlansAsync(
+            using var plans = await CreateDeduplicationPlansAsync(
                 targetStore,
                 descriptor.Layout,
                 scan.Occurrences,
                 scan.StoredRelativePaths,
                 tinyFileMaximumBytes,
+                index,
                 operationCancellationToken);
-            var canonicalBackings = referenceBackings.Concat(plans.Select(plan => plan.Canonical))
-                .DistinctBy(occurrence => occurrence.PhysicalKey, StringComparer.Ordinal)
-                .ToArray();
+            using var canonicalBackings = index.CreateDictionary<HistoryOccurrence>();
+            var backingCandidates = referenceBackings.Concat(plans.Select(plan => plan.Canonical));
+            foreach (var candidate in backingCandidates)
+            {
+                operationCancellationToken.ThrowIfCancellationRequested();
+                canonicalBackings.TryAdd(candidate.PhysicalKey, candidate);
+            }
             await EnsureCanonicalBackingsStillMatchAsync
             (
                 mutableTargetStore,
-                canonicalBackings,
+                canonicalBackings.Values,
                 operationCancellationToken
             );
             var objectsToRemove = plans.Select(plan => plan.Original).Concat(scan.OrphanReferences);
@@ -139,28 +156,45 @@ internal sealed class HistoryDeduplicator
             LogUnchangedHistoryOccurrences(
                 scan.Occurrences,
                 plans,
-                tinyFileMaximumBytes);
+                tinyFileMaximumBytes,
+                index,
+                operationCancellationToken);
 
-            var nextEntries = scan.Occurrences.ToDictionary(
-                occurrence => occurrence.Entry.RelativePath,
-                occurrence => occurrence.Entry,
-                StringComparer.Ordinal);
+            using var nextEntries = index.CreateDictionary<ArchiveHistoryManifestEntry>();
+            var tinyObjectCount = 0;
+            var referenceObjectCount = 0;
+            foreach (var occurrence in scan.Occurrences)
+            {
+                operationCancellationToken.ThrowIfCancellationRequested();
+                nextEntries.Add(occurrence.Entry.RelativePath, occurrence.Entry);
+                if (occurrence.IsDeduplicationEligible && occurrence.Entry.ContentLength <= tinyFileMaximumBytes)
+                {
+                    tinyObjectCount++;
+                }
+                if (string.Equals
+                (
+                    occurrence.Entry.Representation, ArchiveHistoryEntryRepresentation.Reference, StringComparison.Ordinal
+                )) { referenceObjectCount++; }
+            }
+            long bytesSaved = 0;
             foreach (var plan in plans)
             {
+                operationCancellationToken.ThrowIfCancellationRequested();
                 nextEntries[plan.Original.Entry.RelativePath] = plan.Reference.Entry;
+                bytesSaved = checked(bytesSaved + plan.BytesSaved);
             }
 
-            var nextManifest = _historyManifestSerializer.Create(nextEntries.Values);
-            var duplicateGroupCount = CountDuplicateGroups(scan.Occurrences);
-            var tinyObjectCount = scan.Occurrences.Count(
-                occurrence => occurrence.IsDeduplicationEligible &&
-                    occurrence.Entry.ContentLength <= tinyFileMaximumBytes);
-            var bytesSaved = plans.Sum(plan => plan.BytesSaved);
+            using var nextManifest = _historyManifestSerializer.Create
+            (
+                nextEntries.Enumerate(operationCancellationToken).Select(pair => pair.Value)
+            );
+            var duplicateGroupCount = CountDuplicateGroups(scan.Occurrences, index, operationCancellationToken);
 
             if (request.DryRun)
             {
                 foreach (var plan in plans)
                 {
+                    operationCancellationToken.ThrowIfCancellationRequested();
                     _logger.LogHistoryWouldDeduplicateObject(
                         plan.Original.Entry.RelativePath,
                         plan.Canonical.Entry.RelativePath,
@@ -169,6 +203,7 @@ internal sealed class HistoryDeduplicator
 
                 foreach (var orphanReference in scan.OrphanReferences)
                 {
+                    operationCancellationToken.ThrowIfCancellationRequested();
                     _logger.LogHistoryControlMetadataOperation(
                         "Would delete orphan reference",
                         orphanReference.Entry.StoredRelativePath);
@@ -177,6 +212,7 @@ internal sealed class HistoryDeduplicator
                 return CreateResult(
                     dryRun: true,
                     scan,
+                    referenceObjectCount,
                     duplicateGroupCount,
                     plans.Count,
                     tinyObjectCount,
@@ -184,9 +220,9 @@ internal sealed class HistoryDeduplicator
             }
 
             var manifestNeedsWrite = markerExists ||
-                existingManifest.Manifest is null ||
+                existingManifest.ManifestHash is null ||
                 !string.Equals(
-                    existingManifest.Manifest.ManifestHash,
+                    existingManifest.ManifestHash,
                     nextManifest.ManifestHash,
                     StringComparison.Ordinal) ||
                 plans.Count != 0 ||
@@ -202,7 +238,7 @@ internal sealed class HistoryDeduplicator
                     existingManifest,
                     nextManifest,
                     plans,
-                    canonicalBackings,
+                    canonicalBackings.Values,
                     scan.OrphanReferences,
                     operationCancellationToken);
             }
@@ -216,6 +252,7 @@ internal sealed class HistoryDeduplicator
             return CreateResult(
                 dryRun: false,
                 scan,
+                referenceObjectCount,
                 duplicateGroupCount,
                 plans.Count,
                 tinyObjectCount,
@@ -288,13 +325,14 @@ internal sealed class HistoryDeduplicator
     (
         IArchiveMutableObjectStore targetStore,
         ArchiveLayout layout,
+        TemporaryIndex index,
         CancellationToken cancellationToken
     )
     {
         _logger.LogTrace(nameof(ScanHistoryAsync));
 
         var historyPrefix = ArchiveLayout.NormalizeObjectKey(layout.HistPrefix);
-        var listedObjects = new List<ArchiveObjectInfo>();
+        using var listedObjects = index.CreateCollection<ArchiveObjectInfo>();
         _logger.LogHistoryObjectRead(historyPrefix, "history enumeration");
         var folderItems = targetStore.GetFolderItemsAsync(
             historyPrefix,
@@ -305,17 +343,15 @@ internal sealed class HistoryDeduplicator
             cancellationToken.ThrowIfCancellationRequested();
             if (item.Object is not null)
             {
-                listedObjects.Add(item.Object);
+                listedObjects.Add(item.Object, item.Object.Key);
             }
         }
 
-        listedObjects.Sort(static (left, right) =>
-            string.Compare(left.Key, right.Key, StringComparison.Ordinal));
-
-        var actuals = new Dictionary<string, HistoryOccurrence>(StringComparer.Ordinal);
-        var references = new Dictionary<string, List<HistoryOccurrence>>(StringComparer.Ordinal);
-        var storedRelativePaths = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var archiveObject in listedObjects)
+        using var actuals = index.CreateDictionary<HistoryOccurrence>();
+        using var references = index.CreateCollection<HistoryOccurrence>();
+        var storedRelativePaths = index.CreateSet();
+        var orderedObjects = listedObjects.EnumerateOrdered(cancellationToken);
+        foreach (var archiveObject in orderedObjects)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -333,15 +369,11 @@ internal sealed class HistoryDeduplicator
                 cancellationToken);
             if (referenceOccurrence is not null)
             {
-                if (!references.TryGetValue(
-                        referenceOccurrence.Entry.RelativePath,
-                        out var samePathReferences))
-                {
-                    samePathReferences = [];
-                    references.Add(referenceOccurrence.Entry.RelativePath, samePathReferences);
-                }
-
-                samePathReferences.Add(referenceOccurrence);
+                references.Add
+                (
+                    referenceOccurrence,
+                    referenceOccurrence.Entry.RelativePath + "\0" + referenceOccurrence.Entry.StoredRelativePath
+                );
                 continue;
             }
 
@@ -357,43 +389,47 @@ internal sealed class HistoryDeduplicator
             }
         }
 
-        var occurrences = new List<HistoryOccurrence>(actuals.Count + references.Count);
-        occurrences.AddRange(actuals.Values);
-        var orphanReferences = new List<HistoryOccurrence>();
-        foreach (var pair in references.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        using var occurrencesByPath = index.CreateDictionary<HistoryOccurrence>();
+        foreach (var actual in actuals)
         {
-            pair.Value.Sort(static (left, right) => string.Compare(
-                left.Entry.StoredRelativePath,
-                right.Entry.StoredRelativePath,
-                StringComparison.Ordinal));
+            cancellationToken.ThrowIfCancellationRequested();
+            occurrencesByPath.Add(actual.Key, actual.Value);
+        }
 
-            if (actuals.ContainsKey(pair.Key))
+        var orphanReferences = index.CreateCollection<HistoryOccurrence>();
+        HistoryOccurrence? selectedReference = null;
+        var orderedReferences = references.EnumerateOrdered(cancellationToken);
+        foreach (var reference in orderedReferences)
+        {
+            if (actuals.TryGetValue(reference.Entry.RelativePath, out var actual))
             {
-                foreach (var referenceOccurrence in pair.Value)
-                {
-                    EnsureActualAndReferenceDescribeSameOccurrence(
-                        actuals[pair.Key],
-                        referenceOccurrence);
-                }
-
-                orphanReferences.AddRange(pair.Value);
+                EnsureActualAndReferenceDescribeSameOccurrence(actual, reference);
+                orphanReferences.Add(reference);
                 continue;
             }
 
-            var selectedReference = pair.Value[0];
-            for (var index = 1; index < pair.Value.Count; index++)
+            if (selectedReference is not null && string.Equals
+                (
+                    selectedReference.Entry.RelativePath,
+                    reference.Entry.RelativePath,
+                    StringComparison.Ordinal
+                ))
             {
-                EnsureReferencesDescribeSameContent(selectedReference, pair.Value[index]);
-                orphanReferences.Add(pair.Value[index]);
+                EnsureReferencesDescribeSameContent(selectedReference, reference);
+                orphanReferences.Add(reference);
+                continue;
             }
 
-            occurrences.Add(selectedReference);
+            selectedReference = reference;
+            occurrencesByPath.Add(reference.Entry.RelativePath, reference);
         }
 
-        occurrences.Sort(static (left, right) => string.Compare(
-            left.Entry.RelativePath,
-            right.Entry.RelativePath,
-            StringComparison.Ordinal));
+        var occurrences = index.CreateCollection<HistoryOccurrence>();
+        foreach (var occurrence in occurrencesByPath.Values)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            occurrences.Add(occurrence);
+        }
 
         return new(occurrences, orphanReferences, storedRelativePaths);
     }
@@ -459,28 +495,12 @@ internal sealed class HistoryDeduplicator
     (
         Stream serializedReference,
         CancellationToken cancellationToken
-    )
-    {
-        try
-        {
-            using var document = await JsonDocument.ParseAsync
-            (
-                serializedReference,
-                cancellationToken: cancellationToken
-            );
-            return document.RootElement.ValueKind == JsonValueKind.Object &&
-                document.RootElement.TryGetProperty("documentType", out var documentType) &&
-                string.Equals(
-                    documentType.GetString(),
-                    ArchiveHistoryContentReference.ExpectedDocumentType,
-                    StringComparison.Ordinal);
-        }
-        catch (Exception ex)
-        {
-            if (ex is JsonException) { return false; }
-            throw;
-        }
-    }
+    ) => await MetadataJsonDocumentType.HasAsync
+    (
+        serializedReference,
+        ArchiveHistoryContentReference.ExpectedDocumentType,
+        cancellationToken
+    );
 
     private async Task<HistoryOccurrence> ReadMaterializedOccurrenceAsync
     (
@@ -522,103 +542,104 @@ internal sealed class HistoryDeduplicator
         );
     }
 
-    private async Task<List<ReferencePlan>> CreateDeduplicationPlansAsync
+    private async Task<DiskEntryCollection<ReferencePlan>> CreateDeduplicationPlansAsync
     (
         IObjectStore targetStore,
         ArchiveLayout layout,
-        IReadOnlyList<HistoryOccurrence> occurrences,
-        HashSet<string> storedRelativePaths,
+        IEnumerable<HistoryOccurrence> occurrences,
+        ISet<string> storedRelativePaths,
         long tinyFileMaximumBytes,
+        TemporaryIndex index,
         CancellationToken cancellationToken
     )
     {
         _logger.LogTrace(nameof(CreateDeduplicationPlansAsync));
 
-        var plans = new List<ReferencePlan>();
-        var groups = occurrences
-            .Where(occurrence => occurrence.IsDeduplicationEligible)
-            .GroupBy(
-                occurrence => (occurrence.Entry.ContentHash, occurrence.Entry.ContentLength),
-                occurrence => occurrence)
-            .Where(group => group.Count() > 1)
-            .OrderBy(group => group.Key.ContentHash, StringComparer.Ordinal)
-            .ThenBy(group => group.Key.ContentLength);
-
-        foreach (var group in groups)
+        var plans = index.CreateCollection<ReferencePlan>();
+        using var candidates = index.CreateCollection<HistoryOccurrence>();
+        foreach (var occurrence in occurrences)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            var materialized = group
-                .Where(occurrence => occurrence.IsIndependentMaterialization && string.Equals(
+            if (occurrence.IsDeduplicationEligible && occurrence.IsIndependentMaterialization &&
+                occurrence.Entry.ContentLength > tinyFileMaximumBytes && string.Equals
+                (
                     occurrence.Entry.Representation,
                     ArchiveHistoryEntryRepresentation.Materialized,
-                    StringComparison.Ordinal))
-                .OrderBy(occurrence => occurrence.Entry.RelativePath, StringComparer.Ordinal)
-                .ToArray();
-            if (materialized.Length < 2 || group.Key.ContentLength <= tinyFileMaximumBytes)
+                    StringComparison.Ordinal
+                ))
             {
+                candidates.Add
+                (
+                    occurrence,
+                    ContentGroupKey(occurrence) + "\0" + occurrence.Entry.RelativePath
+                );
+            }
+        }
+
+        HistoryOccurrence? canonical = null;
+        string? currentGroup = null;
+        var orderedCandidates = candidates.EnumerateOrdered(cancellationToken);
+        foreach (var duplicate in orderedCandidates)
+        {
+            var groupKey = ContentGroupKey(duplicate);
+            if (canonical is null || !string.Equals(currentGroup, groupKey, StringComparison.Ordinal))
+            {
+                canonical = duplicate;
+                currentGroup = groupKey;
                 continue;
             }
 
-            var canonical = materialized[0];
-            for (var index = 1; index < materialized.Length; index++)
-            {
-                var duplicate = materialized[index];
-                _logger.LogHistoryObjectRead(
-                    canonical.Entry.RelativePath,
-                    "byte-for-byte deduplication comparison");
-                _logger.LogHistoryObjectRead(
-                    duplicate.Entry.RelativePath,
-                    "byte-for-byte deduplication comparison");
-                if (!await HaveSameBytesAsync(
-                        targetStore,
-                        canonical.PhysicalKey,
-                        duplicate.PhysicalKey,
-                        cancellationToken))
-                {
-                    throw new YabtSyncException(
-                        $"History objects '{canonical.Entry.RelativePath}' and " +
-                        $"'{duplicate.Entry.RelativePath}' have the same content hash and length " +
-                        "but different bytes.");
-                }
-
-                var referenceRelativePath = await AllocateReferenceRelativePathAsync(
-                    targetStore,
-                    layout,
-                    duplicate.Entry.RelativePath,
-                    storedRelativePaths,
-                    cancellationToken);
-                var referenceEntry = duplicate.Entry with
-                {
-                    StoredRelativePath = referenceRelativePath,
-                    Representation = ArchiveHistoryEntryRepresentation.Reference,
-                };
-                var reference = _historyReferenceSerializer.Create(referenceEntry);
-                await using var serializedReference = _temporaryContentFactory.Create();
-                await _historyReferenceSerializer.WriteAsync(
-                    reference,
-                    serializedReference,
-                    cancellationToken);
-                var manifestEntryAdditionalBytes = GetManifestEntryAdditionalBytes(
-                    duplicate.Entry,
-                    referenceEntry);
-                var bytesSaved = duplicate.Entry.ContentLength -
-                    serializedReference.Length -
-                    manifestEntryAdditionalBytes;
-                if (bytesSaved <= 0)
-                {
-                    storedRelativePaths.Remove(referenceRelativePath);
-                    continue;
-                }
-
-                plans.Add(new
+            _logger.LogHistoryObjectRead
+            (
+                canonical.Entry.RelativePath,
+                "byte-for-byte deduplication comparison"
+            );
+            _logger.LogHistoryObjectRead
+            (
+                duplicate.Entry.RelativePath,
+                "byte-for-byte deduplication comparison"
+            );
+            if (!await HaveSameBytesAsync
                 (
-                    canonical,
-                    duplicate,
-                    reference,
-                    bytesSaved
-                ));
+                    targetStore,
+                    canonical.PhysicalKey,
+                    duplicate.PhysicalKey,
+                    cancellationToken
+                ))
+            {
+                throw new YabtSyncException
+                (
+                    $"History objects '{canonical.Entry.RelativePath}' and " +
+                    $"'{duplicate.Entry.RelativePath}' have the same content hash and length " +
+                    "but different bytes."
+                );
             }
+
+            var referenceRelativePath = await AllocateReferenceRelativePathAsync
+            (
+                targetStore,
+                layout,
+                duplicate.Entry.RelativePath,
+                storedRelativePaths,
+                cancellationToken
+            );
+            var referenceEntry = duplicate.Entry with
+            {
+                StoredRelativePath = referenceRelativePath,
+                Representation = ArchiveHistoryEntryRepresentation.Reference,
+            };
+            var reference = _historyReferenceSerializer.Create(referenceEntry);
+            await using var serializedReference = _temporaryContentFactory.Create();
+            await _historyReferenceSerializer.WriteAsync(reference, serializedReference, cancellationToken);
+            var manifestEntryAdditionalBytes = GetManifestEntryAdditionalBytes(duplicate.Entry, referenceEntry);
+            var bytesSaved = duplicate.Entry.ContentLength - serializedReference.Length - manifestEntryAdditionalBytes;
+            if (bytesSaved <= 0)
+            {
+                storedRelativePaths.Remove(referenceRelativePath);
+                continue;
+            }
+
+            plans.Add(new(canonical, duplicate, reference, bytesSaved));
         }
 
         return plans;
@@ -629,7 +650,7 @@ internal sealed class HistoryDeduplicator
         IObjectStore targetStore,
         ArchiveLayout layout,
         string originalRelativePath,
-        HashSet<string> storedRelativePaths,
+        ISet<string> storedRelativePaths,
         CancellationToken cancellationToken
     )
     {
@@ -663,7 +684,7 @@ internal sealed class HistoryDeduplicator
         ExistingManifest existingManifest,
         ArchiveHistoryManifest nextManifest,
         IReadOnlyList<ReferencePlan> plans,
-        IReadOnlyList<HistoryOccurrence> canonicalBackings,
+        IEnumerable<HistoryOccurrence> canonicalBackings,
         IReadOnlyList<HistoryOccurrence> orphanReferences,
         CancellationToken cancellationToken
     )
@@ -836,27 +857,28 @@ internal sealed class HistoryDeduplicator
             cancellationToken
         );
         var rawContentHash = hashingContent.CompleteHash();
-        ArchiveHistoryManifest? manifest = null;
+        string? manifestHash = null;
         if (trustManifest)
         {
             try
             {
                 await serializedManifest.SealAsync(cancellationToken);
                 await using var parseContent = serializedManifest.OpenRead();
-                manifest = await _historyManifestSerializer.ReadAsync(
+                using var manifest = await _historyManifestSerializer.ReadAsync(
                     parseContent,
                     cancellationToken);
+                manifestHash = manifest.ManifestHash;
             }
             catch (Exception)
             {
                 _logger.LogHistoryControlMetadataOperation(
                     "Ignored invalid or unreadable; scan will rebuild",
                     manifestKey);
-                manifest = null;
+                manifestHash = null;
             }
         }
 
-        return new(true, manifest, rawContentHash);
+        return new(true, manifestHash, rawContentHash);
     }
 
     private static async Task<string> ComputeObjectHashAsync
@@ -990,11 +1012,37 @@ internal sealed class HistoryDeduplicator
         return totalBytesRead;
     }
 
-    private static int CountDuplicateGroups(IEnumerable<HistoryOccurrence> occurrences) =>
-        occurrences
-            .Where(occurrence => occurrence.IsDeduplicationEligible)
-            .GroupBy(occurrence => (occurrence.Entry.ContentHash, occurrence.Entry.ContentLength))
-            .Count(group => group.Count() > 1);
+    private static int CountDuplicateGroups
+    (
+        IEnumerable<HistoryOccurrence> occurrences,
+        TemporaryIndex index,
+        CancellationToken cancellationToken
+    )
+    {
+        using var counts = index.CreateDictionary<int>();
+        var duplicates = 0;
+        foreach (var occurrence in occurrences)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!occurrence.IsDeduplicationEligible) { continue; }
+            var key = ContentGroupKey(occurrence);
+            counts.TryGetValue(key, out var count);
+            if (count == 0) { counts.Add(key, 1); }
+            else if (count == 1)
+            {
+                counts[key] = 2;
+                duplicates++;
+            }
+        }
+
+        return duplicates;
+    }
+
+    private static string ContentGroupKey(HistoryOccurrence occurrence) => string.Create
+    (
+        CultureInfo.InvariantCulture,
+        $"{occurrence.Entry.ContentHash}\0{occurrence.Entry.ContentLength:D20}"
+    );
 
     private static bool IsHistoryControlPath(string relativePath) =>
         string.Equals(relativePath, ArchiveHistoryFileNames.Manifest, StringComparison.Ordinal) ||
@@ -1073,38 +1121,59 @@ internal sealed class HistoryDeduplicator
                 StringComparison.OrdinalIgnoreCase);
     }
 
-    private static List<HistoryOccurrence> SelectIndependentReferenceBackings
+    private static DiskEntryCollection<HistoryOccurrence> SelectIndependentReferenceBackings
     (
-        IEnumerable<HistoryOccurrence> occurrences
+        IEnumerable<HistoryOccurrence> occurrences,
+        TemporaryIndex index,
+        CancellationToken cancellationToken
     )
     {
-        var backings = new List<HistoryOccurrence>();
-        var contentGroups = occurrences.GroupBy(
-            occurrence => (occurrence.Entry.ContentHash, occurrence.Entry.ContentLength));
-        foreach (var contentGroup in contentGroups)
+        using var groups = index.CreateDictionary<ReferenceBackingGroup>();
+        foreach (var occurrence in occurrences)
         {
-            var hasReference = contentGroup.Any(occurrence => string.Equals(
-                    occurrence.Entry.Representation,
-                    ArchiveHistoryEntryRepresentation.Reference,
-                    StringComparison.Ordinal));
-            if (!hasReference) { continue; }
-
-            var backing = contentGroup
-                .Where(occurrence => occurrence.IsIndependentMaterialization && string.Equals(
+            cancellationToken.ThrowIfCancellationRequested();
+            var key = ContentGroupKey(occurrence);
+            var group = groups.TryGetValue(key, out var existing) ?
+                existing : new ReferenceBackingGroup(occurrence.Entry.ContentHash, false, null);
+            var hasReference = group.HasReference || string.Equals
+            (
+                occurrence.Entry.Representation,
+                ArchiveHistoryEntryRepresentation.Reference,
+                StringComparison.Ordinal
+            );
+            var backing = group.Backing;
+            if (occurrence.IsIndependentMaterialization && string.Equals
+                (
                     occurrence.Entry.Representation,
                     ArchiveHistoryEntryRepresentation.Materialized,
-                    StringComparison.Ordinal))
-                .OrderBy(occurrence => occurrence.Entry.RelativePath, StringComparer.Ordinal)
-                .FirstOrDefault();
+                    StringComparison.Ordinal
+                ) && (backing is null || string.Compare
+                (
+                    occurrence.Entry.RelativePath,
+                    backing.Entry.RelativePath,
+                    StringComparison.Ordinal
+                ) < 0))
+            {
+                backing = occurrence;
+            }
 
-            if (backing is null)
+            groups[key] = group with { HasReference = hasReference, Backing = backing };
+        }
+
+        var backings = index.CreateCollection<HistoryOccurrence>();
+        var orderedGroups = groups.Enumerate(cancellationToken);
+        foreach (var pair in orderedGroups)
+        {
+            var group = pair.Value;
+            if (!group.HasReference) { continue; }
+            if (group.Backing is null)
             {
                 throw new YabtSyncException(
-                    $"History references for hash '{contentGroup.Key.ContentHash}' have no " +
+                    $"History references for hash '{group.ContentHash}' have no " +
                     "independent materialized backing object.");
             }
 
-            backings.Add(backing);
+            backings.Add(group.Backing);
         }
 
         return backings;
@@ -1185,20 +1254,25 @@ internal sealed class HistoryDeduplicator
     (
         IEnumerable<HistoryOccurrence> occurrences,
         IEnumerable<ReferencePlan> plans,
-        long tinyFileMaximumBytes
+        long tinyFileMaximumBytes,
+        TemporaryIndex index,
+        CancellationToken cancellationToken
     )
     {
         if (!_logger.IsEnabled(LogLevel.Debug)) { return; }
 
-        var plannedPaths = plans
-            .Select(plan => plan.Original.Entry.RelativePath)
-            .ToHashSet(StringComparer.Ordinal);
-        var canonicalPaths = plans
-            .Select(plan => plan.Canonical.Entry.RelativePath)
-            .ToHashSet(StringComparer.Ordinal);
+        using var plannedPaths = index.CreateSet();
+        using var canonicalPaths = index.CreateSet();
+        foreach (var plan in plans)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            plannedPaths.Add(plan.Original.Entry.RelativePath);
+            canonicalPaths.Add(plan.Canonical.Entry.RelativePath);
+        }
 
         foreach (var occurrence in occurrences)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (plannedPaths.Contains(occurrence.Entry.RelativePath))
             {
                 continue;
@@ -1260,6 +1334,7 @@ internal sealed class HistoryDeduplicator
     (
         bool dryRun,
         HistoryScan scan,
+        int referenceObjectCount,
         int duplicateGroupCount,
         int replacedObjectCount,
         int tinyObjectCount,
@@ -1277,10 +1352,7 @@ internal sealed class HistoryDeduplicator
             true,
             message,
             scan.Occurrences.Count,
-            scan.Occurrences.Count(occurrence => string.Equals(
-                occurrence.Entry.Representation,
-                ArchiveHistoryEntryRepresentation.Reference,
-                StringComparison.Ordinal)),
+            referenceObjectCount,
             duplicateGroupCount,
             replacedObjectCount,
             tinyObjectCount,
@@ -1291,7 +1363,7 @@ internal sealed class HistoryDeduplicator
     private sealed record ExistingManifest
     (
         bool Exists,
-        ArchiveHistoryManifest? Manifest,
+        string? ManifestHash,
         string? RawContentHash
     );
 
@@ -1308,7 +1380,7 @@ internal sealed class HistoryDeduplicator
     (
         IReadOnlyList<HistoryOccurrence> Occurrences,
         IReadOnlyList<HistoryOccurrence> OrphanReferences,
-        HashSet<string> StoredRelativePaths
+        ISet<string> StoredRelativePaths
     );
 
     private sealed record ReferencePlan
@@ -1317,5 +1389,12 @@ internal sealed class HistoryDeduplicator
         HistoryOccurrence Original,
         ArchiveHistoryContentReference Reference,
         long BytesSaved
+    );
+
+    private sealed record ReferenceBackingGroup
+    (
+        string ContentHash,
+        bool HasReference,
+        HistoryOccurrence? Backing
     );
 }

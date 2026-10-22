@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Options;
+using Yabt.Common;
 using Yabt.Core.Models;
 
 namespace Yabt.Metadata.Implementation;
@@ -7,6 +9,14 @@ namespace Yabt.Metadata.Implementation;
 internal sealed class JsonManifestSerializer : IManifestSerializer
 {
     private readonly JsonSerializerOptions _jsonOptions;
+
+    private readonly IOptionsMonitor<TemporaryContentOptions>? _temporaryOptions;
+
+    public JsonManifestSerializer(IOptionsMonitor<TemporaryContentOptions> temporaryOptions)
+        : this(JsonMetadataOptions.Create())
+    {
+        _temporaryOptions = Check.NotNull(temporaryOptions);
+    }
 
     public JsonManifestSerializer()
         : this(JsonMetadataOptions.Create())
@@ -40,6 +50,7 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
         ArgumentNullException.ThrowIfNull(entries);
 
         var canonicalEntries = CreateCanonicalEntries(entries);
+        using var entryOwnership = new ManifestEntryOwnership(canonicalEntries, entries);
         var manifest = new ArchiveManifest
         (
             ArchiveManifest.ExpectedDocumentType,
@@ -59,10 +70,10 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
             manifest,
             validateHash: false);
 
-        return canonicalManifest with
+        return entryOwnership.Complete(canonicalManifest with
         {
             ManifestHash = ComputeManifestHash(canonicalManifest),
-        };
+        });
     }
 
     public async Task WriteAsync
@@ -78,6 +89,7 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
         var validatedManifest = ValidateManifest(
             manifest,
             validateHash: true);
+        using var entryOwnership = new ManifestEntryOwnership(validatedManifest.Entries, manifest.Entries);
         try
         {
             using var writer = new Utf8JsonWriter(destination, new()
@@ -105,31 +117,41 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
     )
     {
         ArgumentNullException.ThrowIfNull(source);
-
-        ArchiveManifest? manifest;
+        StreamedManifestDocument<ArchiveManifestEntry> document;
+        ArchiveManifest manifest;
         try
         {
-            manifest = await JsonSerializer.DeserializeAsync<ArchiveManifest>(
+            document = await StreamedManifestJson.ReadAsync<ArchiveManifestEntry>
+            (
                 source,
+                ["documentType", "schemaVersion", "sourcePath", "createdAtUtc", "format", "formatVersion", "projectionId", "packageName", "policy", "entries", "totalBytes", "manifestHash"],
                 _jsonOptions,
-                cancellationToken);
+                _temporaryOptions?.CurrentValue,
+                cancellationToken
+            );
+            try
+            {
+                manifest = document.Header.RootElement.Deserialize<ArchiveManifest>(_jsonOptions) ??
+                    throw new JsonException("Package manifest JSON did not contain a manifest object.");
+                manifest = manifest with { Entries = document.Entries };
+            }
+            catch (Exception)
+            {
+                document.Dispose();
+                throw;
+            }
         }
         catch (Exception ex)
         {
-            throw new YabtMetadataException(
-                "Package manifest JSON could not be deserialized.",
-                ex);
+            throw new YabtMetadataException("Package manifest JSON could not be deserialized.", ex);
         }
-
-        if (manifest is null)
+        using (document)
         {
-            throw new YabtMetadataException(
-                "Package manifest JSON did not contain a manifest object.");
-        }
 
-        return ValidateManifest(
-            manifest,
-            validateHash: true);
+            var validated = ValidateManifest(manifest, validateHash: true);
+            document.TransferEntries();
+            return validated;
+        }
     }
 
     private ArchiveManifest ValidateManifest
@@ -188,15 +210,14 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
                 "Package manifest JSON does not contain an entries collection.");
         }
 
-        var serializedEntries = manifest.Entries.ToArray();
-        if (serializedEntries.Length == 0)
+        var canonicalEntries = ValidateCanonicalEntries(manifest.Entries);
+        using var entryOwnership = new ManifestEntryOwnership(canonicalEntries, manifest.Entries);
+        if (canonicalEntries.LongCount == 0)
         {
             throw new YabtMetadataException(
                 "Package manifest JSON must contain at least one entry.");
         }
 
-        var canonicalEntries = CreateCanonicalEntries(serializedEntries);
-        EnsureEntriesAreCanonical(serializedEntries, canonicalEntries);
         var totalBytes = ComputeTotalBytes(canonicalEntries);
         if (manifest.TotalBytes != totalBytes)
         {
@@ -220,7 +241,7 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
             TotalBytes = totalBytes,
         };
 
-        if (!validateHash) { return canonicalManifest; }
+        if (!validateHash) { return entryOwnership.Complete(canonicalManifest); }
 
         ValidateHash(
             canonicalManifest.ManifestHash,
@@ -235,7 +256,7 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
                 "Package manifest self-hash does not match its contents.");
         }
 
-        return canonicalManifest;
+        return entryOwnership.Complete(canonicalManifest);
     }
 
     private static FolderPolicy ValidatePolicy
@@ -290,75 +311,80 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
         return snapshot;
     }
 
-    private static ArchiveManifestEntry[] CreateCanonicalEntries
+    private TemporaryManifestEntries<ArchiveManifestEntry> CreateCanonicalEntries
     (
         IEnumerable<ArchiveManifestEntry> entries
-    )
+    ) => ManifestEntryStorage.CreateCanonical
+    (
+        entries,
+        CreateCanonicalEntry,
+        entry => entry.StoredPath,
+        "Package manifest",
+        "stored path",
+        _jsonOptions,
+        _temporaryOptions?.CurrentValue
+    );
+
+    private TemporaryManifestEntries<ArchiveManifestEntry> ValidateCanonicalEntries
+    (
+        IEnumerable<ArchiveManifestEntry> entries
+    ) => ManifestEntryStorage.ValidateCanonical
+    (
+        entries,
+        CreateCanonicalEntry,
+        entry => entry.StoredPath,
+        static (left, right) => left == right,
+        "Package manifest",
+        "stored path",
+        _jsonOptions,
+        _temporaryOptions?.CurrentValue
+    );
+
+    private static ArchiveManifestEntry CreateCanonicalEntry(ArchiveManifestEntry entry)
     {
-        var canonicalEntries = new List<ArchiveManifestEntry>();
-        foreach (var entry in entries)
+        if (entry is null)
         {
-            if (entry is null)
-            {
-                throw new YabtMetadataException(
-                    "Package manifest entries cannot contain null values.");
-            }
-
-            var storedPath = NormalizeLogicalPath(
-                entry.StoredPath,
-                allowEmpty: false,
-                "Package manifest stored entry path");
-            var allowEmptyRelativePath = string.Equals(
-                entry.Kind,
-                ArchiveManifestEntryKinds.Directory,
-                StringComparison.Ordinal);
-            var relativePath = NormalizeLogicalPath(
-                entry.RelativePath,
-                allowEmptyRelativePath,
-                "Package manifest logical entry path");
-            if (entry.Length < 0)
-            {
-                throw new YabtMetadataException(
-                    $"Package manifest entry '{storedPath}' has a negative length.");
-            }
-
-            if (entry.LastModifiedUtc.Offset != TimeSpan.Zero)
-            {
-                throw new YabtMetadataException(
-                    $"Package manifest entry '{storedPath}' timestamp must use the UTC offset.");
-            }
-
-            ValidateHash(
-                entry.ContentHash,
-                $"Package manifest entry '{storedPath}' content hash");
-            var projection = ValidateEntryShape(
-                entry,
-                relativePath,
-                storedPath);
-            canonicalEntries.Add(entry with
-            {
-                RelativePath = relativePath,
-                StoredPath = storedPath,
-                Projection = projection,
-            });
+            throw new YabtMetadataException(
+                "Package manifest entries cannot contain null values.");
         }
 
-        canonicalEntries.Sort(static (left, right) =>
-            string.Compare(left.StoredPath, right.StoredPath, StringComparison.Ordinal));
-        for (var index = 1; index < canonicalEntries.Count; index++)
+        var storedPath = NormalizeLogicalPath(
+            entry.StoredPath,
+            allowEmpty: false,
+            "Package manifest stored entry path");
+        var allowEmptyRelativePath = string.Equals(
+            entry.Kind,
+            ArchiveManifestEntryKinds.Directory,
+            StringComparison.Ordinal);
+        var relativePath = NormalizeLogicalPath(
+            entry.RelativePath,
+            allowEmptyRelativePath,
+            "Package manifest logical entry path");
+        if (entry.Length < 0)
         {
-            if (string.Equals(
-                    canonicalEntries[index - 1].StoredPath,
-                    canonicalEntries[index].StoredPath,
-                    StringComparison.Ordinal))
-            {
-                throw new YabtMetadataException(
-                    $"Package manifest contains duplicate stored path " +
-                    $"'{canonicalEntries[index].StoredPath}'.");
-            }
+            throw new YabtMetadataException(
+                $"Package manifest entry '{storedPath}' has a negative length.");
         }
 
-        return [.. canonicalEntries];
+        if (entry.LastModifiedUtc.Offset != TimeSpan.Zero)
+        {
+            throw new YabtMetadataException(
+                $"Package manifest entry '{storedPath}' timestamp must use the UTC offset.");
+        }
+
+        ValidateHash(
+            entry.ContentHash,
+            $"Package manifest entry '{storedPath}' content hash");
+        var projection = ValidateEntryShape(
+            entry,
+            relativePath,
+            storedPath);
+        return entry with
+        {
+            RelativePath = relativePath,
+            StoredPath = storedPath,
+            Projection = projection,
+        };
     }
 
     private static ArchiveProjectionProvenance? ValidateEntryShape
@@ -451,28 +477,6 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
         {
             LogicalPath = logicalPath,
         };
-    }
-
-    private static void EnsureEntriesAreCanonical
-    (
-        ArchiveManifestEntry[] serializedEntries,
-        ArchiveManifestEntry[] canonicalEntries
-    )
-    {
-        if (serializedEntries.Length != canonicalEntries.Length)
-        {
-            throw new YabtMetadataException(
-                "Package manifest entry count changed during canonicalization.");
-        }
-
-        for (var index = 0; index < serializedEntries.Length; index++)
-        {
-            if (serializedEntries[index] != canonicalEntries[index])
-            {
-                throw new YabtMetadataException(
-                    "Package manifest entries are not in canonical path order or contain noncanonical values.");
-            }
-        }
     }
 
     private string ComputeManifestHash(ArchiveManifest manifest)
@@ -674,10 +678,16 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
 
     private static DateTimeOffset GetDeterministicCreationTime
     (
-        ArchiveManifestEntry[] entries
-    ) => entries.Length == 0 ?
-        DateTimeOffset.UnixEpoch :
-        entries.Max(entry => entry.LastModifiedUtc);
+        IEnumerable<ArchiveManifestEntry> entries
+    )
+    {
+        DateTimeOffset? maximum = null;
+        foreach (var entry in entries)
+        {
+            if (maximum is null || entry.LastModifiedUtc > maximum) { maximum = entry.LastModifiedUtc; }
+        }
+        return maximum ?? DateTimeOffset.UnixEpoch;
+    }
 
     private static string NormalizeLogicalPath
     (
