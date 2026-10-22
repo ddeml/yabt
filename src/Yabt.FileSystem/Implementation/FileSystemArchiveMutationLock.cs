@@ -26,6 +26,7 @@ internal sealed class FileSystemArchiveMutationLock
         ArgumentException.ThrowIfNullOrWhiteSpace(lockPath);
         ArgumentNullException.ThrowIfNull(logger);
         logger.LogTrace(nameof(AcquireAsync));
+        cancellationToken.ThrowIfCancellationRequested();
 
         var lockDirectory = Path.GetDirectoryName(lockPath) ??
             throw new YabtFileSystemException(

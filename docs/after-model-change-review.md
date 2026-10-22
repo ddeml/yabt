@@ -12,7 +12,7 @@ change, for follow-up work in **Codex-Sandbox-01**.
   source-read failure handling, `verify-restore` , and Azure transfer/retry
   configuration. The handoff commit carries those pending changes alongside this
   document.
-- Status: **R01-R07 and R09 are implemented for their documented scopes; other
+- Status: **R01-R09 are implemented for their documented scopes; other
   findings remain open**. Recording and committing the baseline did not implement
   the proposed fixes. R09 was added during the follow-up discussion on
   2026-09-21.
@@ -60,7 +60,7 @@ were not claimed as completed runtime reproductions in the review.
 | R05 | P2 | Filesystem shape/casing changes prevent backup completion | CLI reproductions and transition/recovery regression tests | Implemented |
 | R06 | P2 | Folder-policy settings are accepted but ignored | Warning, validation, and round-trip regression tests | Implemented (warn and ignore) |
 | R07 | P2 | Unavailable restore-only entry can crash `verify-restore` | CLI reproduction and unavailable-entry regression tests | Implemented |
-| R08 | Investigate | Cancellation may release a lock before mutation finishes | Static concurrency concern | Open |
+| R08 | P1 | Cancellation releases a lock before mutation finishes | Gated filesystem mutation reproduction and ownership regression tests | Implemented |
 | R09 | P1 | Hard-linked archive files share mutable contents and distort deduplication savings | CLI reproduction and hard-link/recovery regression tests | Implemented |
 | I01 | Improvement | ZIP buffers accumulate across a backup | Lifetime inspection | Open |
 | I02 | Improvement | ZIP restore repeatedly parses the central directory | Inspection and isolated probe | Open |
@@ -551,28 +551,58 @@ passes. Native Unix symbolic-link behavior was not exercised on this host.
 ### R08: Cancellation may release ownership before mutation finishes
 
 **Code:**
-[FileSystemRestoreTarget.cs](../src/Yabt.Sync/Implementation/FileSystemRestoreTarget.cs)
+[FileSystemRestoreTarget.cs](../src/Yabt.FileSystem/Implementation/FileSystemRestoreTarget.cs)
 , `CommitStagedFileAsync` ;
 [FileSystemObjectStore.cs](../src/Yabt.FileSystem/Implementation/FileSystemObjectStore.cs)
 , move operations;
+[FileSystemMutation.cs](../src/Yabt.FileSystem/Implementation/FileSystemMutation.cs)
+, mutation worker ownership;
 [YabtTaskExtensions.cs](../src/Yabt.Common/Async/Extensions/YabtTaskExtensions.cs)
 , `WaitOrAbandonAsync` .
 
-**Static concern, not a reproduced race:** `YabtTask.Run` intentionally cancels
-waiting while synchronous work can continue. A commit or move may still be
-active when callers clean staging and dispose the archive lock. A subsequent
-command could acquire that lock before the previous mutation finishes,
-particularly with delayed filesystem I/O.
+**Reproduced:** `YabtTask.Run` intentionally cancels waiting while synchronous
+work can continue. A deterministic regression pauses a restore commit inside
+its filesystem worker, cancels the owning operation, and starts a second
+archive writer. Before the fix, the owner completed while its worker remained
+blocked, allowing staging cleanup and archive-lock release to overtake the
+commit. Both the successful-move and failing-move cases reproduced this race.
 
-**Proposed direction:** Once an irreversible filesystem step starts, retain its
-staging and lock ownership until it finishes, then observe cancellation at the
-next safe boundary. Observing an abandoned exception alone does not serialize
-the mutation.
+**Implemented:** Filesystem mutations use the provider-local
+`FileSystemMutation.RunAsync` helper, which returns the standard .NET worker
+task without abandoning its wait. Cancellation may prevent a worker from
+starting. Once started, its actual success, acquired resource, or failure
+reaches the caller before staging cleanup and archive-lock release. Successful
+commits complete their bookkeeping before cancellation is observed again.
 
-**Acceptance checks:** Add a controllably delayed mutation, cancel it, and
-attempt a second writer. Assert that cleanup and lock release cannot overtake
-the first mutation. Preserve cancellation responsiveness during preparation and
-between commits.
+This covers root initialization, upload staging and commit, file/folder moves,
+conditional replacement/deletion, and restore directory/staging creation and
+commit. Conditional-lock waits and hashing still observe cancellation, with a
+final check before the guarded mutation. Pre-canceled conditional replacement
+and archive-lock acquisition now stop before creating filesystem plumbing.
+Cleanup remains awaited without cancellation.
+
+A slow or stalled native mutation can delay cancellation until that call
+returns. Read-only abandonment remains unchanged. This fix does not claim to
+resolve uncertain server-side completion of canceled remote requests.
+
+**Acceptance checks:** Gated restore commits retain staging and their archive
+lock while a second writer retries. Successful commits remain successful;
+actual I/O failures after cancellation are not discarded or masked by the
+cancellation. Pre-canceled provider mutations leave storage untouched, and
+conditional preparation remains cancellable while retaining ownership until
+its worker exits.
+
+**Verification (2026-10-22):** The full Release solution suite completed on
+Windows with **879 passed, 0 failed, and 3 Linux-only tests skipped**, including
+15 new filesystem cancellation cases:
+
+```console
+dotnet test yabt.sln --no-restore --configuration Release --verbosity minimal -m:1 --disable-build-servers
+```
+
+The two gated commit cases failed against the previous implementation before
+the fix. `git diff --check` passes. Native Linux filesystem behavior was not
+exercised on this host.
 
 ### R09: Hard-linked archive files need explicit handling
 
@@ -743,8 +773,8 @@ Related observations to evaluate during this work:
 3. Add targeted regression tests for R01-R04, confirm failures, and address
    those safety findings first. Use only disposable data for the destructive
    reproductions.
-4. R05-R07 are implemented. Investigate R08 with
-   deterministic coordination rather than timing-dependent sleeps.
+4. R05-R09 are implemented. R08 uses deterministic coordination to verify
+   cancellation ownership rather than timing-dependent sleeps.
 5. Measure I01-I03, then refactor under the resulting tests and provider
    contracts.
 6. Update each finding's status with the fixing commit and verification

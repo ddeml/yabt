@@ -126,7 +126,7 @@ internal sealed class FileSystemRestoreTarget
         var path = string.IsNullOrEmpty(relativePath) ?
             _fullRootPath :
             ResolvePath(relativePath);
-        return YabtTask.Run
+        return FileSystemMutation.RunAsync
         (
             () =>
             {
@@ -146,7 +146,7 @@ internal sealed class FileSystemRestoreTarget
             _fullRootPath,
             ArchiveInternalFolderNames.TemporaryUploads,
             $"restore-{Guid.NewGuid():N}");
-        return YabtTask.Run
+        return FileSystemMutation.RunAsync
         (
             () =>
             {
@@ -192,7 +192,7 @@ internal sealed class FileSystemRestoreTarget
 
         try
         {
-            await YabtTask.Run
+            await FileSystemMutation.RunAsync
             (
                 () =>
                 {

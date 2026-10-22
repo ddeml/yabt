@@ -894,6 +894,12 @@ traversed by this verifier.
 - Cancellation of synchronous operations wrapped by `YabtTask.Run` cancels
   waiting, not the underlying operation. The abandoned operation may finish or
   fail later.
+- Filesystem mutation workers must never abandon their callers. Use the
+  provider's `FileSystemMutation.RunAsync` so cancellation can prevent a worker
+  from starting, while a started worker keeps its staging and archive lock until
+  completion. Return the actual success, acquired resource, or failure before
+  observing cancellation at the next operation boundary. Keep preparation such
+  as conditional-lock waits and hashing cooperatively cancellable.
 - Always observe exceptions from abandoned operations. Log them at debug level
   when they are otherwise ignored.
 - Treat cancellation as an ordinary failure unless a caller explicitly needs to

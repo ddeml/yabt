@@ -151,6 +151,12 @@ marker; the next `deduplicate` run rebuilds the catalog. An invalidation marker
 should remain only when a backup or deduplication transaction was interrupted.
 MVP builds do not search history for metadata left there by older builds.
 
+Cancellation waits for any started filesystem mutation to finish before
+releasing its archive lock or cleaning its staging files. On slow or stalled
+storage, stopping a command can therefore take time. Preparation remains
+cancellable, and cancellation prevents the next mutation from starting.
+Completed writes remain safe checkpoints for the next run.
+
 Restore reads the current logical live branch from the selected archive store.
 The `source-root` must be the folder containing `.yabt-root.json` ; use
 `--target-store-id` when that descriptor contains multiple stores. Restore

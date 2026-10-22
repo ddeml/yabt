@@ -499,6 +499,16 @@ successful readable-object writes remain rerun checkpoints and invalidation
 evidence remains active where required. Cancellation, enumeration, target
 reads/writes, locks, and historization failures remain fail-fast.
 
+Filesystem mutation workers retain their caller's ownership until they finish.
+The provider schedules them with standard .NET tasks rather than abandoning the
+wait through `YabtTask.Run` . Cancellation can prevent a worker from starting;
+once started, its actual result or failure reaches the caller before staging
+cleanup or archive-lock release. Successful commits complete their ownership
+bookkeeping before the next operation observes cancellation. Conditional-lock
+waits and content hashing remain cooperatively cancellable. A stalled native
+filesystem call can therefore delay command cancellation. Read-only worker
+abandonment and remote-provider request semantics remain separate concerns.
+
 The configured compression controls only what a mutating backup writes. Readers
 always inspect both supported filenames. If both exist, they are trusted only
 when both validate and have the same logical self-hash; a corrupt or conflicting

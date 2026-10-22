@@ -79,18 +79,12 @@ internal sealed class FileSystemObjectStore
 
         var rootPath = GetRootPath();
         _logger.LogFileSystemStoreReady(rootPath);
-        return YabtTask.Run
+        return FileSystemMutation.RunAsync
         (
             () =>
             {
                 Directory.CreateDirectory(rootPath);
             },
-            ex => _logger.LogAbandonedFileSystemOperationFailed
-            (
-                ex,
-                nameof(Directory.CreateDirectory),
-                rootPath
-            ),
             cancellationToken);
     }
 
@@ -128,7 +122,7 @@ internal sealed class FileSystemObjectStore
             _logger.LogFileSystemPlumbingOperation(
                 "Creating temporary upload file",
                 temporaryPath);
-            await using (var destination = await YabtTask.Run
+            await using (var destination = await FileSystemMutation.RunAsync
             (
                 () =>
                 {
@@ -148,21 +142,6 @@ internal sealed class FileSystemObjectStore
                         FileOptions.Asynchronous | FileOptions.SequentialScan
                     );
                 },
-                abandonedStream =>
-                {
-                    abandonedStream.Dispose();
-                    TryDeleteFile(temporaryPath);
-                },
-                ex =>
-                {
-                    TryDeleteFile(temporaryPath);
-                    _logger.LogAbandonedFileSystemOperationFailed
-                    (
-                        ex,
-                        "Open temporary upload stream",
-                        temporaryPath
-                    );
-                },
                 cancellationToken
             ))
             {
@@ -171,23 +150,13 @@ internal sealed class FileSystemObjectStore
             _logger.LogFileSystemPlumbingOperation(
                 "Finished writing temporary upload file",
                 temporaryPath);
-            await YabtTask.Run
+            await FileSystemMutation.RunAsync
             (
                 () =>
                 {
                     ValidateMutationPath(rootPath, temporaryPath);
                     ValidateMutationPath(rootPath, destinationPath);
                     File.Move(temporaryPath, destinationPath);
-                },
-                ex =>
-                {
-                    TryDeleteFile(temporaryPath);
-                    _logger.LogAbandonedFileSystemOperationFailed
-                    (
-                        ex,
-                        nameof(File.Move),
-                        temporaryPath
-                    );
                 },
                 cancellationToken
             );
@@ -207,7 +176,7 @@ internal sealed class FileSystemObjectStore
         }
         finally
         {
-            await YabtTask.Run(() => TryDeleteFile(temporaryPath), cancellationToken: default);
+            await FileSystemMutation.RunAsync(() => TryDeleteFile(temporaryPath));
         }
     }
 
@@ -330,6 +299,7 @@ internal sealed class FileSystemObjectStore
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ValidateMutationPath(rootPath, temporaryPath);
             Directory.CreateDirectory(temporaryDirectory);
             ValidateMutationPath(rootPath, temporaryPath);
@@ -363,7 +333,6 @@ internal sealed class FileSystemObjectStore
                     ValidateMutationPath(rootPath, destinationPath);
                     File.Move(temporaryPath, destinationPath, overwrite: true);
                 },
-                "Conditionally replace object",
                 cancellationToken
             );
         }
@@ -379,7 +348,7 @@ internal sealed class FileSystemObjectStore
         }
         finally
         {
-            await YabtTask.Run(() => TryDeleteFile(temporaryPath), cancellationToken: default);
+            await FileSystemMutation.RunAsync(() => TryDeleteFile(temporaryPath));
         }
     }
 
@@ -406,7 +375,6 @@ internal sealed class FileSystemObjectStore
                 path,
                 expectedContentHash,
                 () => File.Delete(path),
-                "Conditionally delete object",
                 cancellationToken
             );
         }
@@ -564,7 +532,7 @@ internal sealed class FileSystemObjectStore
                 normalizedDestination,
                 destinationPath);
 
-        return YabtTask.Run
+        return FileSystemMutation.RunAsync
         (
             () =>
             {
@@ -574,12 +542,6 @@ internal sealed class FileSystemObjectStore
                 ValidateMutationPath(rootPath, destinationPath);
                 File.Move(sourcePath, destinationPath);
             },
-            ex => _logger.LogAbandonedFileSystemOperationFailed
-            (
-                ex,
-                nameof(File.Move),
-                sourcePath
-            ),
             cancellationToken
         );
     }
@@ -616,7 +578,7 @@ internal sealed class FileSystemObjectStore
 
         try
         {
-            await YabtTask.Run
+            await FileSystemMutation.RunAsync
             (
                 () =>
                 {
@@ -626,12 +588,6 @@ internal sealed class FileSystemObjectStore
                     ValidateMutationPath(rootPath, destinationPath);
                     Directory.Move(sourcePath, destinationPath);
                 },
-                ex => _logger.LogAbandonedFileSystemOperationFailed
-                (
-                    ex,
-                    nameof(Directory.Move),
-                    sourcePath
-                ),
                 cancellationToken
             );
         }
@@ -880,11 +836,10 @@ internal sealed class FileSystemObjectStore
         string path,
         string expectedContentHash,
         Action mutation,
-        string operation,
         CancellationToken cancellationToken
     )
     {
-        return YabtTask.Run
+        return FileSystemMutation.RunAsync
         (
             () => RunWithMutationGuard
             (
@@ -903,16 +858,11 @@ internal sealed class FileSystemObjectStore
                     }
 
                     ValidateMutationPath(rootPath, path);
+                    cancellationToken.ThrowIfCancellationRequested();
                     mutation();
                     return true;
                 },
                 cancellationToken
-            ),
-            abandonedExceptionHandler: ex => _logger.LogAbandonedFileSystemOperationFailed
-            (
-                ex,
-                operation,
-                path
             ),
             cancellationToken: cancellationToken
         );
