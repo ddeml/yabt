@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
+using Yabt.Common;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 
@@ -28,6 +29,7 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
     private readonly Lock _gate = new();
     private readonly string _ownerId;
     private readonly DateTimeOffset _acquiredUtc;
+    private readonly long _maximumDocumentBytes;
     private readonly Task _renewalTask;
     private string _currentContentHash;
     private Exception? _lockLossException;
@@ -42,7 +44,8 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
         string ownerId,
         DateTimeOffset acquiredUtc,
         string currentContentHash,
-        long lastConfirmedWriteTimestamp
+        long lastConfirmedWriteTimestamp,
+        long maximumDocumentBytes
     )
     {
         _store = store;
@@ -51,6 +54,7 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
         _acquiredUtc = acquiredUtc;
         _currentContentHash = currentContentHash;
         _lastConfirmedWriteTimestamp = lastConfirmedWriteTimestamp;
+        _maximumDocumentBytes = maximumDocumentBytes;
         _renewalTask = RenewAsync();
     }
 
@@ -59,10 +63,19 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
     public static async Task<IArchiveMutationLock> AcquireAsync
     (
         IArchiveMutableObjectStore store,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        long? maximumDocumentBytes = null
     )
     {
         ArgumentNullException.ThrowIfNull(store);
+        var documentLimit = maximumDocumentBytes ?? 64 * 1024;
+        if (documentLimit <= 0 || documentLimit > Array.MaxLength)
+        {
+            throw new YabtCoreException
+            (
+                $"Archive lock document limit must be between 1 and {Array.MaxLength} bytes."
+            );
+        }
 
         var timeProvider = TimeProvider.System;
         var ownerId = Guid.NewGuid().ToString("N");
@@ -79,7 +92,8 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
                 ownerId,
                 acquiredUtc,
                 now + LeaseDuration,
-                generation: 0);
+                generation: 0,
+                documentLimit);
             var writeAttemptTimestamp = timeProvider.GetTimestamp();
 
             if (await TryCreateAsync(store, newLockContent, cancellationToken))
@@ -91,11 +105,12 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
                     ownerId,
                     acquiredUtc,
                     ArchiveHash.Compute(newLockContent),
-                    writeAttemptTimestamp
+                    writeAttemptTimestamp,
+                    documentLimit
                 );
             }
 
-            var existingLock = await TryReadAsync(store, cancellationToken);
+            var existingLock = await TryReadAsync(store, documentLimit, cancellationToken);
             if (existingLock is null)
             {
                 continue;
@@ -137,7 +152,8 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
                         ownerId,
                         acquiredUtc,
                         ArchiveHash.Compute(newLockContent),
-                        takeoverAttemptTimestamp
+                        takeoverAttemptTimestamp,
+                        documentLimit
                     );
                 }
 
@@ -218,7 +234,8 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
                     _ownerId,
                     _acquiredUtc,
                     _timeProvider.GetUtcNow() + LeaseDuration,
-                    Interlocked.Increment(ref _generation)
+                    Interlocked.Increment(ref _generation),
+                    _maximumDocumentBytes
                 );
                 var renewalAttemptTimestamp = _timeProvider.GetTimestamp();
                 var elapsedSinceConfirmedWrite = _timeProvider.GetElapsedTime(
@@ -401,6 +418,7 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
     private static async Task<ExistingLock?> TryReadAsync
     (
         IArchiveMutableObjectStore store,
+        long maximumDocumentBytes,
         CancellationToken cancellationToken
     )
     {
@@ -443,19 +461,24 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
 
         await using (objectContent)
         {
-            using var content = new MemoryStream();
-            await objectContent.Content.CopyToAsync(content, cancellationToken);
-            var bytes = content.ToArray();
+            byte[] bytes;
             LockDocument? document;
             try
             {
+                bytes = await SmallDocument.ReadAllBytesAsync
+                (
+                    objectContent.Content,
+                    maximumDocumentBytes,
+                    ArchiveInternalObjectKeys.MutationLock,
+                    cancellationToken
+                );
                 document = JsonSerializer.Deserialize<LockDocument>(bytes, JsonOptions);
             }
             catch (Exception ex)
             {
                 throw new YabtCoreException(
                     $"Archive mutation lock '{ArchiveInternalObjectKeys.MutationLock}' " +
-                    "contains invalid JSON.",
+                    "could not be read as bounded valid JSON.",
                     ex);
             }
             if (document is null ||
@@ -478,7 +501,8 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
         string ownerId,
         DateTimeOffset acquiredUtc,
         DateTimeOffset expiresUtc,
-        long generation
+        long generation,
+        long maximumDocumentBytes
     )
     {
         var document = new LockDocument
@@ -490,7 +514,17 @@ internal sealed class ArchiveMutationLock : IArchiveMutationLock
             expiresUtc,
             generation
         );
-        return JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
+        var content = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
+        if (content.LongLength > maximumDocumentBytes)
+        {
+            throw new YabtCoreException
+            (
+                $"Archive mutation lock '{ArchiveInternalObjectKeys.MutationLock}' " +
+                $"exceeds its maximum size of {maximumDocumentBytes} bytes."
+            );
+        }
+
+        return content;
     }
 
     private string GetCurrentContentHash()

@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Yabt.Common;
 using Yabt.Core.Models;
 
@@ -14,21 +15,28 @@ internal sealed class JsonBackupRootSerializer : IBackupRootSerializer
 
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ILogger<JsonBackupRootSerializer> _logger;
+    private readonly IOptionsMonitor<YabtMetadataOptions>? _options;
 
-    public JsonBackupRootSerializer(ILogger<JsonBackupRootSerializer>? logger = null)
-        : this(JsonMetadataOptions.Create(), logger)
+    public JsonBackupRootSerializer
+    (
+        ILogger<JsonBackupRootSerializer>? logger = null,
+        IOptionsMonitor<YabtMetadataOptions>? options = null
+    )
+        : this(JsonMetadataOptions.Create(), logger, options)
     {
     }
 
     public JsonBackupRootSerializer
     (
         JsonSerializerOptions jsonOptions,
-        ILogger<JsonBackupRootSerializer>? logger = null
+        ILogger<JsonBackupRootSerializer>? logger = null,
+        IOptionsMonitor<YabtMetadataOptions>? options = null
     )
     {
         ArgumentNullException.ThrowIfNull(jsonOptions);
 
         _logger = logger ?? NullLogger<JsonBackupRootSerializer>.Instance;
+        _options = options;
         _jsonOptions = new(jsonOptions)
         {
             AllowDuplicateProperties = false,
@@ -62,11 +70,27 @@ internal sealed class JsonBackupRootSerializer : IBackupRootSerializer
         ArgumentNullException.ThrowIfNull(destination);
 
         var validatedDescriptor = ValidateDescriptor(descriptor);
-        await JsonSerializer.SerializeAsync(
-            destination,
-            validatedDescriptor,
-            _jsonOptions,
-            cancellationToken);
+        try
+        {
+            await SmallDocument.WriteAsync
+            (
+                destination,
+                (_options?.CurrentValue ?? new()).GetValidatedRootDescriptorMaximumBytes(),
+                BackupRootFileNames.Primary,
+                (stream, cancellationToken) => JsonSerializer.SerializeAsync
+                (
+                    stream,
+                    validatedDescriptor,
+                    _jsonOptions,
+                    cancellationToken
+                ),
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            throw new YabtMetadataException("Backup root JSON could not be serialized.", ex);
+        }
     }
 
     public async Task<BackupRootDescriptor> ReadAsync
@@ -96,9 +120,13 @@ internal sealed class JsonBackupRootSerializer : IBackupRootSerializer
 
         try
         {
-            using var contentStream = new MemoryStream();
-            await source.CopyToAsync(contentStream, cancellationToken);
-            content = contentStream.ToArray();
+            content = await SmallDocument.ReadAllBytesAsync
+            (
+                source,
+                (_options?.CurrentValue ?? new()).GetValidatedRootDescriptorMaximumBytes(),
+                sourceName ?? (source as FileStream)?.Name ?? BackupRootFileNames.Primary,
+                cancellationToken
+            );
 
             await using var parseStream = new MemoryStream(content, writable: false);
             descriptor = await JsonSerializer.DeserializeAsync<BackupRootDescriptor>(

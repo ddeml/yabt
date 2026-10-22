@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Yabt.Common;
 using Yabt.Core;
 using Yabt.Core.Models;
@@ -9,7 +10,8 @@ namespace Yabt.Metadata.Implementation;
 
 internal sealed class JsonFolderPolicyReader
 (
-    ILogger<JsonFolderPolicyReader> _logger
+    ILogger<JsonFolderPolicyReader> _logger,
+    IOptionsMonitor<YabtMetadataOptions> _options
 ) : IFolderPolicyReader
 {
     private static readonly FrozenSet<string> KnownProperties = new[]
@@ -44,9 +46,17 @@ internal sealed class JsonFolderPolicyReader
 
         try
         {
-            using var document = await JsonDocument.ParseAsync
+            var content = await SmallDocument.ReadAllBytesAsync
             (
                 stream,
+                _options.CurrentValue.GetValidatedFolderPolicyMaximumBytes(),
+                policyPath,
+                cancellationToken
+            );
+            using var boundedStream = new MemoryStream(content, writable: false);
+            using var document = await JsonDocument.ParseAsync
+            (
+                boundedStream,
                 new JsonDocumentOptions { AllowDuplicateProperties = false },
                 cancellationToken: cancellationToken
             );

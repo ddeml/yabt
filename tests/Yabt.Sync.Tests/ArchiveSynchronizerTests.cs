@@ -6490,7 +6490,8 @@ public sealed class ArchiveSynchronizerTests
 
         public Task<IArchiveMutationLock> AcquireArchiveMutationLockAsync
         (
-            CancellationToken cancellationToken = default
+            CancellationToken cancellationToken = default,
+            long? maximumDocumentBytes = null
         )
         {
             if (_innerStore is not IArchiveMutationLockProvider lockProvider)
@@ -6499,7 +6500,7 @@ public sealed class ArchiveSynchronizerTests
                     "The wrapped test store does not provide archive mutation locking.");
             }
 
-            return lockProvider.AcquireArchiveMutationLockAsync(cancellationToken);
+            return lockProvider.AcquireArchiveMutationLockAsync(cancellationToken, maximumDocumentBytes);
         }
 
         public int GetOpenReadCount(string key)

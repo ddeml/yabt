@@ -218,3 +218,15 @@ yabt scan
 yabt pack
 yabt reconcile
 ```
+
+### Configuration document limits
+
+Root descriptors and folder policies default to a maximum of 1 MiB each.
+Override these machine-local limits with
+`Metadata:RootDescriptorMaximumBytes` and
+`Metadata:FolderPolicyMaximumBytes` in runtime configuration. Remote archive
+lock JSON defaults to 64 KiB, configurable with `Sync:LockDocumentMaximumBytes`.
+Limits count actual input bytes, including whitespace and UTF-8 BOM bytes;
+oversized documents fail explicitly. Generated root descriptors and remote
+locks must also fit their configured limit. File-count-dependent manifests are
+not small configuration documents and do not use these limits.

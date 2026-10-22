@@ -256,7 +256,11 @@ internal sealed class ArchiveSynchronizer
 
         await using var mutationLock = request.DryRun ?
             null :
-            await mutableDestinationStore.AcquireArchiveMutationLockAsync(cancellationToken);
+            await mutableDestinationStore.AcquireArchiveMutationLockAsync
+            (
+                cancellationToken,
+                _options.CurrentValue.GetValidatedLockDocumentMaximumBytes()
+            );
         using var operationCancellation = mutationLock is null ?
             null :
             CancellationTokenSource.CreateLinkedTokenSource(
@@ -2648,7 +2652,11 @@ internal sealed class ArchiveSynchronizer
             (IArchiveMutableObjectStore)context.TargetStore :
             null;
         await using var mutationLock = mutableTargetStore is not null ?
-            await mutableTargetStore.AcquireArchiveMutationLockAsync(cancellationToken) :
+            await mutableTargetStore.AcquireArchiveMutationLockAsync
+            (
+                cancellationToken,
+                _options.CurrentValue.GetValidatedLockDocumentMaximumBytes()
+            ) :
             null;
         using var operationCancellation = mutationLock is null ?
             null :

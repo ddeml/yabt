@@ -698,6 +698,18 @@ Windows host.
 
 ### I01: Bound ZIP memory over the complete backup
 
+The agreed resource work is delivered in stages: small configuration/control
+limits, shared spillable temporary content, ZIP ownership, streamed manifest
+writing/hashing, and scalable manifest processing coordinated with I02.
+Manifests growing with source file count belong to the large-data category.
+
+**Stage 1 implemented:** Root descriptors and folder policies have configurable
+1 MiB defaults; remote lock JSON defaults to 64 KiB. Readers enforce actual byte
+counts, and generated root/lock documents fit the same effective limits.
+Eighteen new regression cases cover missing/inaccurate lengths, byte boundaries,
+exact BOM preservation, runtime reloads, and refusal without lock mutation.
+
+
 [ArchiveProjectionObjectStore.cs](../src/Yabt.Sync/Implementation/ArchiveProjectionObjectStore.cs)
 retains projected objects/scopes. Their delegates retain
 `ZipPackageProjectionMaterialization` in

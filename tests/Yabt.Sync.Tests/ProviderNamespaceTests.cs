@@ -651,9 +651,17 @@ public sealed class ProviderNamespaceTests
             return Inner.TryDeleteIfContentHashMatchesAsync(key, expectedContentHash, cancellationToken);
         }
 
-        public async Task<IArchiveMutationLock> AcquireArchiveMutationLockAsync(CancellationToken cancellationToken = default)
+        public async Task<IArchiveMutationLock> AcquireArchiveMutationLockAsync
+        (
+            CancellationToken cancellationToken = default,
+            long? maximumDocumentBytes = null
+        )
         {
-            var mutationLock = await ((IArchiveMutationLockProvider)Inner).AcquireArchiveMutationLockAsync(cancellationToken);
+            var mutationLock = await ((IArchiveMutationLockProvider)Inner).AcquireArchiveMutationLockAsync
+            (
+                cancellationToken,
+                maximumDocumentBytes
+            );
             try
             {
                 if (OnLockAcquired is not null) { await OnLockAcquired(); }

@@ -316,7 +316,11 @@ public sealed class HistoryMaterializationSafetyTests
             return Inner.TryDeleteIfContentHashMatchesAsync(key, expectedContentHash, cancellationToken);
         }
 
-        public Task<IArchiveMutationLock> AcquireArchiveMutationLockAsync(CancellationToken cancellationToken = default) =>
+        public Task<IArchiveMutationLock> AcquireArchiveMutationLockAsync
+        (
+            CancellationToken cancellationToken = default,
+            long? maximumDocumentBytes = null
+        ) =>
             Task.FromResult<IArchiveMutationLock>(new SyntheticMutationLock());
     }
 

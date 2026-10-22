@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Yabt.Cli.Implementation;
 using Yabt.Common;
+using Yabt.Metadata;
 using Yabt.Sync;
 
 namespace Yabt.Cli;
@@ -47,7 +48,7 @@ public static class CliProgram
             .AddYabtWebDavObjectStore("ObjectStores:WebDav")
             .AddYabtMirrorFormatHandler()
             .AddYabtZipFormatHandler("Formats:Zip")
-            .AddYabtMetadata()
+            .AddYabtMetadata(YabtMetadataOptions.DefaultConfigurationSectionPath)
             .AddYabtPackaging()
             .AddYabtSync(YabtSyncOptions.DefaultConfigurationSectionPath)
             .AddSingleton(TimeProvider.System)

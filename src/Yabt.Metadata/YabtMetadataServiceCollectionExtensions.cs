@@ -13,7 +13,11 @@ public static class YabtMetadataServiceCollectionExtensions
         string? configSectionPath = null
     )
     {
-        _ = configSectionPath;
+        var options = services.AddOptions<YabtMetadataOptions>();
+        if (configSectionPath is not null)
+        {
+            options.BindYabtConfiguration(configSectionPath);
+        }
 
         services.AddSingleton<IBackupRootLocator, JsonBackupRootLocator>();
         services.AddSingleton<IBackupRootReader, JsonBackupRootReader>();

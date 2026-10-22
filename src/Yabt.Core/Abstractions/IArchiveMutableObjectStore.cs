@@ -50,6 +50,7 @@ public interface IArchiveMutableObjectStore : IObjectStore, IArchiveMutationLock
 
     Task<IArchiveMutationLock> IArchiveMutationLockProvider.AcquireArchiveMutationLockAsync
     (
-        CancellationToken cancellationToken
-    ) => ArchiveMutationLock.AcquireAsync(this, cancellationToken);
+        CancellationToken cancellationToken,
+        long? maximumDocumentBytes
+    ) => ArchiveMutationLock.AcquireAsync(this, cancellationToken, maximumDocumentBytes);
 }

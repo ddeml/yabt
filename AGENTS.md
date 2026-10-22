@@ -962,6 +962,19 @@ solution-folder GUIDs where possible.
 
 ## Configuration
 
+Deliberately small configuration and control documents have limits enforced on
+actual consumed bytes, even when a stream reports no length or an incorrect
+length. Root descriptors and folder policies default to 1 MiB each through
+`Metadata:RootDescriptorMaximumBytes` and `Metadata:FolderPolicyMaximumBytes`.
+Remote archive lock JSON defaults to 64 KiB through
+`Sync:LockDocumentMaximumBytes`. These trusted runtime options may raise the
+limits; a document cannot raise its own limit. Generated root descriptors and
+remote locks must also fit their effective read limit. Preserve exact descriptor
+bytes, including a UTF-8 BOM. Oversized documents are contextual errors, never
+empty configuration. These limits do not apply to manifests whose size grows
+with source file counts.
+
+
 Prefer the configuration defaults provided by `Host.CreateApplicationBuilder`
 and other framework builders. Do not explicitly clear or rebuild configuration
 sources unless the defaults are insufficient.

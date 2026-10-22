@@ -3,6 +3,7 @@ using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Yabt.Common;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
@@ -16,7 +17,8 @@ internal sealed class HistoryDeduplicator
     IBackupRootLocator _backupRootLocator,
     IEnumerable<IBackupRootStoreResolver> storeResolvers,
     IHistoryManifestSerializer _historyManifestSerializer,
-    IHistoryReferenceSerializer _historyReferenceSerializer
+    IHistoryReferenceSerializer _historyReferenceSerializer,
+    IOptionsMonitor<YabtSyncOptions> _options
 ) : IHistoryDeduplicator
 {
     private const int BufferSize = 81_920;
@@ -79,7 +81,11 @@ internal sealed class HistoryDeduplicator
 
             await using IArchiveMutationLock? mutationLock = request.DryRun ?
                 null :
-                await mutableTargetStore.AcquireArchiveMutationLockAsync(cancellationToken);
+                await mutableTargetStore.AcquireArchiveMutationLockAsync
+                (
+                    cancellationToken,
+                    _options.CurrentValue.GetValidatedLockDocumentMaximumBytes()
+                );
             using var operationCancellation = mutationLock is null ?
                 null :
                 CancellationTokenSource.CreateLinkedTokenSource(

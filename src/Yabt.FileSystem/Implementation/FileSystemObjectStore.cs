@@ -392,7 +392,8 @@ internal sealed class FileSystemObjectStore
 
     public Task<IArchiveMutationLock> AcquireArchiveMutationLockAsync
     (
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        long? maximumDocumentBytes = null
     )
     {
         _logger.LogTrace(nameof(AcquireArchiveMutationLockAsync));
