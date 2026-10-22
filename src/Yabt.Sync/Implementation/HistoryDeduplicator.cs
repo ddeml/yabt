@@ -18,7 +18,8 @@ internal sealed class HistoryDeduplicator
     IEnumerable<IBackupRootStoreResolver> storeResolvers,
     IHistoryManifestSerializer _historyManifestSerializer,
     IHistoryReferenceSerializer _historyReferenceSerializer,
-    IOptionsMonitor<YabtSyncOptions> _options
+    IOptionsMonitor<YabtSyncOptions> _options,
+    ITemporaryContentFactory _temporaryContentFactory
 ) : IHistoryDeduplicator
 {
     private const int BufferSize = 81_920;
@@ -420,17 +421,20 @@ internal sealed class HistoryDeduplicator
         await using var content = await targetStore.OpenReadAsync(
             archiveObject.Key,
             cancellationToken);
-        using var serializedReference = new MemoryStream();
-        await content.Content.CopyToAsync(serializedReference, cancellationToken);
-        var bytes = serializedReference.ToArray();
-        if (!HasHistoryReferenceDocumentType(bytes))
+        await using var serializedReference = _temporaryContentFactory.Create();
+        using var hashingContent = new ContentHashingReadStream(content.Content);
+        await hashingContent.CopyToAsync(serializedReference, cancellationToken);
+        var rawContentHash = hashingContent.CompleteHash();
+        await serializedReference.SealAsync(cancellationToken);
+        await using var typeCheckContent = serializedReference.OpenRead();
+        if (!await HasHistoryReferenceDocumentTypeAsync(typeCheckContent, cancellationToken))
         {
             return null;
         }
 
-        serializedReference.Position = 0;
+        await using var parseContent = serializedReference.OpenRead();
         var reference = await _historyReferenceSerializer.ReadAsync(
-            serializedReference,
+            parseContent,
             cancellationToken);
         if (!string.Equals(
                 reference.Entry.StoredRelativePath,
@@ -446,16 +450,24 @@ internal sealed class HistoryDeduplicator
         (
             reference.Entry,
             archiveObject.Key,
-            ArchiveHash.Compute(bytes),
+            rawContentHash,
             IsDeduplicationEligiblePath(reference.Entry.RelativePath)
         );
     }
 
-    private static bool HasHistoryReferenceDocumentType(ReadOnlyMemory<byte> serializedReference)
+    private static async Task<bool> HasHistoryReferenceDocumentTypeAsync
+    (
+        Stream serializedReference,
+        CancellationToken cancellationToken
+    )
     {
         try
         {
-            using var document = JsonDocument.Parse(serializedReference);
+            using var document = await JsonDocument.ParseAsync
+            (
+                serializedReference,
+                cancellationToken: cancellationToken
+            );
             return document.RootElement.ValueKind == JsonValueKind.Object &&
                 document.RootElement.TryGetProperty("documentType", out var documentType) &&
                 string.Equals(
@@ -463,9 +475,10 @@ internal sealed class HistoryDeduplicator
                     ArchiveHistoryContentReference.ExpectedDocumentType,
                     StringComparison.Ordinal);
         }
-        catch (JsonException)
+        catch (Exception ex)
         {
-            return false;
+            if (ex is JsonException) { return false; }
+            throw;
         }
     }
 
@@ -581,17 +594,16 @@ internal sealed class HistoryDeduplicator
                     Representation = ArchiveHistoryEntryRepresentation.Reference,
                 };
                 var reference = _historyReferenceSerializer.Create(referenceEntry);
-                using var serializedReference = new MemoryStream();
+                await using var serializedReference = _temporaryContentFactory.Create();
                 await _historyReferenceSerializer.WriteAsync(
                     reference,
                     serializedReference,
                     cancellationToken);
-                var referenceBytes = serializedReference.ToArray();
                 var manifestEntryAdditionalBytes = GetManifestEntryAdditionalBytes(
                     duplicate.Entry,
                     referenceEntry);
                 var bytesSaved = duplicate.Entry.ContentLength -
-                    referenceBytes.LongLength -
+                    serializedReference.Length -
                     manifestEntryAdditionalBytes;
                 if (bytesSaved <= 0)
                 {
@@ -604,7 +616,6 @@ internal sealed class HistoryDeduplicator
                     canonical,
                     duplicate,
                     reference,
-                    referenceBytes,
                     bytesSaved
                 ));
             }
@@ -684,9 +695,18 @@ internal sealed class HistoryDeduplicator
         foreach (var plan in plans)
         {
             var referenceKey = layout.ToHistoryObjectKey(plan.Reference.Entry.StoredRelativePath);
+            await using var serializedReference = _temporaryContentFactory.Create();
+            await _historyReferenceSerializer.WriteAsync
+            (
+                plan.Reference,
+                serializedReference,
+                cancellationToken
+            );
+            await serializedReference.SealAsync(cancellationToken);
+            await using var referenceContent = serializedReference.OpenRead();
             await targetStore.UploadAsync(
                 referenceKey,
-                new MemoryStream(plan.SerializedReference, writable: false),
+                referenceContent,
                 "application/json",
                 EmptyMetadata,
                 cancellationToken);
@@ -695,19 +715,20 @@ internal sealed class HistoryDeduplicator
                 plan.Reference.Entry.StoredRelativePath);
         }
 
-        using var serializedManifest = new MemoryStream();
+        await using var serializedManifest = _temporaryContentFactory.Create();
         await _historyManifestSerializer.WriteAsync(
             nextManifest,
             serializedManifest,
             cancellationToken);
-        serializedManifest.Position = 0;
+        await serializedManifest.SealAsync(cancellationToken);
+        await using var manifestContent = serializedManifest.OpenRead();
         if (existingManifest.Exists)
         {
             var replaced = await targetStore.TryReplaceIfContentHashMatchesAsync(
                 manifestKey,
                 existingManifest.RawContentHash ??
                     throw new YabtSyncException("Existing history manifest did not have a byte hash."),
-                serializedManifest,
+                manifestContent,
                 "application/json",
                 EmptyMetadata,
                 cancellationToken);
@@ -723,7 +744,7 @@ internal sealed class HistoryDeduplicator
         {
             await targetStore.UploadAsync(
                 manifestKey,
-                serializedManifest,
+                manifestContent,
                 "application/json",
                 EmptyMetadata,
                 cancellationToken);
@@ -807,17 +828,23 @@ internal sealed class HistoryDeduplicator
 
         _logger.LogHistoryControlMetadataOperation("Reading", manifestKey);
         await using var content = await targetStore.OpenReadAsync(manifestKey, cancellationToken);
-        using var serializedManifest = new MemoryStream();
-        await content.Content.CopyToAsync(serializedManifest, cancellationToken);
-        var bytes = serializedManifest.ToArray();
+        await using var serializedManifest = _temporaryContentFactory.Create();
+        using var hashingContent = new ContentHashingReadStream(content.Content);
+        await hashingContent.CopyToAsync
+        (
+            trustManifest ? serializedManifest : Stream.Null,
+            cancellationToken
+        );
+        var rawContentHash = hashingContent.CompleteHash();
         ArchiveHistoryManifest? manifest = null;
         if (trustManifest)
         {
             try
             {
-                serializedManifest.Position = 0;
+                await serializedManifest.SealAsync(cancellationToken);
+                await using var parseContent = serializedManifest.OpenRead();
                 manifest = await _historyManifestSerializer.ReadAsync(
-                    serializedManifest,
+                    parseContent,
                     cancellationToken);
             }
             catch (Exception)
@@ -829,7 +856,7 @@ internal sealed class HistoryDeduplicator
             }
         }
 
-        return new(true, manifest, ArchiveHash.Compute(bytes));
+        return new(true, manifest, rawContentHash);
     }
 
     private static async Task<string> ComputeObjectHashAsync
@@ -1289,7 +1316,6 @@ internal sealed class HistoryDeduplicator
         HistoryOccurrence Canonical,
         HistoryOccurrence Original,
         ArchiveHistoryContentReference Reference,
-        byte[] SerializedReference,
         long BytesSaved
     );
 }

@@ -477,19 +477,14 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
 
     private string ComputeManifestHash(ArchiveManifest manifest)
     {
-        using var canonicalJson = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(canonicalJson))
+        return ArchiveHash.Compute(canonicalJson =>
         {
+            using var writer = new Utf8JsonWriter(canonicalJson);
             WriteCanonicalManifest(
                 writer,
                 manifest,
                 includeManifestHash: false);
-        }
-
-        return ArchiveHash.Compute(
-            canonicalJson.GetBuffer().AsSpan(
-                0,
-                checked((int)canonicalJson.Length)));
+        });
     }
 
     private void WriteCanonicalManifest
@@ -534,6 +529,7 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
             }
 
             writer.WriteEndObject();
+            JsonWriterBuffering.FlushIfNeeded(writer);
         }
 
         writer.WriteEndArray();
@@ -571,6 +567,7 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
                 writer.WriteString("behavior", pair.Value.Behavior);
                 writer.WriteString("expectedTarget", pair.Value.ExpectedTarget);
                 writer.WriteEndObject();
+                JsonWriterBuffering.FlushIfNeeded(writer);
             }
 
             writer.WriteEndObject();
@@ -592,6 +589,7 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
         foreach (var value in values)
         {
             writer.WriteStringValue(value);
+            JsonWriterBuffering.FlushIfNeeded(writer);
         }
 
         writer.WriteEndArray();
@@ -652,6 +650,8 @@ internal sealed class JsonManifestSerializer : IManifestSerializer
                 throw new YabtMetadataException(
                     "Package manifest policy options contain an unsupported JSON value.");
         }
+
+        JsonWriterBuffering.FlushIfNeeded(writer);
     }
 
     private static void WriteUtcTimestamp

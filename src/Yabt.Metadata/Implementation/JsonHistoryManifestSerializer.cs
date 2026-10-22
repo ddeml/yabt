@@ -196,9 +196,9 @@ internal sealed class JsonHistoryManifestSerializer(JsonSerializerOptions _jsonO
         IEnumerable<ArchiveHistoryManifestEntry> entries
     )
     {
-        using var canonicalJson = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(canonicalJson))
+        return ArchiveHash.Compute(canonicalJson =>
         {
+            using var writer = new Utf8JsonWriter(canonicalJson);
             writer.WriteStartObject();
             writer.WriteString("documentType", manifest.DocumentType);
             writer.WriteNumber("schemaVersion", manifest.SchemaVersion);
@@ -207,13 +207,11 @@ internal sealed class JsonHistoryManifestSerializer(JsonSerializerOptions _jsonO
             foreach (var entry in entries)
             {
                 JsonHistoryMetadataValidation.WriteCanonicalEntry(writer, entry);
+                JsonWriterBuffering.FlushIfNeeded(writer);
             }
 
             writer.WriteEndArray();
             writer.WriteEndObject();
-        }
-
-        var canonicalBytes = canonicalJson.GetBuffer().AsSpan(0, checked((int)canonicalJson.Length));
-        return ArchiveHash.Compute(canonicalBytes);
+        });
     }
 }

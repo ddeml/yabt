@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -13,6 +14,64 @@ namespace Yabt.Sync.Tests;
 [TestClass]
 public sealed class HistoryDeduplicatorTests
 {
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task DeduplicateAsyncReplaysManifestsAndReferencesWithDiskOnlyBuffering(bool corruptManifest)
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var archiveRoot = Path.Combine(workspace, "archive");
+            var targetRoot = Path.Combine(workspace, "target");
+            var temporaryRoot = Path.Combine(workspace, "temporary-content");
+            Directory.CreateDirectory(temporaryRoot);
+            await InitializeArchiveRootAsync(archiveRoot, targetRoot);
+            var content = CreateContent(6_000);
+            await WriteBytesAsync(Path.Combine(targetRoot, ".yabt-hist", "one", "file.bin"), content);
+            await WriteBytesAsync(Path.Combine(targetRoot, ".yabt-hist", "two", "file.bin"), content);
+            var registrations = CreateServices();
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection
+            (
+                new Dictionary<string, string?>
+                {
+                    ["TemporaryContent:TotalMemoryBudgetBytes"] = "0",
+                    ["TemporaryContent:TemporaryDirectory"] = temporaryRoot,
+                }
+            ).Build();
+            registrations.AddSingleton<IConfiguration>(configuration);
+            registrations.AddYabtTemporaryContent("TemporaryContent");
+            using var services = registrations.BuildServiceProvider();
+            var deduplicator = services.GetRequiredService<IHistoryDeduplicator>();
+            var first = await deduplicator.DeduplicateAsync(new HistoryDeduplicationRequest(archiveRoot));
+            Assert.AreEqual(1, first.ReplacedObjectCount);
+            Assert.AreEqual(0, services.GetRequiredService<ITemporaryContentFactory>().ReservedMemoryBytes);
+            Assert.IsEmpty(Directory.GetFiles(temporaryRoot));
+
+            if (corruptManifest)
+            {
+                await File.WriteAllTextAsync
+                (
+                    Path.Combine(targetRoot, ".yabt-hist", ArchiveHistoryFileNames.Manifest),
+                    "not a valid manifest"
+                );
+            }
+            await WriteBytesAsync(Path.Combine(targetRoot, ".yabt-hist", "three", "file.bin"), content);
+
+            var second = await deduplicator.DeduplicateAsync(new HistoryDeduplicationRequest(archiveRoot));
+
+            Assert.IsTrue(second.Completed);
+            Assert.AreEqual(1, second.ReplacedObjectCount);
+            Assert.IsEmpty(Directory.GetFiles(temporaryRoot));
+            Assert.AreEqual(0, services.GetRequiredService<ITemporaryContentFactory>().ReservedMemoryBytes);
+            Assert.AreEqual(2, Directory.GetFiles(targetRoot, "*.yabt-ref.json", SearchOption.AllDirectories).Length);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
     [TestMethod]
     public async Task DeduplicateAsyncReplacesNewerDuplicateWithSelfDescribingReference()
     {

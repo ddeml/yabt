@@ -24,6 +24,7 @@ internal sealed class ArchiveSynchronizer
     IBackupRootSerializer _backupRootSerializer,
     ILogicalStateManifestSerializer _logicalStateManifestSerializer,
     IOptionsMonitor<YabtSyncOptions> _options,
+    ITemporaryContentFactory _temporaryContentFactory,
     TimeProvider _timeProvider
 ) : IArchiveSynchronizer
 {
@@ -2396,15 +2397,16 @@ internal sealed class ArchiveSynchronizer
         CancellationToken cancellationToken
     )
     {
-        using var content = new MemoryStream();
+        await using var content = _temporaryContentFactory.Create();
         await _logicalStateManifestSerializer.WriteAsync(
             manifest,
             content,
             cancellationToken);
-        content.Position = 0;
+        await content.SealAsync(cancellationToken);
+        await using var reader = content.OpenRead();
         await destinationStore.UploadAsync(
             ArchiveLogicalStateManifest.FileName,
-            content,
+            reader,
             "application/json",
             EmptyMetadata,
             cancellationToken);
@@ -4268,7 +4270,7 @@ internal sealed class ArchiveSynchronizer
     {
         try
         {
-            await using var content = new MemoryStream();
+            await using var content = _temporaryContentFactory.Create();
             if (string.Equals(
                     fileName,
                     ArchiveChangeManifest.BrotliFileName,
@@ -4293,11 +4295,12 @@ internal sealed class ArchiveSynchronizer
                     cancellationToken);
             }
 
-            content.Position = 0;
+            await content.SealAsync(cancellationToken);
+            await using var reader = content.OpenRead();
 
             await targetStore.UploadAsync(
                 fileName,
-                content,
+                reader,
                 string.Equals(
                     fileName,
                     ArchiveChangeManifest.BrotliFileName,

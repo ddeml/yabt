@@ -730,6 +730,17 @@ A synchronization regression verifies prompt release across sixteen packages,
 including packages below an explicit mirror-policy parent. The parent case
 exposed and guarded a premature sibling-disposal error during development.
 
+**Stage 4 implemented:** Canonical JSON hashes now feed an incremental hash
+stream. Writers flush between entries, and generated live, logical-state, and
+history manifests use owned spillable content for uploads. History reference
+plans retain records rather than serialized byte arrays. Raw-byte validation
+still precedes conditional replacement and removal.
+
+Regression cases compare canonical hashes with the previous byte representation,
+measure a generated 64 MiB hash input without retaining it, check bounded writer
+chunks, and exercise disk-only history manifest creation and invalid-catalog
+rebuild cleanup.
+
 File-count-dependent ZIP metadata and scalable manifest processing remain in
 stage 5, coordinated with I02. Payload buffering and projection lifetime are
 separate from those retained metadata structures.

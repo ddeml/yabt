@@ -117,6 +117,7 @@ internal static class JsonHistoryMetadataValidation
             foreach (var pair in entry.Metadata)
             {
                 writer.WriteString(pair.Key, pair.Value);
+                JsonWriterBuffering.FlushIfNeeded(writer);
             }
             writer.WriteEndObject();
         }

@@ -276,9 +276,9 @@ internal sealed class JsonLogicalStateManifestSerializer(JsonSerializerOptions _
         IEnumerable<ArchiveLogicalStateManifestEntry> entries
     )
     {
-        using var canonicalJson = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(canonicalJson))
+        return ArchiveHash.Compute(canonicalJson =>
         {
+            using var writer = new Utf8JsonWriter(canonicalJson);
             writer.WriteStartObject();
             writer.WriteString("documentType", manifest.DocumentType);
             writer.WriteNumber("schemaVersion", manifest.SchemaVersion);
@@ -291,15 +291,11 @@ internal sealed class JsonLogicalStateManifestSerializer(JsonSerializerOptions _
                 writer.WriteString("statFingerprint", entry.StatFingerprint);
                 writer.WriteString("contentHash", entry.ContentHash);
                 writer.WriteEndObject();
+                JsonWriterBuffering.FlushIfNeeded(writer);
             }
 
             writer.WriteEndArray();
             writer.WriteEndObject();
-        }
-
-        var canonicalBytes = canonicalJson.GetBuffer().AsSpan(
-            0,
-            checked((int)canonicalJson.Length));
-        return ArchiveHash.Compute(canonicalBytes);
+        });
     }
 }
