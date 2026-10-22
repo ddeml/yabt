@@ -312,9 +312,8 @@ internal sealed class BackupTargetReconciler
         _logger.LogTrace(nameof(MoveRemainingTargetObjectsToHistoryAsync));
 
         var extraFolderPaths = targetFolders.Values
-            .SelectMany(targetFolder => targetFolder.Folders.Keys)
-            .Distinct(StringComparer.Ordinal);
-        var topLevelExtraFolderPaths = ArchivePathRules.SelectTopLevelFolderPaths(extraFolderPaths);
+            .SelectMany(targetFolder => targetFolder.Folders.Keys);
+        using var extraFolders = BackupCleanupFolderIndex.Create(extraFolderPaths, cancellationToken);
 
         foreach (var targetFolder in targetFolders.Values)
         {
@@ -322,9 +321,7 @@ internal sealed class BackupTargetReconciler
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (topLevelExtraFolderPaths.Any(
-                        folderPath => !string.Equals(relativePath, folderPath, StringComparison.Ordinal) &&
-                            ArchiveLayout.IsUnderPrefix(relativePath, folderPath)))
+                if (extraFolders.ContainsAncestor(relativePath, cancellationToken))
                 {
                     continue;
                 }
@@ -373,7 +370,8 @@ internal sealed class BackupTargetReconciler
             }
         }
 
-        foreach (var relativeFolderPath in topLevelExtraFolderPaths)
+        var orderedExtraFolderPaths = extraFolders.Enumerate(cancellationToken);
+        foreach (var relativeFolderPath in orderedExtraFolderPaths)
         {
             await MoveTargetFolderToHistoryAsync(
                 targetStore,

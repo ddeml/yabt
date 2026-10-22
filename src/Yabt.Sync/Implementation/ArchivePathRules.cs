@@ -193,30 +193,6 @@ internal static class ArchivePathRules
         return false;
     }
 
-    internal static List<string> SelectTopLevelFolderPaths(IEnumerable<string> folderPaths)
-    {
-        var selectedFolderPaths = new List<string>();
-        var orderedFolderPaths = folderPaths
-            .Select(ArchiveLayout.NormalizeObjectKey)
-            .Where(folderPath => !string.IsNullOrEmpty(folderPath))
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(GetPathDepth)
-            .ThenBy(folderPath => folderPath, StringComparer.Ordinal);
-
-        foreach (var folderPath in orderedFolderPaths)
-        {
-            if (selectedFolderPaths.Any(
-                    selectedFolderPath => ArchiveLayout.IsUnderPrefix(folderPath, selectedFolderPath)))
-            {
-                continue;
-            }
-
-            selectedFolderPaths.Add(folderPath);
-        }
-
-        return selectedFolderPaths;
-    }
-
     internal static int GetPathDepth(string path) => path.Count(character => character == '/');
 
     internal static string GetParentPrefix(string relativePath)
