@@ -13,9 +13,9 @@ change, for follow-up work in **Codex-Sandbox-01**.
   configuration. The handoff commit carries those pending changes alongside this
   document.
 - Status: **R01-R09 and I01-I03 are implemented for their documented scopes;
-  I04 remains open**. Recording and committing the baseline did not implement
-  the proposed fixes. R09 was added during the follow-up discussion on
-  2026-09-21.
+  I04 implementation and local contracts are complete, with external-service
+  acceptance pending**. Recording the baseline did not implement the fixes. R09
+  was added during the follow-up discussion on 2026-09-21.
 - Scope: correctness, archive safety, recovery, and scalability. This was a code
   review with focused experiments, not an exhaustive audit or an Azure service
   integration test.
@@ -65,7 +65,7 @@ were not claimed as completed runtime reproductions in the review.
 | I01 | Improvement | ZIP buffers accumulate across a backup | Generated large-stream and projection-lifetime regression tests | Implemented |
 | I02 | Improvement | ZIP restore repeatedly parses the central directory | Entry-read instrumentation and large-manifest round-trip tests | Implemented |
 | I03 | Improvement | Current-live restore traverses history unnecessarily | Traversal-count and unreadable-subtree regression tests | Implemented |
-| I04 | Improvement | Synchronizer responsibilities and provider test coverage | Architectural review | Open |
+| I04 | Improvement | Synchronizer responsibilities and provider test coverage | Component extraction, provider contracts, recovery fault tests | Implemented locally; external acceptance pending |
 
 P1 means address before relying on the affected archival operation. P2 means a
 concrete correctness or usability defect. Investigate means the execution path
@@ -243,7 +243,7 @@ previously depended on missing source folders being interpreted as empty.
 ### R03: A nonexistent source can become a successful empty backup
 
 **Code:**
-[ArchiveSynchronizer.cs](../src/Yabt.Sync/Implementation/ArchiveSynchronizer.cs)
+[ArchiveOperationContextFactory.cs](../src/Yabt.Sync/Implementation/ArchiveOperationContextFactory.cs)
 , `CreateContextAsync` ;
 [JsonBackupRootLocator.cs](../src/Yabt.Metadata/Implementation/JsonBackupRootLocator.cs)
 , `LocateRootAsync` ;
@@ -309,9 +309,10 @@ checks passed. Native Linux execution remains unverified.
 ### R04: Backup accepts overlapping source and target roots
 
 **Code:**
-[ArchiveSynchronizer.cs](../src/Yabt.Sync/Implementation/ArchiveSynchronizer.cs)
-, `CreateContextAsync` and `ApplyProjectionAsync` ; compare existing restore
-location validation.
+[ArchiveOperationContextFactory.cs](../src/Yabt.Sync/Implementation/ArchiveOperationContextFactory.cs)
+, `CreateContextAsync` , and
+[ArchiveBackupOperation.cs](../src/Yabt.Sync/Implementation/ArchiveBackupOperation.cs)
+, `ApplyProjectionAsync` ; compare existing restore location validation.
 
 **Reproduction:** Configure a source descriptor whose filesystem target is the
 source directory itself. Add a ZIP policy and `original.txt` . Run backup. It
@@ -385,7 +386,7 @@ host.
 ### R05: Filesystem shape and casing changes prevent backup completion
 
 **Code:**
-[ArchiveSynchronizer.cs](../src/Yabt.Sync/Implementation/ArchiveSynchronizer.cs)
+[BackupTargetReconciler.cs](../src/Yabt.Sync/Implementation/BackupTargetReconciler.cs)
 , `PlanBackupRepresentationConflictsAsync` ,
 `ApplyBackupRepresentationConflictsAsync` , and
 [FileSystemObjectStoreNamespace.cs](../src/Yabt.FileSystem/Implementation/FileSystemObjectStoreNamespace.cs)
@@ -817,7 +818,7 @@ execution and real remote-service performance remain outside this Windows run.
 
 ### I03: Prune history before current-live restore traversal
 
-[ArchiveSynchronizer.cs](../src/Yabt.Sync/Implementation/ArchiveSynchronizer.cs)
+[RestorePlanner.cs](../src/Yabt.Sync/Implementation/RestorePlanner.cs)
 , `LoadRestoreObjectsAsync` , previously listed the live prefix recursively and
 filtered internal paths afterward. With the default empty live prefix, this
 enumerated history and staging descendants unnecessarily. Restore work grew
@@ -857,42 +858,99 @@ were not exercised on this host.
 
 ### I04: Separate orchestration responsibilities and strengthen provider tests
 
-`ArchiveSynchronizer` is roughly 6,000 lines and owns backup comparison,
-restore planning/execution, projection lifetimes, recovery markers, manifest
-publication, and historization coordination. The concern is the difficulty of
-reviewing interactions among those invariants and testing failures in isolation.
-This finding does not establish an additional data-loss defect.
+The preceding `ArchiveSynchronizer` was roughly 6,000 lines and owned backup
+comparison, restore planning/execution, projection lifetimes, recovery markers,
+manifest publication, and historization coordination. The concern was the
+reviewability of interactions among those invariants. This finding did not
+establish an additional data-loss defect.
 
-Provider test coverage is uneven. Filesystem and synchronizer regressions now
-cover many real safety cases, but Azure tests still concentrate on options,
-client construction, naming, and readiness. They do not establish equivalent
-coverage for real hierarchical enumeration, conditional mutations, remote moves,
-and lock loss. WebDAV has local HTTP readiness/path tests but similar gaps in
-complete mutation sequences.
+**Implemented:** The public synchronizer is now a 143-line command facade. The
+extracted components contain the existing behavior and have explicit roles:
 
-**Proposed next steps:**
+- `ArchiveBackupOperation` and `ArchiveRestoreOperation` own their command
+  lifetimes, location checks, locks, and completion/failure gates.
+- `RestorePlanner` expands format projections and validates the desired
+  namespace. Its returned `RestorePlan` owns projection lifetimes.
+- `RestoreReconciler` compares the destination with that plan. `RestoreExecutor`
+  owns bounded preparation, per-file commits, and deferred extra removal.
+- `BackupTargetReconciler` owns target traversal, representation conflicts, and
+  historization selection. `ArchiveContentTransfer` compares and prepares bytes.
+- `ArchiveManifestStore` handles manifest I/O. The operation-owned
+  `BackupManifestTransaction` and `RestoreManifestTransaction` retain recovery
+  state and order invalidation, publication, and marker cleanup.
+- Root descriptor handling, context resolution, logical path rules, and logging
+  have focused components. Native filesystem semantics remain in providers.
 
-1. Establish reusable provider contract cases for folder-local traversal, exact
-   key identity, file/prefix conflicts, whole-folder moves, conditional writes
-   and deletes, and lock lifetime/loss. Exercise disposable filesystem fixtures,
-   Azure through Azurite or an explicitly configured test account, and WebDAV
-   through a controlled server. Add fault injection at mutation boundaries.
-2. Extract restore planning first into a cohesive component that owns validation
-   and the disposable plan. Keep destination comparison and native path rules
-   in provider implementations. Preserve the current behavior with existing and
-   new failure/cancellation tests.
-3. Extract backup execution and restore execution separately. Give manifest
-   publication/recovery a focused transaction component with explicit ordering
-   and ownership; avoid a set of forwarding-only wrappers or a new framework.
-4. Review remaining scale costs with measurements: restore blocker lookup and
-   retained operation plans are candidates. Do not silently combine algorithm
-   changes with the initial structural extraction.
+The transaction objects borrow manifest models; callers still dispose them after
+all consumers finish. Failure never triggers automatic marker cleanup. Backup
+still publishes live evidence before completing history recovery. Restore still
+completes history recovery before publishing logical-state evidence. Started
+restore workers still finish before staging, projections, and locks are
+released. Source failures still suppress unrelated removals and successful
+publication.
 
-Earlier OS-wide path-comparison concerns have already been addressed through
-provider-owned namespaces. I04 should preserve that separation, including the
-new temporary-storage location checks. Native Linux execution and real remote
-service behavior need their own environments; passing local mocks is not
-substitute evidence.
+**Provider evidence:** Six reusable cases run against disposable filesystem
+stores, the actual Azure SDK against controlled HTTP responses, and WebDAV's
+actual HTTP provider against a controlled loopback server. They cover immediate
+traversal and exact keys, create-if-absent uploads, conditional mutations,
+whole-folder moves including markers, interrupted uploads, and lock contention
+with reacquisition. Provider-specific cases add listing pagination/failure,
+post-read ETag races, file/prefix conflicts, copy/move failures, and
+preservation of a replacement lock owner's document during release.
+
+These fixtures exercise protocol behavior, not deployed-server compatibility.
+They do not establish periodic renewal or cancellation of an active operation
+after renewal failure. Azurite was unavailable on this host; no live Azure
+account or deployed WebDAV server was used. Native Linux and real-service
+acceptance remain explicit follow-up work.
+
+Fifteen focused manifest cases inject failures at publication boundaries and
+verify that old evidence or invalidation markers survive, invalid evidence is
+not trusted, and a later successful operation recovers. Existing end-to-end
+tests retain coverage of partial restores, canceled workers, projection
+ownership, source failures, namespace conflicts, and history cleanup.
+
+The class extraction and transaction wiring are separate commits. No path
+comparison rules, durable formats, payload algorithms, or restore blocker lookup
+algorithms changed during this work.
+
+**Commits:** `a7555f3` extracts the orchestration components; `485601d` adds
+provider contracts; `75f0433` isolates manifest recovery transactions and adds
+failure-boundary tests.
+
+**Verification (2026-10-22):** The full Release solution suite passed on
+CodexSandbox01 with **1,094 passed, 0 failed, and 3 existing Linux-only skips**.
+The build reported no warnings. A final change to reuse the shared WebDAV lock
+contention case also passed its focused test after the solution run.
+
+```powershell
+dotnet test yabt.sln --no-restore --configuration Release --verbosity minimal `
+  -m:1 --disable-build-servers
+```
+
+Independent review compared extracted method bodies and transaction ordering
+with the preceding implementation. `git diff --check` and CRLF checks pass.
+
+**Recommended next step:** Measure large-tree operation costs, starting with the
+restore blocker scan in `RestoreExecutor.BeforeRestoreFileCommitAsync`. It scans
+all planned history moves before each file commit, even when most moves are
+already complete. F committed files and H planned moves therefore entail F x H
+membership checks; 10,000 of each means roughly 100 million checks. This is a
+code-derived work estimate, not a measured elapsed-time result.
+
+Use bounded 1,000/5,000/10,000-file fixtures to establish scaling for
+replacement and transition workloads. Measure allocations, peak working set,
+comparison counts, and provider calls. Then replace the scan with a
+provider-comparer index queried by the exact path and its ancestors, preserving
+blocker rules and keeping unrelated extras deferred. Validate behavior and
+growth through operation counts rather than flaky elapsed-time assertions.
+
+Next measure retained plan memory in `RestorePlanner`, `RestoreReconciler`, and
+`ArchiveBackupOperation`. The manifest/payload work already bounds large byte
+buffers; desired-object lists, projection dependency maps, and destination plans
+still grow with file count. Use larger no-op metadata fixtures only under an
+explicit runtime budget. Decide on disk-backed plan storage from those results
+as a separate algorithm change. Do not combine it with the blocker lookup fix.
 
 ## Suggested Codex-Sandbox-01 sequence
 
@@ -906,8 +964,9 @@ substitute evidence.
    reproductions.
 4. R05-R09 are implemented. R08 uses deterministic coordination to verify
    cancellation ownership rather than timing-dependent sleeps.
-5. I01-I03 are implemented. Start I04 with provider contract coverage, then
-   extract orchestration responsibilities under the resulting regressions.
+5. I01-I03 and the local I04 implementation are complete. Follow up with
+   native Linux/deployed-service acceptance and the measured large-tree work
+   described under I04.
 6. Update each finding's status with the fixing commit and verification
    evidence. Do not mark an item resolved merely because the pre-existing suite
    passes.

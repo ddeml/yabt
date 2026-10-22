@@ -797,6 +797,30 @@ Expected source projects:
 Project boundaries may evolve, but keep storage adapters, domain models,
 metadata handling, packaging, sync orchestration, and CLI concerns separated.
 
+## Synchronization Implementation
+
+`ArchiveSynchronizer` is the public command facade. Keep backup and verification
+in `ArchiveBackupOperation` and restore orchestration in
+`ArchiveRestoreOperation`. `RestorePlanner` owns projection expansion, desired
+namespace validation, and the disposable `RestorePlan`; `RestoreReconciler`
+compares that plan with destination state. `RestoreExecutor` owns the bounded
+preparation/commit pipeline and must drain started workers before releasing
+staging, projection resources, or the archive lock.
+
+`BackupTargetReconciler` handles target traversal, representation conflicts, and
+historization selection. `ArchiveContentTransfer` owns byte comparison and
+validated upload preparation. Native paths, namespace semantics, staging, and
+location checks remain provider responsibilities.
+
+Manifest I/O belongs to `ArchiveManifestStore`. `BackupManifestTransaction` and
+`RestoreManifestTransaction` are operation-owned state, never singleton mutable
+state. They borrow manifest models from their callers and do not clean up
+markers on failure or disposal. Preserve their distinct completion order: backup
+publishes live evidence before completing history recovery; restore completes
+history recovery before publishing logical-state evidence. Keep all existing
+source-read failure gates and deferred unrelated removals when changing these
+components.
+
 ## Testing
 
 Use MSTest for unit tests.
@@ -809,7 +833,10 @@ A shared test assembly is acceptable only for shared test helpers or tests that
 address a corresponding shared production project directly.
 
 Use `Yabt.Tests` for shared test helpers such as in-memory object stores and
-other test infrastructure.
+other test infrastructure. `ObjectStoreContract` supplies reusable provider
+behavior cases. Controlled HTTP fixtures exercise the actual Azure SDK and
+WebDAV provider, but do not substitute for deployed-service or native Linux
+acceptance; report those environments separately.
 
 ## CLI
 
