@@ -12,5 +12,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Yabt.FileSystem\Yabt.FileSystem.csproj" />
+    <ProjectReference Include="..\..\src\Yabt.Tests\Yabt.Tests.csproj" />
   </ItemGroup>
 </Project>
