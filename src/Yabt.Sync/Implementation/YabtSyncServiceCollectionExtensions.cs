@@ -29,6 +29,16 @@ public static class YabtSyncServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddYabtTemporaryContent();
+        services.AddSingleton<ArchiveBackupOperation>();
+        services.AddSingleton<ArchiveRestoreOperation>();
+        services.AddSingleton<ArchiveOperationContextFactory>();
+        services.AddSingleton<ArchiveRootDocuments>();
+        services.AddSingleton<RestorePlanner>();
+        services.AddSingleton<RestoreReconciler>();
+        services.AddSingleton<RestoreExecutor>();
+        services.AddSingleton<BackupTargetReconciler>();
+        services.AddSingleton<ArchiveContentTransfer>();
+        services.AddSingleton<ArchiveManifestStore>();
         services.AddSingleton<IArchiveSynchronizer, ArchiveSynchronizer>();
         services.AddSingleton<IRestorePathVerifier, RestorePathVerifier>();
         services.AddSingleton<IHistoryDeduplicator, HistoryDeduplicator>();
