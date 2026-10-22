@@ -167,6 +167,11 @@ manifest, so ordinary hash-looking ZIP files are never guessed to be packages.
 Exact source modification times come from the package manifest rather than the
 two-second ZIP timestamp field.
 
+Restore lists the archive one folder at a time and skips history and staging
+subtrees before descending. Listing work therefore does not grow with the
+contents of those subtrees. Live-content errors and provider safety checks still
+apply.
+
 Identical files remain untouched. A successful restore writes
 `.yabt-logical-state-manifest.json` at the destination root so a later normal
 restore can recognize an unchanged file from its current `stat-v1` metadata plus

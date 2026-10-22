@@ -12,7 +12,7 @@ change, for follow-up work in **Codex-Sandbox-01**.
   source-read failure handling, `verify-restore` , and Azure transfer/retry
   configuration. The handoff commit carries those pending changes alongside this
   document.
-- Status: **R01-R09 are implemented for their documented scopes; other
+- Status: **R01-R09 and I03 are implemented for their documented scopes; other
   findings remain open**. Recording and committing the baseline did not implement
   the proposed fixes. R09 was added during the follow-up discussion on
   2026-09-21.
@@ -64,7 +64,7 @@ were not claimed as completed runtime reproductions in the review.
 | R09 | P1 | Hard-linked archive files share mutable contents and distort deduplication savings | CLI reproduction and hard-link/recovery regression tests | Implemented |
 | I01 | Improvement | ZIP buffers accumulate across a backup | Lifetime inspection | Open |
 | I02 | Improvement | ZIP restore repeatedly parses the central directory | Inspection and isolated probe | Open |
-| I03 | Improvement | Current-live restore traverses history unnecessarily | Traversal inspection | Open |
+| I03 | Improvement | Current-live restore traverses history unnecessarily | Traversal-count and unreadable-subtree regression tests | Implemented |
 | I04 | Improvement | Synchronizer responsibilities and provider test coverage | Architectural review | Open |
 
 P1 means address before relying on the affected archival operation. P2 means a
@@ -730,16 +730,42 @@ preserving full package validation and concurrency bounds.
 ### I03: Prune history before current-live restore traversal
 
 [ArchiveSynchronizer.cs](../src/Yabt.Sync/Implementation/ArchiveSynchronizer.cs)
-, `LoadRestoreObjectsAsync` , recursively lists the live prefix and filters
-internal paths afterward. With the default empty live prefix, this enumerates
-history and staging descendants unnecessarily. Restore work grows with
-accumulated history; inaccessible history can also interfere with a current-live
-restore.
+, `LoadRestoreObjectsAsync` , previously listed the live prefix recursively and
+filtered internal paths afterward. With the default empty live prefix, this
+enumerated history and staging descendants unnecessarily. Restore work grew
+with accumulated history, and failures listing excluded subtrees could prevent
+current-live restore.
 
-Use folder-local traversal and prune reserved prefixes before descending. Verify
-provider call counts with a small live tree and large history tree. Evaluate
-destination safety traversal separately: its deliberate safety checks must not
-be removed merely to reduce scanning.
+**Implemented:** Restore now uses iterative folder-local traversal through the
+existing object-store contract. It prunes the configured history and staging
+prefixes before scheduling descendant listings. Nested history ancestors and
+ordinary live siblings remain traversable, and explicit live prefixes retain
+their own ordinary history- or staging-named descendants. Root metadata names
+remain exact-object exclusions, so a same-named virtual folder cannot hide
+unmanifested live content.
+
+Manifest validation, duplicate-object rejection, hidden empty-folder-marker
+lookup, and destination safety traversal remain in place. Provider validation
+while listing a parent still applies; pruning does not bypass unsafe entries or
+an unreadable parent. No provider or durable-format change is required.
+
+**Regression evidence:** Ten tests cover three layouts, forbidden history and
+staging descent, live listing failures, and unmanifested content. Growing each
+excluded subtree from one object to 129 leaves visited-folder and yielded-object
+counts unchanged. The tests inspect actual provider calls rather than elapsed
+time. Seven cases failed against the preceding implementation; all ten pass
+after the fix. This is traversal evidence, not a remote-service benchmark.
+
+**Verification (2026-10-22):** The full Release solution suite passed on Windows
+with **889 passed, 0 failed, and 3 Linux-only tests skipped**:
+
+```powershell
+dotnet test yabt.sln --no-restore --configuration Release --verbosity minimal `
+  -m:1 --disable-build-servers
+```
+
+`git diff --check` passes. Native Linux execution and remote-service performance
+were not exercised on this host.
 
 ### I04: Separate orchestration responsibilities and strengthen provider tests
 
@@ -775,8 +801,8 @@ Related observations to evaluate during this work:
    reproductions.
 4. R05-R09 are implemented. R08 uses deterministic coordination to verify
    cancellation ownership rather than timing-dependent sleeps.
-5. Measure I01-I03, then refactor under the resulting tests and provider
-   contracts.
+5. I03 is implemented. Measure I01 and I02, then refactor under the resulting
+   tests and provider contracts.
 6. Update each finding's status with the fixing commit and verification
    evidence. Do not mark an item resolved merely because the pre-existing suite
    passes.

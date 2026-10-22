@@ -336,6 +336,13 @@ listing. The object store contract should answer "what files and immediate child
 folders are inside this folder prefix?" so backup can compare source and target
 incrementally and future traversal can parallelize child folders.
 
+Current-live restore enumerates archive folders one level at a time and prunes
+configured history and staging prefixes before descending. With a nested
+history prefix, still traverse its ancestors and ordinary live siblings.
+Reserved metadata filenames exclude exact objects, not similarly named virtual
+folders. Preserve manifest coverage checks, hidden empty-folder-marker lookup,
+provider path validation, and the separate destination safety traversal.
+
 Providers that do not have real directories, such as Azure Blob Storage, should
 emulate immediate child folders from object key prefixes. Do not rely on global
 ordering of recursive object listings for backup correctness.

@@ -541,6 +541,14 @@ behind change-detection abstractions.
 
 ## Restore Symmetry
 
+Current-live restore enumerates the archive one folder at a time. It prunes
+history and staging prefixes before descending, including when the live prefix
+is empty. A nested history prefix still permits traversal of its ancestors and
+live siblings. Reserved metadata filenames exclude exact objects; they do not
+hide descendants of a same-named virtual folder. Manifest coverage checks and
+hidden empty-folder-marker lookup remain in effect. Provider validation during
+parent listing and the separate destination safety traversal still apply.
+
 Restore uses the same durable metadata that backup creates. The live change
 manifest records the root format and projection groups, package manifests
 describe each reversible ZIP representation, and the archived root descriptor

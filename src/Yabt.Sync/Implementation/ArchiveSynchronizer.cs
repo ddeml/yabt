@@ -702,26 +702,40 @@ internal sealed class ArchiveSynchronizer
     {
         var listedObjects = new Dictionary<string, ArchiveObjectInfo>(StringComparer.Ordinal);
         var livePrefix = ArchiveLayout.NormalizeObjectPrefix(context.Descriptor.Layout.LivePrefix);
-        _logger.LogObjectRead(
-            livePrefix ?? ".",
-            "restore archive live-branch enumeration");
-        var liveItems = context.ArchiveStore.GetFolderItemsAsync(
-            livePrefix,
-            recursive: true,
-            cancellationToken);
-        await foreach (var item in liveItems)
+        var internalKeys = CreateInternalObjectKeys(context.Descriptor.Layout);
+        var internalPrefixes = CreateInternalObjectPrefixes(context.Descriptor.Layout);
+        var pendingFolders = new Stack<string?>();
+        pendingFolders.Push(livePrefix);
+        while (pendingFolders.TryPop(out var folderPrefix))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (item.Object is null) { continue; }
-
-            var archiveKey = ArchiveLayout.NormalizeObjectKey(item.Object.Key);
-            if (IsInternalObject(archiveKey, context.Descriptor.Layout)) { continue; }
-
-            var relativePath = ArchiveLayout.RemovePrefix(archiveKey, livePrefix);
-            if (!listedObjects.TryAdd(relativePath, item.Object))
+            _logger.LogObjectRead(
+                folderPrefix ?? ".",
+                "restore archive live-branch enumeration");
+            var liveItems = context.ArchiveStore.GetFolderItemsAsync(
+                folderPrefix,
+                recursive: false,
+                cancellationToken);
+            await foreach (var item in liveItems)
             {
-                throw new YabtSyncException(
-                    $"Archive live object '{relativePath}' was listed more than once.");
+                cancellationToken.ThrowIfCancellationRequested();
+                var archiveKey = ArchiveLayout.NormalizeObjectKey(item.Key);
+                if (IsInternalObjectPrefix(archiveKey, internalPrefixes)) { continue; }
+
+                if (item.Object is null)
+                {
+                    pendingFolders.Push(archiveKey);
+                    continue;
+                }
+
+                if (IsInternalObjectKey(archiveKey, internalKeys)) { continue; }
+
+                var relativePath = ArchiveLayout.RemovePrefix(archiveKey, livePrefix);
+                if (!listedObjects.TryAdd(relativePath, item.Object))
+                {
+                    throw new YabtSyncException(
+                        $"Archive live object '{relativePath}' was listed more than once.");
+                }
             }
         }
 
