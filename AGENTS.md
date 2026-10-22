@@ -821,6 +821,36 @@ history recovery before publishing logical-state evidence. Keep all existing
 source-read failure gates and deferred unrelated removals when changing these
 components.
 
+## Algorithm And Memory Scalability
+
+Actively review algorithm cost when implementing or changing code. Consider file
+count, directory count, path depth, payload size, provider calls, and retained
+memory. Identify repeated full-collection scans inside per-file/per-folder loops
+and replace them with suitable lookup, ordering, or streaming algorithms. A
+bounded small collection can remain a simple scan; avoid adding abstractions
+without a concrete cost or ownership benefit.
+
+Use operation-owned `TemporaryIndex` collections for potentially large lookup
+and sort state. Reuse their bounded SQLite page cache rather than adding an
+unbounded RAM dictionary beside a disk-backed collection. These indexes are
+rebuildable scratch state, never durable archive truth. Preserve exact logical
+names and use the provider's comparer where destination equivalence matters;
+SQLite's built-in text collations do not define filesystem semantics.
+
+Restore history lookup probes the desired path and its ancestors, retaining
+original move order. Exact files/folders and ancestor files can block a file
+commit; ancestor folders do not. Mark moves completed only after successful
+historization, and defer unrelated extras until desired writes succeed. Directory
+classification uses indexed membership. Backup cleanup likewise probes strict
+ancestors while keeping exact objects distinct from same-named folder prefixes.
+
+Cover scaling fixes with deterministic work-count regression tests, including
+caller-level coverage where a repeated outer scan could return. Use elapsed time
+and peak memory as measured evidence, not fragile unit-test thresholds. State
+remaining file-count-dependent memory explicitly; bounded payloads or indexes do
+not imply bounded total process memory. Preserve cancellation, resource ownership,
+provider path semantics, and recovery ordering when improving algorithms.
+
 ## Testing
 
 Use MSTest for unit tests.

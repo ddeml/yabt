@@ -931,26 +931,64 @@ dotnet test yabt.sln --no-restore --configuration Release --verbosity minimal `
 Independent review compared extracted method bodies and transaction ordering
 with the preceding implementation. `git diff --check` and CRLF checks pass.
 
-**Recommended next step:** Measure large-tree operation costs, starting with the
-restore blocker scan in `RestoreExecutor.BeforeRestoreFileCommitAsync`. It scans
-all planned history moves before each file commit, even when most moves are
-already complete. F committed files and H planned moves therefore entail F x H
-membership checks; 10,000 of each means roughly 100 million checks. This is a
-code-derived work estimate, not a measured elapsed-time result.
+**Scaling follow-up implemented:** Restore previously scanned all H planned
+history moves before each of F file commits, including completed moves. This
+entailed F x H checks; 10,000 of each meant roughly 100 million checks. Directory
+classification also scanned the complete desired-directory list, including for
+unchanged-item debug messages when debug logging was disabled. Backup cleanup
+scanned all selected obsolete folders both during selection and for each object.
+These were code-derived work estimates, not elapsed-time measurements.
 
-Use bounded 1,000/5,000/10,000-file fixtures to establish scaling for
-replacement and transition workloads. Measure allocations, peak working set,
-comparison counts, and provider calls. Then replace the scan with a
-provider-comparer index queried by the exact path and its ancestors, preserving
-blocker rules and keeping unrelated extras deferred. Validate behavior and
-growth through operation counts rather than flaky elapsed-time assertions.
+`RestoreHistoryPlan` now owns ordered move records, a provider-comparer path
+index, and pending state in `TemporaryIndex` storage. Each commit probes its exact
+path and ancestors, then applies only matching blockers in original plan order.
+Pending moves are removed only after successful historization. Unrelated extras
+remain deferred until desired writes succeed; a failed blocker leaves its move
+pending and prevents that file's commit. `RestoreReconciliation` owns this index
+through execution and releases it on failure or completion.
 
-Next measure retained plan memory in `RestorePlanner`, `RestoreReconciler`, and
-`ArchiveBackupOperation`. The manifest/payload work already bounds large byte
-buffers; desired-object lists, projection dependency maps, and destination plans
-still grow with file count. Use larger no-op metadata fixtures only under an
-explicit runtime budget. Decide on disk-backed plan storage from those results
-as a separate algorithm change. Do not combine it with the blocker lookup fix.
+`RestoreDirectoryIndex` replaces retained directory arrays with indexed
+membership and depth/ordinal traversal. Planner path sets also use temporary
+storage, and reconciliation reuses the plan's membership queries. Disabled debug
+logging skips unchanged-item classification. `BackupCleanupFolderIndex` orders
+candidates in temporary storage and probes strict ancestors, preserving exact
+object versus same-named prefix semantics and original historization order.
+
+These use the existing SQLite scratch infrastructure and bounded page cache, not
+a new persistent cache. Lookup probe counts depend on path depth rather than the
+number of unrelated moves/folders. Disk indexes still have search, serialization,
+and sorting costs; this is not a claim of constant total I/O per operation.
+
+Regression tests count comparison/membership work across increasing workloads,
+including the actual restore executor with unrelated moves pending throughout
+file writes. Additional cases cover ordering, provider comparison, original
+spellings, exact object/prefix distinctions, disabled debug logging, cancellation,
+failed historization, and scratch lifetime. The executor fixture performs 224
+provider comparer calls for 32 writes plus 32 unrelated obsolete files, and 896
+calls for 128 of each. Temporarily reinstating the prior scan made the regression
+fail with 1,216 and 17,152 calls respectively. These counts combine hashing,
+equality, and comparison calls; they do not measure elapsed time or native I/O.
+The indexed implementation was restored before final validation.
+
+**Follow-up commits:** `6584682` implements restore indexing; `6309815` implements
+backup cleanup indexing. `AGENTS.md` now requires active algorithm-cost review,
+appropriate scratch indexes, and deterministic scaling regression tests.
+
+**Follow-up verification (2026-10-22):** All 35 new focused cases pass. The full
+Release solution suite passed with **1,129 passed, 0 failed, and 3 existing
+Linux-only skips**, with no build warnings. Independent review checked blocker
+semantics, provider comparer ownership, deferred cleanup, and disposal. The final
+`git diff --check`, UTF-8, CRLF, and Markdown wrap checks also pass.
+
+**Recommended next step:** Measure retained plan memory in `RestorePlanner`,
+`RestoreReconciler`, and `ArchiveBackupOperation`. Desired-object lists,
+projection dependency maps, destination snapshots, namespace-validation
+dictionaries, and
+some reporting lists still grow with file count. Use bounded representative
+fixtures to record allocations, peak working set, provider calls, and scratch I/O
+before choosing the next plan-storage change. Native Linux and deployed-service
+acceptance from I04 also remain outstanding. The current changes do not claim a
+total process-memory bound or complete large-tree performance coverage.
 
 ## Suggested Codex-Sandbox-01 sequence
 
