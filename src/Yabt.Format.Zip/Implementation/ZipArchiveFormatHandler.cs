@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Yabt.Common;
 using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
@@ -18,7 +19,8 @@ internal sealed class ZipArchiveFormatHandler
 (
     ILogger<ZipArchiveFormatHandler> _logger,
     IOptionsMonitor<ZipArchiveFormatOptions> _options,
-    IManifestSerializer _manifestSerializer
+    IManifestSerializer _manifestSerializer,
+    ITemporaryContentFactory _temporaryContentFactory
 ) : IArchiveFormatHandler
 {
     private const int DefaultHashBufferSize = 81_920;
@@ -113,9 +115,21 @@ internal sealed class ZipArchiveFormatHandler
             StringComparison.Ordinal);
     }
 
-    public async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupAsync
+    public ArchiveBackupProjection ProjectBackupAsync
     (
         ArchiveProjectionRequest request,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(ProjectBackupAsync));
+        var lifetime = new ArchiveProjectionLifetime();
+        return new(ProjectBackupObjectsAsync(request, lifetime, cancellationToken), lifetime);
+    }
+
+    private async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupObjectsAsync
+    (
+        ArchiveProjectionRequest request,
+        ArchiveProjectionLifetime lifetime,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
@@ -149,6 +163,7 @@ internal sealed class ZipArchiveFormatHandler
                 compressionLevel,
                 cancellationToken
             );
+            lifetime.Add(prebuiltPackage);
             sourceObjects = prebuiltPackage.SourceObjects;
         }
 
@@ -166,6 +181,7 @@ internal sealed class ZipArchiveFormatHandler
         var materialization = prebuiltPackage is null ?
             new ZipPackageProjectionMaterialization
             (
+                _logger,
                 cancellationToken => BuildMaterializedPackageAsync
                 (
                     request.SourceStore,
@@ -181,6 +197,7 @@ internal sealed class ZipArchiveFormatHandler
             ) :
             new ZipPackageProjectionMaterialization
             (
+                _logger,
                 await CompleteMaterializedPackageAsync
                 (
                     prebuiltPackage,
@@ -193,6 +210,7 @@ internal sealed class ZipArchiveFormatHandler
                     cancellationToken
                 )
             );
+        lifetime.Add(materialization);
         var projection = new ArchiveProjectionProvenance
         (
             sourcePath,
@@ -931,13 +949,13 @@ internal sealed class ZipArchiveFormatHandler
         CancellationToken cancellationToken
     )
     {
-        var package = new MemoryStream();
+        var package = _temporaryContentFactory.Create();
+        var archive = new ZipArchive(package, ZipArchiveMode.Create, leaveOpen: true);
         var completedSourceObjects = new List<ZipSourceObject>(sourceObjects.Count);
         var sourceReadFailures = new List<Exception>();
         byte[]? hashBuffer = null;
         try
         {
-            using (var archive = new ZipArchive(package, ZipArchiveMode.Create, leaveOpen: true))
             {
                 foreach (var sourceObject in sourceObjects)
                 {
@@ -1067,16 +1085,17 @@ internal sealed class ZipArchiveFormatHandler
                 }
             }
 
-            package.Position = 0;
             return new
             (
                 package,
+                archive,
                 completedSourceObjects
             );
         }
         catch (Exception)
         {
-            await package.DisposeAsync();
+            try { archive.Dispose(); }
+            finally { await package.DisposeAsync(); }
             throw;
         }
     }
@@ -1144,70 +1163,55 @@ internal sealed class ZipArchiveFormatHandler
                 policy,
                 manifestEntries
             );
-            using var serializedManifest = new ManifestSizeLimitedMemoryStream
-            (
-                packageName,
-                MaximumManifestLength
-            );
+            var serializedManifest = _temporaryContentFactory.Create();
             try
             {
-                await _manifestSerializer.WriteAsync(
-                    manifest,
-                    serializedManifest,
-                    cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                if (!serializedManifest.LimitExceeded) { throw; }
-
-                throw new YabtFormatZipException(
-                    $"ZIP package manifest for '{packageName}' exceeds the " +
-                        $"{MaximumManifestLength} byte restore safety limit.",
-                    ex);
-            }
-            var manifestBytes = serializedManifest.ToArray();
-            if (manifestBytes.LongLength > MaximumManifestLength)
-            {
-                throw new YabtFormatZipException(
-                    $"ZIP package manifest for '{packageName}' is {manifestBytes.LongLength} " +
-                        $"bytes, which exceeds the {MaximumManifestLength} byte restore safety limit.");
-            }
-
-            package.Content.Position = 0;
-            using (var archive = new ZipArchive(
-                package.Content,
-                ZipArchiveMode.Update,
-                leaveOpen: true))
-            {
-                if (archive.GetEntry(ArchivePackageManifestFileNames.EmbeddedEntryName) is not null)
+                using var limitedManifest = new ManifestSizeLimitedStream(
+                    serializedManifest, packageName, MaximumManifestLength);
+                try
+                {
+                    await _manifestSerializer.WriteAsync(manifest, limitedManifest, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    if (!limitedManifest.LimitExceeded) { throw; }
+                    throw new YabtFormatZipException(
+                        $"ZIP package manifest for '{packageName}' exceeds the " +
+                            $"{MaximumManifestLength} byte restore safety limit.", ex);
+                }
+                if (serializedManifest.Length > MaximumManifestLength)
                 {
                     throw new YabtFormatZipException(
-                        $"ZIP source contains reserved package manifest path " +
-                        $"'{ArchivePackageManifestFileNames.EmbeddedEntryName}'.");
+                        $"ZIP package manifest for '{packageName}' exceeds the " +
+                            $"{MaximumManifestLength} byte restore safety limit.");
                 }
-
-                var manifestEntry = archive.CreateEntry
+                await serializedManifest.SealAsync(cancellationToken);
+                var manifestEntry = package.Archive.CreateEntry
                 (
                     ArchivePackageManifestFileNames.EmbeddedEntryName,
                     compressionLevel
                 );
                 manifestEntry.LastWriteTime = ToZipEntryLastModifiedUtc(createdAtUtc);
-                await using var manifestEntryContent = manifestEntry.Open();
-                await manifestEntryContent.WriteAsync(
-                    manifestBytes,
-                    cancellationToken);
+                await using (var manifestEntryContent = manifestEntry.Open())
+                await using (var manifestContent = serializedManifest.OpenRead())
+                {
+                    await manifestContent.CopyToAsync(manifestEntryContent, cancellationToken);
+                }
+                package.Archive.Dispose();
+                await package.Content.SealAsync(cancellationToken);
+                return new(package.Content, serializedManifest);
             }
-
-            return new
-            (
-                package.Content.ToArray(),
-                manifestBytes,
-                manifest
-            );
+            catch (Exception)
+            {
+                await serializedManifest.DisposeAsync();
+                throw;
+            }
         }
-        finally
+        catch (Exception)
         {
-            await package.Content.DisposeAsync();
+            try { package.Archive.Dispose(); }
+            finally { await package.Content.DisposeAsync(); }
+            throw;
         }
     }
 
@@ -1274,7 +1278,7 @@ internal sealed class ZipArchiveFormatHandler
             var package = await materialization.GetAsync(cancellationToken);
             return new
             (
-                new MemoryStream(package.PackageBytes, writable: false),
+                package.PackageContent.OpenRead(),
                 "application/zip",
                 EmptyMetadata
             );
@@ -1312,7 +1316,7 @@ internal sealed class ZipArchiveFormatHandler
             var package = await materialization.GetAsync(cancellationToken);
             return new
             (
-                new MemoryStream(package.ManifestBytes, writable: false),
+                package.ManifestContent.OpenRead(),
                 "application/json",
                 EmptyMetadata
             );
@@ -1983,36 +1987,55 @@ internal sealed class ZipArchiveFormatHandler
 
     private sealed record ZipPackageBuildResult
     (
-        MemoryStream Content,
+        TemporaryContent Content,
+        ZipArchive Archive,
         IReadOnlyList<ZipSourceObject> SourceObjects
-    );
+    ) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            try { Archive.Dispose(); }
+            finally { await Content.DisposeAsync(); }
+        }
+    }
 
     private sealed record ZipPackageMaterializedContent
     (
-        byte[] PackageBytes,
-        byte[] ManifestBytes,
-        ArchiveManifest Manifest
-    );
+        TemporaryContent PackageContent,
+        TemporaryContent ManifestContent
+    ) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            try { await PackageContent.DisposeAsync(); }
+            finally { await ManifestContent.DisposeAsync(); }
+        }
+    }
 
-    private sealed class ZipPackageProjectionMaterialization
+    private sealed class ZipPackageProjectionMaterialization : IAsyncDisposable
     {
         private readonly object _gate = new();
-        private readonly Func<CancellationToken, Task<ZipPackageMaterializedContent>>? _factory;
+        private readonly ILogger _logger;
+        private Func<CancellationToken, Task<ZipPackageMaterializedContent>>? _factory;
+        private bool _disposed;
         private Task<ZipPackageMaterializedContent>? _materialization;
 
         public ZipPackageProjectionMaterialization
         (
+            ILogger logger,
             Func<CancellationToken, Task<ZipPackageMaterializedContent>> factory
         )
         {
+            _logger = logger;
             _factory = factory;
         }
 
-        public ZipPackageProjectionMaterialization(ZipPackageMaterializedContent materialization)
+        public ZipPackageProjectionMaterialization(ILogger logger, ZipPackageMaterializedContent materialization)
         {
+            _logger = logger;
             _materialization = Task.FromResult(materialization);
-            PackageLength = materialization.PackageBytes.LongLength;
-            ManifestLength = materialization.ManifestBytes.LongLength;
+            PackageLength = materialization.PackageContent.Length;
+            ManifestLength = materialization.ManifestContent.Length;
         }
 
         public long? ManifestLength { get; }
@@ -2024,11 +2047,38 @@ internal sealed class ZipArchiveFormatHandler
             cancellationToken.ThrowIfCancellationRequested();
             lock (_gate)
             {
+                ObjectDisposedException.ThrowIf(_disposed, this);
                 _materialization ??= (_factory ??
                     throw new InvalidOperationException(
                         "ZIP package projection has no materialization factory."))
                     .Invoke(cancellationToken);
                 return _materialization;
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Task<ZipPackageMaterializedContent>? materialization;
+            lock (_gate)
+            {
+                if (_disposed) { return; }
+                _disposed = true;
+                materialization = _materialization;
+                _materialization = null;
+                _factory = null;
+            }
+            // Never release backing storage underneath an in-flight materialization.
+            if (materialization is not null)
+            {
+                ZipPackageMaterializedContent content;
+                try { content = await materialization; }
+                catch (Exception ex)
+                {
+                    // The materialization owns partial-write cleanup; its caller observes failure.
+                    _logger.LogDebug(ex, "Ignoring an already observed ZIP materialization failure during disposal.");
+                    return;
+                }
+                await content.DisposeAsync();
             }
         }
     }
@@ -2101,30 +2151,40 @@ internal sealed class ZipArchiveFormatHandler
         }
     }
 
-    private sealed class ManifestSizeLimitedMemoryStream
+    private sealed class ManifestSizeLimitedStream
     (
+        Stream _inner,
         string _packageName,
         long _maximumLength
-    ) : MemoryStream
+    ) : Stream
     {
+        public override bool CanRead => _inner.CanRead;
+        public override bool CanWrite => _inner.CanWrite;
+        public override bool CanSeek => _inner.CanSeek;
+        public override long Length => _inner.Length;
+        public override long Position { get => _inner.Position; set => _inner.Position = value; }
+        public override void Flush() => _inner.Flush();
+        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+        public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
+
         public bool LimitExceeded { get; private set; }
 
         public override void SetLength(long value)
         {
             EnsureLength(value);
-            base.SetLength(value);
+            _inner.SetLength(value);
         }
 
         public override void Write(byte[] buffer, int offset, int count)
         {
             EnsureWriteLength(count);
-            base.Write(buffer, offset, count);
+            _inner.Write(buffer, offset, count);
         }
 
         public override void Write(ReadOnlySpan<byte> buffer)
         {
             EnsureWriteLength(buffer.Length);
-            base.Write(buffer);
+            _inner.Write(buffer);
         }
 
         public override Task WriteAsync
@@ -2136,7 +2196,7 @@ internal sealed class ZipArchiveFormatHandler
         )
         {
             EnsureWriteLength(count);
-            return base.WriteAsync(buffer, offset, count, cancellationToken);
+            return _inner.WriteAsync(buffer, offset, count, cancellationToken);
         }
 
         public override ValueTask WriteAsync
@@ -2146,13 +2206,13 @@ internal sealed class ZipArchiveFormatHandler
         )
         {
             EnsureWriteLength(buffer.Length);
-            return base.WriteAsync(buffer, cancellationToken);
+            return _inner.WriteAsync(buffer, cancellationToken);
         }
 
         public override void WriteByte(byte value)
         {
             EnsureWriteLength(1);
-            base.WriteByte(value);
+            _inner.WriteByte(value);
         }
 
         private void EnsureWriteLength(int count)

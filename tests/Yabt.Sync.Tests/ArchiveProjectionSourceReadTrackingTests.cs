@@ -277,7 +277,16 @@ public sealed class ArchiveProjectionSourceReadTrackingTests
 
         public bool CanRestoreArtifact(ArchiveProjectedObject artifact) => false;
 
-        public async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupAsync
+        public ArchiveBackupProjection ProjectBackupAsync
+        (
+            ArchiveProjectionRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            return new(ProjectBackupObjectsAsync(request, cancellationToken));
+        }
+
+        private async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupObjectsAsync
         (
             ArchiveProjectionRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken = default

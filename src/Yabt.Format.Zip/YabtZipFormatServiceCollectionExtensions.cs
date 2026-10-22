@@ -20,6 +20,7 @@ public static class YabtZipFormatServiceCollectionExtensions
             optionsBuilder.BindYabtConfiguration(configSectionPath);
         }
 
+        services.AddYabtTemporaryContent();
         services.AddSingleton<IArchiveFormatHandler, ZipArchiveFormatHandler>();
         return services;
     }

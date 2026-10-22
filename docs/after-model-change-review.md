@@ -716,18 +716,23 @@ sealed bytes through independent reader leases. Focused tests cover threshold
 crossings, large writes, concurrent reservations, runtime reload, seek/truncate,
 cancellation, failed spill cleanup, and readers surviving owner disposal.
 
-[ArchiveProjectionObjectStore.cs](../src/Yabt.Sync/Implementation/ArchiveProjectionObjectStore.cs)
-retains projected objects/scopes. Their delegates retain
-`ZipPackageProjectionMaterialization` in
-[ZipArchiveFormatHandler.cs](../src/Yabt.Format.Zip/Implementation/ZipArchiveFormatHandler.cs)
-, whose completed task retains the package byte array. Many independent ZIP
-children therefore retain their combined compressed size even after upload.
+**Stage 3 implemented:** ZIP package and adjacent-manifest materializations now
+use shared spillable content. Explicit backup-projection ownership reaches
+nested scopes, retains sibling consistency evidence, and releases each completed
+artifact group. Missing metadata still triggers eager construction with one
+source read. A single ZIP creation session appends the embedded manifest before
+completion; there is no whole-package byte array or second package copy.
 
-Introduce explicit materialization ownership and release after the complete
-consistency group is processed. Preserve sibling revalidation and
-source-read-once guarantees. Consider spillable package construction separately.
-Measure peak memory over many packages; the known in-memory ZIP design is a
-limitation, and cumulative retention makes it broader than a per-package limit.
+Ten generated-stream tests exercise 32 MiB payloads with tiny and disk-only
+budgets, eager/lazy construction, independent readers, exact embedded/adjacent
+manifest agreement, cancellation, source errors, and early enumeration disposal.
+A synchronization regression verifies prompt release across sixteen packages,
+including packages below an explicit mirror-policy parent. The parent case
+exposed and guarded a premature sibling-disposal error during development.
+
+File-count-dependent ZIP metadata and scalable manifest processing remain in
+stage 5, coordinated with I02. Payload buffering and projection lifetime are
+separate from those retained metadata structures.
 
 ### I02: Avoid repeated ZIP central-directory parsing
 

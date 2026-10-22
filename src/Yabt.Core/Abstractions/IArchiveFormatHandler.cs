@@ -13,7 +13,7 @@ public interface IArchiveFormatHandler
     /// <summary>Validates active source settings and reports options this handler ignores.</summary>
     void ValidateBackupPolicy(FolderPolicy policy, string? configurationSource = null) { }
 
-    IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupAsync
+    ArchiveBackupProjection ProjectBackupAsync
     (
         ArchiveProjectionRequest request,
         CancellationToken cancellationToken = default

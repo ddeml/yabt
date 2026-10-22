@@ -43,7 +43,17 @@ internal sealed class MirrorArchiveFormatHandler
         return true;
     }
 
-    public async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupAsync
+    public ArchiveBackupProjection ProjectBackupAsync
+    (
+        ArchiveProjectionRequest request,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(ProjectBackupAsync));
+        return new(ProjectBackupObjectsAsync(request, cancellationToken));
+    }
+
+    private async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupObjectsAsync
     (
         ArchiveProjectionRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default

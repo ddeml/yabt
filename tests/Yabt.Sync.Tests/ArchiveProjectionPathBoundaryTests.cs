@@ -93,18 +93,14 @@ public sealed class ArchiveProjectionPathBoundaryTests
 
         public bool CanRestoreArtifact(ArchiveProjectedObject artifact) => _inner.CanRestoreArtifact(artifact);
 
-        public async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupAsync
+        public ArchiveBackupProjection ProjectBackupAsync
         (
             ArchiveProjectionRequest request,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default
+            CancellationToken cancellationToken = default
         )
         {
             Requests.Add(request);
-            var objects = _inner.ProjectBackupAsync(request, cancellationToken);
-            await foreach (var projectedObject in objects)
-            {
-                yield return projectedObject;
-            }
+            return _inner.ProjectBackupAsync(request, cancellationToken);
         }
 
         public Task<ArchiveRestoreProjection> ProjectRestoreAsync

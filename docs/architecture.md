@@ -480,12 +480,13 @@ object being compared. Verify and dry-run operations do not create replay files
 because they never upload. ZIP follows the same one-read rule: when an entry
 lacks enough metadata or a provider hash, its bytes are hashed while that same
 read is written into the package. ZIP package construction attempts every
-independent source entry and aggregates source-read failures. The initial ZIP
-builder remains memory-backed; an eagerly built fallback package retains one
-backing buffer for replay, so nested incomplete-metadata packages can
-temporarily retain multiple buffers until their projection graph is released. A
-future large-package implementation needs an explicitly owned, spillable content
-lifetime.
+independent source entry and aggregates source-read failures. An eagerly built
+fallback package retains one spillable backing for replay, so nested incomplete-metadata packages can
+retain several temporary files while sharing the configured memory budget.
+Backup projections own their materializations explicitly. Sibling consistency
+checks complete when the last artifact in a group is processed; that group and
+its nested scopes then release their backing. Failure and cancellation also
+release projection ownership after started materialization has finished.
 
 Backup classifies source-object open and stream-read failures separately from
 target-provider or mutation failures. It continues reconciliation after

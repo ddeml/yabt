@@ -18,6 +18,14 @@ namespace Yabt.Format.Zip.Tests;
 [TestClass]
 public sealed class ZipArchiveFormatHandlerTests
 {
+    private readonly List<IAsyncDisposable> _backupProjections = [];
+
+    [TestCleanup]
+    public async Task DisposeBackupProjectionsAsync()
+    {
+        foreach (var projection in _backupProjections) { await projection.DisposeAsync(); }
+    }
+
     [TestMethod]
     public async Task ProjectBackupAsyncWarnsForIgnoredSettingsAndPreservesRestorablePolicySnapshot()
     {
@@ -1182,11 +1190,12 @@ public sealed class ZipArchiveFormatHandlerTests
             new Dictionary<string, string>(StringComparer.Ordinal));
     }
 
-    private static async Task<IReadOnlyList<ArchiveProjectedObject>> CollectProjectedObjectsAsync
+    private async Task<IReadOnlyList<ArchiveProjectedObject>> CollectProjectedObjectsAsync
     (
         IAsyncEnumerable<ArchiveProjectedObject> projectedObjects
     )
     {
+        if (projectedObjects is IAsyncDisposable lifetime) { _backupProjections.Add(lifetime); }
         var result = new List<ArchiveProjectedObject>();
         await foreach (var projectedObject in projectedObjects)
         {

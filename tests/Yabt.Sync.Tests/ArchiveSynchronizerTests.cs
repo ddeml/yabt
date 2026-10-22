@@ -31,6 +31,81 @@ public sealed class ArchiveSynchronizerTests
     };
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task BackupReleasesEachCompletedZipProjectionBeforeBuildingTheNext(bool explicitMirrorParent)
+    {
+        var workspace = CreateWorkspacePath();
+        try
+        {
+            var sourceRoot = Path.Combine(workspace, "source");
+            var targetRoot = Path.Combine(workspace, "target");
+            var temporaryRoot = Path.Combine(workspace, "temporary");
+            Directory.CreateDirectory(temporaryRoot);
+            await InitializeSourceRootAsync(sourceRoot, targetRoot);
+            for (var index = 0; index < 16; index++)
+            {
+                var parent = sourceRoot;
+                if (explicitMirrorParent)
+                {
+                    parent = Path.Combine(sourceRoot, $"mirror-{index / 2:D2}");
+                    await WritePolicyAsync(parent, MirrorArchiveFormatName.Value);
+                }
+                var folder = Path.Combine(parent, $"package-{index:D2}");
+                await WritePolicyAsync(folder, ZipArchiveFormatName.Value);
+                await WriteTextFileAsync(Path.Combine(folder, "file.txt"), $"payload-{index}");
+            }
+
+            var services = CreateServices();
+            services.AddSingleton<IOptionsMonitor<TemporaryContentOptions>>(new FixedTemporaryOptions(
+                new() { MemoryThresholdBytes = 0, TemporaryDirectory = temporaryRoot }));
+            var descriptor = services.Last(item => item.ServiceType == typeof(ITemporaryContentFactory));
+            services.Remove(descriptor);
+            ObservingTemporaryContentFactory? observed = null;
+            services.AddSingleton<ITemporaryContentFactory>(provider => observed = new(
+                (ITemporaryContentFactory)ActivatorUtilities.CreateInstance(provider, descriptor.ImplementationType!),
+                temporaryRoot));
+            using var provider = services.BuildServiceProvider();
+            var result = await provider.GetRequiredService<IArchiveSynchronizer>()
+                .BackupAsync(new SyncRunRequest(sourceRoot));
+
+            Assert.IsTrue(result.Completed);
+            Assert.IsNotNull(observed);
+            Assert.IsTrue(observed.CreationCount >= 32);
+            Assert.IsTrue(observed.MaximumExistingFiles <= 1,
+                $"Completed projections retained {observed.MaximumExistingFiles} temporary files.");
+            Assert.AreEqual(0, Directory.GetFiles(temporaryRoot).Length);
+            Assert.AreEqual(0L, observed.ReservedMemoryBytes);
+        }
+        finally { DeleteWorkspace(workspace); }
+    }
+
+    private sealed class ObservingTemporaryContentFactory
+    (
+        ITemporaryContentFactory _inner,
+        string _directory
+    ) : ITemporaryContentFactory
+    {
+        public int CreationCount { get; private set; }
+        public int MaximumExistingFiles { get; private set; }
+        public long ReservedMemoryBytes => _inner.ReservedMemoryBytes;
+
+        public TemporaryContent Create()
+        {
+            CreationCount++;
+            MaximumExistingFiles = Math.Max(MaximumExistingFiles, Directory.GetFiles(_directory).Length);
+            return _inner.Create();
+        }
+    }
+
+    private sealed class FixedTemporaryOptions(TemporaryContentOptions _options) : IOptionsMonitor<TemporaryContentOptions>
+    {
+        public TemporaryContentOptions CurrentValue => _options;
+        public TemporaryContentOptions Get(string? name) => _options;
+        public IDisposable? OnChange(Action<TemporaryContentOptions, string?> listener) => null;
+    }
+
+    [TestMethod]
     public async Task BackupAsyncCopiesNewProjectedObjectToTarget()
     {
         var workspace = CreateWorkspacePath();
@@ -6757,7 +6832,16 @@ public sealed class ArchiveSynchronizerTests
                 ArtifactFileName,
                 StringComparison.Ordinal);
 
-        public async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupAsync
+        public ArchiveBackupProjection ProjectBackupAsync
+        (
+            ArchiveProjectionRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            return new(ProjectBackupObjectsAsync(request, cancellationToken));
+        }
+
+        private async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupObjectsAsync
         (
             ArchiveProjectionRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken = default

@@ -2690,8 +2690,10 @@ internal sealed class ArchiveSynchronizer
             string.Empty,
             cancellationToken);
 
-        var projectedObjects = context.FormatHandler.ProjectBackupAsync(
-            CreateProjectionRequest(context),
+        var projectionRequest = CreateProjectionRequest(context);
+        await using var projectionSourceLifetime = (IAsyncDisposable)projectionRequest.SourceStore;
+        await using var projectedObjects = context.FormatHandler.ProjectBackupAsync(
+            projectionRequest,
             cancellationToken);
         var summary = new ArchiveSyncSummary();
         var sourceReadFailures = new List<SyncItemFailure>();
@@ -3056,6 +3058,112 @@ internal sealed class ArchiveSynchronizer
             }
         }
 
+        async Task CompleteBackupProjectionGroupAsync(BackupProjectionConsistencyGroup projectionGroup)
+        {
+            if (writeChanges && !byteForByte && !projectionGroup.SourceReadFailed)
+            {
+                if (!projectionGroup.RequiresValidation)
+                {
+                    foreach (var matchedObject in projectionGroup.MatchedObjects)
+                    {
+                        LogBackupObjectUnchanged(
+                            operationName,
+                            matchedObject.RelativePath,
+                            matchedObject.ProjectedObject.Projection);
+                    }
+                }
+                else
+                {
+                    foreach (var matchedObject in projectionGroup.MatchedObjects)
+                    {
+                        try
+                        {
+                            var comparison = await CompareProjectedObjectAsync
+                            (
+                                matchedObject.ProjectedObject,
+                                context.TargetStore,
+                                matchedObject.TargetObject,
+                                matchedObject.PreviousManifestEntry,
+                                byteForByte: true,
+                                prepareChangedContent: writeChanges,
+                                cancellationToken
+                            );
+                            await using var preparedContent = comparison.PreparedContent;
+                            if (comparison.Same)
+                            {
+                                if (writeChanges)
+                                {
+                                    nextManifestEntries[matchedObject.RelativePath] =
+                                        comparison.ManifestEntry ??
+                                        throw new YabtSyncException(
+                                            "Projection consistency comparison for " +
+                                                $"'{matchedObject.RelativePath}' did not produce " +
+                                                "manifest evidence.");
+                                }
+
+                                LogBackupObjectUnchanged(
+                                    operationName,
+                                    matchedObject.RelativePath,
+                                    matchedObject.ProjectedObject.Projection);
+
+                                continue;
+                            }
+
+                            summary.PromoteUnchangedToChanged();
+                            if (!writeChanges) { continue; }
+
+                            await EnsureChangeManifestInvalidatedAsync(cancellationToken);
+                            await (historizer ??
+                                throw new YabtSyncException(
+                                    "A mutating backup requires destination historization."))
+                                .MoveObjectAsync(
+                                    matchedObject.RelativePath,
+                                    "Backup",
+                                    cancellationToken);
+                            LogBackupObjectHistorized(
+                                matchedObject.RelativePath,
+                                "projection consistency replacement",
+                                projection: matchedObject.PreviousManifestEntry?.Projection);
+                            var manifestEntry = await UploadProjectedObjectAsync
+                            (
+                                context.TargetStore,
+                                context.TargetDescriptor.Layout,
+                                matchedObject.ProjectedObject,
+                                matchedObject.RelativePath,
+                                cancellationToken,
+                                preparedContent ??
+                                    throw new YabtSyncException(
+                                        "Changed projection artifact " +
+                                            $"'{matchedObject.RelativePath}' did not retain its " +
+                                            "validated source snapshot.")
+                            );
+                            nextManifestEntries[matchedObject.RelativePath] = manifestEntry;
+                            LogBackupObjectChanged(
+                                matchedObject.RelativePath,
+                                matchedObject.ProjectedObject.Projection);
+                        }
+                        catch (Exception ex) when (SourceObjectReadException.FindAll(ex).Count != 0)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            CaptureSourceReadFailures(ex);
+                            projectionGroup.SourceReadFailed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            projectionGroup.MatchedObjects.Clear();
+            if (projectionGroup.Projection is not null)
+            {
+                await ((ArchiveProjectionObjectStore)projectionRequest.SourceStore)
+                    .ReleaseProjectionAsync(projectionGroup.Projection);
+            }
+            if (context.FormatHandler.ProjectsBesideSourceFolder)
+            {
+                await projectedObjects.DisposeAsync();
+            }
+        }
+
         async Task ConsumeBackupObjectAsync
         (
             ArchiveProjectedObject projectedObject,
@@ -3094,6 +3202,17 @@ internal sealed class ArchiveSynchronizer
                     }
                 }
             }
+            if (projectedObject.Projection is not null)
+            {
+                var projection = projectedObject.Projection;
+                var key = new RestoreProjectionKey(
+                    projection.LogicalPath, projection.Format, projection.FormatVersion, projection.ProjectionId);
+                if (backupProjectionGroups.TryGetValue(key, out var completedGroup) &&
+                    --completedGroup.RemainingObjects == 0)
+                {
+                    await CompleteBackupProjectionGroupAsync(completedGroup);
+                }
+            }
         }
 
         ArchiveReconciliationTraversal reconciliationTraversal;
@@ -3110,6 +3229,18 @@ internal sealed class ArchiveSynchronizer
                     context.TargetDescriptor.Layout
                 );
                 desiredObjects.Add(projectedObject);
+                if (projectedObject.Projection is not null)
+                {
+                    var projection = projectedObject.Projection;
+                    var key = new RestoreProjectionKey(
+                        projection.LogicalPath, projection.Format, projection.FormatVersion, projection.ProjectionId);
+                    if (!backupProjectionGroups.TryGetValue(key, out var group))
+                    {
+                        group = new() { Projection = projection };
+                        backupProjectionGroups.Add(key, group);
+                    }
+                    group.RemainingObjects++;
+                }
             }
 
             var targetNamespace = context.TargetStore.Namespace
@@ -3175,102 +3306,6 @@ internal sealed class ArchiveSynchronizer
                     "produce any projection artifacts.");
         }
 
-        if (writeChanges && !byteForByte)
-        {
-            foreach (var projectionGroup in backupProjectionGroups.Values
-                         .Where(group => !group.RequiresValidation && !group.SourceReadFailed))
-            {
-                foreach (var matchedObject in projectionGroup.MatchedObjects)
-                {
-                    LogBackupObjectUnchanged(
-                        operationName,
-                        matchedObject.RelativePath,
-                        matchedObject.ProjectedObject.Projection);
-                }
-            }
-
-            var groupsRequiringValidation = backupProjectionGroups.Values
-                .Where(group => group.RequiresValidation && !group.SourceReadFailed);
-            foreach (var projectionGroup in groupsRequiringValidation)
-            {
-                foreach (var matchedObject in projectionGroup.MatchedObjects)
-                {
-                    try
-                    {
-                        var comparison = await CompareProjectedObjectAsync
-                        (
-                            matchedObject.ProjectedObject,
-                            context.TargetStore,
-                            matchedObject.TargetObject,
-                            matchedObject.PreviousManifestEntry,
-                            byteForByte: true,
-                            prepareChangedContent: writeChanges,
-                            cancellationToken
-                        );
-                        await using var preparedContent = comparison.PreparedContent;
-                        if (comparison.Same)
-                        {
-                            if (writeChanges)
-                            {
-                                nextManifestEntries[matchedObject.RelativePath] =
-                                    comparison.ManifestEntry ??
-                                    throw new YabtSyncException(
-                                        "Projection consistency comparison for " +
-                                            $"'{matchedObject.RelativePath}' did not produce " +
-                                            "manifest evidence.");
-                            }
-
-                            LogBackupObjectUnchanged(
-                                operationName,
-                                matchedObject.RelativePath,
-                                matchedObject.ProjectedObject.Projection);
-
-                            continue;
-                        }
-
-                        summary.PromoteUnchangedToChanged();
-                        if (!writeChanges) { continue; }
-
-                        await EnsureChangeManifestInvalidatedAsync(cancellationToken);
-                        await (historizer ??
-                            throw new YabtSyncException(
-                                "A mutating backup requires destination historization."))
-                            .MoveObjectAsync(
-                                matchedObject.RelativePath,
-                                "Backup",
-                                cancellationToken);
-                        LogBackupObjectHistorized(
-                            matchedObject.RelativePath,
-                            "projection consistency replacement",
-                            projection: matchedObject.PreviousManifestEntry?.Projection);
-                        var manifestEntry = await UploadProjectedObjectAsync
-                        (
-                            context.TargetStore,
-                            context.TargetDescriptor.Layout,
-                            matchedObject.ProjectedObject,
-                            matchedObject.RelativePath,
-                            cancellationToken,
-                            preparedContent ??
-                                throw new YabtSyncException(
-                                    "Changed projection artifact " +
-                                        $"'{matchedObject.RelativePath}' did not retain its " +
-                                        "validated source snapshot.")
-                        );
-                        nextManifestEntries[matchedObject.RelativePath] = manifestEntry;
-                        LogBackupObjectChanged(
-                            matchedObject.RelativePath,
-                            matchedObject.ProjectedObject.Projection);
-                    }
-                    catch (Exception ex) when (SourceObjectReadException.FindAll(ex).Count != 0)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        CaptureSourceReadFailures(ex);
-                        projectionGroup.SourceReadFailed = true;
-                        break;
-                    }
-                }
-            }
-        }
 
         if (sourceReadFailures.Count == 0)
         {
@@ -5620,6 +5655,10 @@ internal sealed class ArchiveSynchronizer
 
     private sealed class BackupProjectionConsistencyGroup
     {
+        public ArchiveProjectionProvenance? Projection { get; init; }
+
+        public int RemainingObjects { get; set; }
+
         public bool RequiresValidation { get; set; }
 
         public bool SourceReadFailed { get; set; }

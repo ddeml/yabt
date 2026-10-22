@@ -642,11 +642,15 @@ compared projected object at a time. Verification and dry runs do not need a
 replay copy because they never upload. When ZIP input metadata is too incomplete
 to identify an entry without reading its bytes, calculate that entry fingerprint
 while copying the same read into the ZIP instead of scanning and reopening the
-source file. The current ZIP backup handler is memory-backed; an eagerly built
-fallback package retains one backing buffer so it can be replayed without
-rereading its source files. Do not add another full-package copy. A future
-large-package implementation should introduce an explicitly owned, spillable
-projected-content lifetime.
+source file. ZIP package and adjacent-manifest bytes use shared spillable
+content. `ArchiveBackupProjection` owns that content until every group consumer
+finishes. Complete sibling consistency checks when the last artifact is
+processed, then release the group and its nested projections. Explicit mirror
+scopes recurse into their children without releasing unrelated siblings. Keep
+one ZIP creation session open through the embedded manifest. Eager and nested
+packages may require several temporary files simultaneously; memory remains
+bounded by the shared payload budget. Always dispose projections on failure or
+cancellation, without releasing storage underneath a started materialization.
 
 Store the live change manifest at the archive root, outside an explicit
 `livePrefix` , with logical live-relative entry paths.

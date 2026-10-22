@@ -13,8 +13,9 @@ internal sealed class ArchiveProjectionObjectStore
     Func<string, CancellationToken, Task<FolderPolicy>> _readPolicyAsync,
     IReadOnlyDictionary<string, IArchiveFormatHandler> _formatHandlers,
     string? logicalRootPath = default
-) : IReadOnlyObjectStore
+) : IReadOnlyObjectStore, IAsyncDisposable
 {
+    private readonly ArchiveProjectionLifetime _lifetime = new();
     private readonly object _gate = new();
     private readonly Dictionary<string, ArchiveProjectedObject> _projectedObjects = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ProjectedScopeDefinition> _projectedScopeDefinitions =
@@ -392,6 +393,9 @@ internal sealed class ArchiveProjectionObjectStore
             _formatHandlers,
             projectedScopeDefinition.LogicalPath
         );
+        var scopeLifetime = new ArchiveProjectionLifetime();
+        _lifetime.Add(scopeLifetime);
+        scopeLifetime.Add(projectedSourceStore);
         var request = new ArchiveProjectionRequest
         (
             projectedSourceStore,
@@ -404,6 +408,7 @@ internal sealed class ArchiveProjectionObjectStore
         var streamedProjectedObjects = formatHandler.ProjectBackupAsync(
             request,
             cancellationToken);
+        scopeLifetime.Add(streamedProjectedObjects);
 
         await foreach (var projectedObject in streamedProjectedObjects)
         {
@@ -429,7 +434,10 @@ internal sealed class ArchiveProjectionObjectStore
         var projectedScope = new ProjectedScope
         (
             outputPrefix,
-            projectedObjects
+            projectedObjects,
+            scopeLifetime,
+            projectedSourceStore,
+            formatHandler.ProjectsBesideSourceFolder
         );
         lock (_gate)
         {
@@ -723,10 +731,36 @@ internal sealed class ArchiveProjectionObjectStore
         return ObjectPath.Parse(_sourceDisplayName).Combine(ObjectPath.Parse(sourceRelativePath)).Value;
     }
 
+    public ValueTask DisposeAsync() => _lifetime.DisposeAsync();
+
+    public async ValueTask ReleaseProjectionAsync(ArchiveProjectionProvenance projection)
+    {
+        foreach (var scope in _projectedScopes.Values)
+        {
+            if (!scope.ProjectsBesideSourceFolder)
+            {
+                await scope.SourceStore.ReleaseProjectionAsync(projection);
+                continue;
+            }
+            var candidate = scope.Objects.FirstOrDefault()?.Projection;
+            if (candidate is not null &&
+                candidate.LogicalPath == projection.LogicalPath &&
+                candidate.Format == projection.Format &&
+                candidate.FormatVersion == projection.FormatVersion &&
+                candidate.ProjectionId == projection.ProjectionId)
+            {
+                await scope.Lifetime.DisposeAsync();
+            }
+        }
+    }
+
     private sealed record ProjectedScope
     (
         string OutputPrefix,
-        IReadOnlyList<ArchiveProjectedObject> Objects
+        IReadOnlyList<ArchiveProjectedObject> Objects,
+        ArchiveProjectionLifetime Lifetime,
+        ArchiveProjectionObjectStore SourceStore,
+        bool ProjectsBesideSourceFolder
     );
 
     private sealed record ProjectedScopeDefinition
