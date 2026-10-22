@@ -193,9 +193,13 @@ internal sealed class RestoreExecutor
         var liveStateChanged = reconciliation.NewCount != 0 ||
             reconciliation.ChangedCount != 0 ||
             reconciliation.ExtraCount != 0;
-        var changeManifestInvalidationMarkerActive = false;
-        var logicalStateManifestInvalidationMarkerActive =
-            logicalStateManifestLoad.InvalidationMarkerExists;
+        var manifestTransaction = new RestoreManifestTransaction
+        (
+            _manifests,
+            destinationStore,
+            logicalStateManifestLoad,
+            _logger
+        );
         ArchiveHistorizer? historizer = null;
         var mutationStarted = false;
         var pendingHistoryMoves = reconciliation.HistoryMoves.ToHashSet();
@@ -204,20 +208,12 @@ internal sealed class RestoreExecutor
         {
             if (mutationStarted) { return; }
 
-            changeManifestInvalidationMarkerActive =
-                await _manifests.PrepareRestoreChangeManifestMutationAsync(
-                    destinationStore,
-                    liveStateChanged || rootDescriptorRestore.NeedsWrite,
-                    currentCancellationToken);
-            if (liveStateChanged &&
-                logicalStateManifestLoad.ManifestExists &&
-                !logicalStateManifestInvalidationMarkerActive)
-            {
-                await _manifests.UploadLogicalStateManifestInvalidationMarkerAsync(
-                    destinationStore,
-                    currentCancellationToken);
-                logicalStateManifestInvalidationMarkerActive = true;
-            }
+            await manifestTransaction.BeginAsync
+            (
+                liveStateChanged,
+                rootDescriptorRestore.NeedsWrite,
+                currentCancellationToken
+            );
 
             historizer = new ArchiveHistorizer(
                 destinationStore,
@@ -367,56 +363,7 @@ internal sealed class RestoreExecutor
             plan,
             cancellationToken
         );
-        var logicalStateManifestNeedsWrite =
-            logicalStateManifestInvalidationMarkerActive ||
-            logicalStateManifestLoad.Manifest is null ||
-            !string.Equals(
-                logicalStateManifestLoad.Manifest.ManifestHash,
-                nextLogicalStateManifest.ManifestHash,
-                StringComparison.Ordinal);
-        if (logicalStateManifestNeedsWrite)
-        {
-            if (logicalStateManifestLoad.ManifestExists &&
-                !logicalStateManifestInvalidationMarkerActive)
-            {
-                await _manifests.UploadLogicalStateManifestInvalidationMarkerAsync(
-                    destinationStore,
-                    cancellationToken);
-                logicalStateManifestInvalidationMarkerActive = true;
-            }
-
-            if (logicalStateManifestLoad.ManifestExists)
-            {
-                await _manifests.DeleteInternalObjectAsync(
-                    destinationStore,
-                    ArchiveLogicalStateManifest.FileName,
-                    "Obsolete logical state manifest",
-                    cancellationToken);
-            }
-
-            await _manifests.UploadLogicalStateManifestAsync(
-                destinationStore,
-                nextLogicalStateManifest,
-                cancellationToken);
-        }
-
-        if (logicalStateManifestInvalidationMarkerActive)
-        {
-            await _manifests.DeleteInternalObjectAsync(
-                destinationStore,
-                ArchiveLogicalStateManifest.InvalidationMarkerFileName,
-                "Logical state manifest invalidation marker",
-                cancellationToken);
-        }
-
-        if (changeManifestInvalidationMarkerActive)
-        {
-            await _manifests.DeleteInternalObjectAsync(
-                destinationStore,
-                ArchiveChangeManifest.InvalidationMarkerFileName,
-                "Change manifest invalidation marker",
-                cancellationToken);
-        }
+        await manifestTransaction.PublishAsync(nextLogicalStateManifest, cancellationToken);
 
         foreach (var relativePath in reconciliation.UnchangedDesiredPaths)
         {

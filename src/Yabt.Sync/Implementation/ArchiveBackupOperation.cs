@@ -258,32 +258,21 @@ internal sealed class ArchiveBackupOperation
             }
         }
 
-        var changeManifestInvalidated = false;
-        var changeManifestInvalidationMarkerActive =
-            changeManifestLoad.InvalidationMarkerExists;
+        var manifestTransaction = mutableTargetStore is null ?
+            null :
+            new BackupManifestTransaction
+            (
+                _manifests,
+                mutableTargetStore,
+                changeManifestLoad,
+                changeManifestFileName,
+                _logger
+            );
 
-        async Task EnsureChangeManifestInvalidatedAsync(CancellationToken currentCancellationToken)
-        {
-            if (!changeManifestLoad.Exists || changeManifestInvalidated)
-            {
-                return;
-            }
-
-            if (!changeManifestInvalidationMarkerActive)
-            {
-                await _manifests.UploadChangeManifestInvalidationMarkerAsync(
-                    context.TargetStore,
-                    currentCancellationToken);
-                changeManifestInvalidationMarkerActive = true;
-            }
-
-            await _manifests.DeleteChangeManifestsAsync(
-                mutableTargetStore ??
-                    throw new YabtSyncException("A mutating backup requires a mutable target store."),
-                changeManifestLoad.ExistingFileNames,
-                currentCancellationToken);
-            changeManifestInvalidated = true;
-        }
+        Task EnsureChangeManifestInvalidatedAsync(CancellationToken currentCancellationToken) =>
+            (manifestTransaction ??
+                throw new YabtSyncException("A mutating backup requires a manifest transaction."))
+                .InvalidateAsync(currentCancellationToken);
 
         async Task<ArchiveObjectInfo?> TakeExistingBackupObjectAsync
         (
@@ -817,39 +806,9 @@ internal sealed class ArchiveBackupOperation
                 context.Policy.Format,
                 context.SourceDocument?.ContentHash,
                 context.SourceDocument?.ContentLength);
-            var changeManifestNeedsWrite = changeManifestInvalidated ||
-                changeManifestLoad.NeedsRepresentationRewrite(changeManifestFileName) ||
-                previousChangeManifest is null ||
-                !string.Equals(
-                    previousChangeManifest.ManifestHash,
-                    nextChangeManifest.ManifestHash,
-                    StringComparison.Ordinal);
-            if (changeManifestNeedsWrite)
-            {
-                await EnsureChangeManifestInvalidatedAsync(cancellationToken);
-                await _manifests.UploadChangeManifestAsync(
-                    context.TargetStore,
-                    nextChangeManifest,
-                    changeManifestFileName,
-                    cancellationToken);
-                if (changeManifestInvalidationMarkerActive)
-                {
-                    await _manifests.DeleteInternalObjectAsync(
-                        mutableTargetStore ??
-                            throw new YabtSyncException(
-                                "A mutating backup requires a mutable target store."),
-                        ArchiveChangeManifest.InvalidationMarkerFileName,
-                        "Change manifest invalidation marker",
-                        cancellationToken);
-                    changeManifestInvalidationMarkerActive = false;
-                }
-            }
-            else
-            {
-                _logger.LogControlMetadataOperation(
-                    "Determined unchanged",
-                    changeManifestFileName);
-            }
+            await (manifestTransaction ??
+                throw new YabtSyncException("A mutating backup requires a manifest transaction."))
+                .PublishAsync(nextChangeManifest, cancellationToken);
 
             if (historizer is not null)
             {
