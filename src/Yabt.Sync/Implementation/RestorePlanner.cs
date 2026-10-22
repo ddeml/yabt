@@ -209,8 +209,9 @@ internal sealed class RestorePlanner
         _logger.LogTrace(nameof(CreateRestorePlanAsync));
 
         var pathComparer = StringComparer.Ordinal;
-        var filePaths = new HashSet<string>(pathComparer);
-        var directoryPaths = new Dictionary<string, string>(pathComparer);
+        using var planningIndex = TemporaryIndex.Create();
+        using var filePaths = planningIndex.CreateSet(pathComparer);
+        using var directoryPaths = planningIndex.CreateSet(pathComparer);
         var files = new List<ArchiveProjectedObject>();
         var fileProjectionDependencies =
             new Dictionary<string, IReadOnlyList<ArchiveRestoreProjection>>(pathComparer);
@@ -471,11 +472,7 @@ internal sealed class RestorePlanner
                 }
             }
 
-            var directories = directoryPaths.Values
-                .OrderBy(ArchivePathRules.GetPathDepth)
-                .ThenBy(directoryPath => directoryPath, StringComparer.Ordinal)
-                .ToArray();
-            var nonemptyDirectories = new HashSet<string>(pathComparer);
+            using var nonemptyDirectories = planningIndex.CreateSet(pathComparer);
             foreach (var file in files)
             {
                 var parentPath = ArchivePathRules.GetParentPrefix(file.RelativePath);
@@ -486,20 +483,19 @@ internal sealed class RestorePlanner
                 }
             }
 
-            var emptyDirectories = directoryPaths.Values
-                .Where(directoryPath => !nonemptyDirectories.Contains(directoryPath))
-                .OrderBy(ArchivePathRules.GetPathDepth)
-                .ThenBy(directoryPath => directoryPath, StringComparer.Ordinal)
-                .ToArray();
             destinationNamespace.ValidateTree
             (
                 files.Select(file => ObjectPath.Parse(file.RelativePath)),
-                directories.Select(ObjectPath.Parse)
+                directoryPaths.Select(ObjectPath.Parse)
             );
+            var directories = RestoreDirectoryIndex.Create(
+                directoryPaths,
+                nonemptyDirectories,
+                destinationNamespace.PathComparer,
+                cancellationToken);
             return new(
                 files,
                 directories,
-                emptyDirectories,
                 projections,
                 fileProjectionDependencies,
                 destinationNamespace);
@@ -566,12 +562,12 @@ internal sealed class RestorePlanner
     (
         string relativePath,
         IObjectStoreNamespace destinationNamespace,
-        HashSet<string> filePaths,
-        Dictionary<string, string> directoryPaths
+        DiskSet filePaths,
+        DiskSet directoryPaths
     )
     {
         destinationNamespace.ValidatePath(ObjectPath.Parse(relativePath));
-        if (!filePaths.Add(relativePath) || directoryPaths.ContainsKey(relativePath))
+        if (!filePaths.Add(relativePath) || directoryPaths.Contains(relativePath))
         {
             throw new YabtSyncException(
                 $"Multiple archive items restore to the same path '{relativePath}'.");
@@ -595,8 +591,8 @@ internal sealed class RestorePlanner
     (
         string relativePath,
         IObjectStoreNamespace destinationNamespace,
-        HashSet<string> filePaths,
-        Dictionary<string, string> directoryPaths
+        DiskSet filePaths,
+        DiskSet directoryPaths
     )
     {
         if (string.IsNullOrEmpty(relativePath)) { return; }
@@ -626,8 +622,8 @@ internal sealed class RestorePlanner
     private static void AddRestoreDirectoryPath
     (
         string directoryPath,
-        Dictionary<string, string> directoryPaths
-    ) => directoryPaths.TryAdd(directoryPath, directoryPath);
+        DiskSet directoryPaths
+    ) => directoryPaths.Add(directoryPath);
 
     internal static void ValidateRestorePlanInternalPaths
     (

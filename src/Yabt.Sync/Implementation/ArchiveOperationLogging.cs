@@ -361,11 +361,14 @@ internal static class ArchiveOperationLogging
                 relativePath);
         }
 
-        foreach (var relativePath in reconciliation.UnchangedDesiredPaths)
+        if (_logger.IsEnabled(LogLevel.Debug))
         {
-            _logger.ReportRestoreItemUnchanged(
-                GetRestoreItemKind(plan, relativePath),
-                relativePath);
+            foreach (var relativePath in reconciliation.UnchangedDesiredPaths)
+            {
+                _logger.ReportRestoreItemUnchanged(
+                    GetRestoreItemKind(plan, relativePath),
+                    relativePath);
+            }
         }
 
         if (rootDescriptorRestore.MoveExistingToHistory)
@@ -501,7 +504,7 @@ internal static class ArchiveOperationLogging
     ) => reconciliation.ChangedDesiredPaths.Contains(relativePath) ? "changed" : "new";
 
     internal static string GetRestoreItemKind(RestorePlan plan, string relativePath) =>
-        plan.Directories.Contains(relativePath, plan.Namespace.PathComparer) ?
+        plan.IsDirectory(relativePath) ?
             "directory" :
             "file";
 

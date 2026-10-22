@@ -215,7 +215,7 @@ internal sealed class ArchiveRestoreOperation
         using var logicalStateManifestLoad = await _manifests.ReadLogicalStateManifestAsync(
             destinationStore,
             cancellationToken);
-        var reconciliation = await _reconciler.CreateRestoreReconciliationAsync
+        using var reconciliation = await _reconciler.CreateRestoreReconciliationAsync
         (
             destinationStore,
             destinationLayout,

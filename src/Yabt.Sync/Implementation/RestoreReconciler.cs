@@ -36,8 +36,6 @@ internal sealed class RestoreReconciler
         var desiredFiles = restorePlan.Files.ToDictionary(
             file => file.RelativePath,
             pathComparer);
-        var desiredDirectories = restorePlan.Directories.ToHashSet(pathComparer);
-        var desiredEmptyDirectories = restorePlan.EmptyDirectories.ToHashSet(pathComparer);
         var filesToWrite = restorePlan.Files
             .Where(file => !blockedRestorePaths.Contains(file.RelativePath))
             .ToHashSet();
@@ -59,211 +57,220 @@ internal sealed class RestoreReconciler
                 }
             }
         }
-        var historyMoves = new List<RestoreHistoryMove>();
-        var changedDesiredPaths = new HashSet<string>(pathComparer);
-        var unchangedDesiredPaths = new HashSet<string>(pathComparer);
-        var failedDesiredPaths = blockedRestorePaths.ToHashSet(pathComparer);
-        var failures = new List<SyncItemFailure>();
-        var extraCount = 0;
-
-        var folderMoves = new List<RestoreHistoryMove>();
-        var movedFolderPaths = new HashSet<string>(pathComparer);
-        var orderedDestinationDirectories = destinationState.Directories
-            .OrderBy(ArchivePathRules.GetPathDepth)
-            .ThenBy(path => path, StringComparer.Ordinal);
-        foreach (var directoryPath in orderedDestinationDirectories)
+        var historyMoves = new RestoreHistoryPlan(pathComparer);
+        try
         {
-            if (IsUnderRestoreFolderMove(directoryPath, movedFolderPaths))
+            var changedDesiredPaths = new HashSet<string>(pathComparer);
+            var unchangedDesiredPaths = new HashSet<string>(pathComparer);
+            var failedDesiredPaths = blockedRestorePaths.ToHashSet(pathComparer);
+            var failures = new List<SyncItemFailure>();
+            var extraCount = 0;
+
+            var movedFolderPaths = new HashSet<string>(pathComparer);
+            var orderedDestinationDirectories = destinationState.Directories
+                .OrderBy(ArchivePathRules.GetPathDepth)
+                .ThenBy(path => path, StringComparer.Ordinal);
+            foreach (var directoryPath in orderedDestinationDirectories)
             {
-                continue;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (IsUnderRestoreFolderMove(directoryPath, movedFolderPaths))
+                {
+                    continue;
+                }
+
+                if (desiredFiles.ContainsKey(directoryPath))
+                {
+                    historyMoves.Add(new(directoryPath, IsFolder: true));
+                    movedFolderPaths.Add(directoryPath);
+                    changedDesiredPaths.Add(directoryPath);
+                    continue;
+                }
+
+                if (!restorePlan.IsDirectory(directoryPath))
+                {
+                    historyMoves.Add(new(directoryPath, IsFolder: true));
+                    movedFolderPaths.Add(directoryPath);
+                    extraCount++;
+                }
             }
 
-            if (desiredFiles.ContainsKey(directoryPath))
+            var remainingDestinationFiles = destinationState.Files.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value,
+                pathComparer);
+            var changedDestinationFilePaths = new HashSet<string>(pathComparer);
+
+            Task<RestoreDestinationFile?> TakeExistingRestoreObjectAsync
+            (
+                ArchiveProjectedObject desiredObject,
+                string relativePath,
+                CancellationToken currentCancellationToken
+            )
             {
-                folderMoves.Add(new(directoryPath, IsFolder: true));
-                movedFolderPaths.Add(directoryPath);
-                changedDesiredPaths.Add(directoryPath);
-                continue;
-            }
-
-            if (!desiredDirectories.Contains(directoryPath))
-            {
-                folderMoves.Add(new(directoryPath, IsFolder: true));
-                movedFolderPaths.Add(directoryPath);
-                extraCount++;
-            }
-        }
-
-        historyMoves.AddRange(folderMoves);
-        var remainingDestinationFiles = destinationState.Files.ToDictionary(
-            pair => pair.Key,
-            pair => pair.Value,
-            pathComparer);
-        var changedDestinationFilePaths = new HashSet<string>(pathComparer);
-
-        Task<RestoreDestinationFile?> TakeExistingRestoreObjectAsync
-        (
-            ArchiveProjectedObject desiredObject,
-            string relativePath,
-            CancellationToken currentCancellationToken
-        )
-        {
-            _ = desiredObject;
-            currentCancellationToken.ThrowIfCancellationRequested();
-            if (IsUnderRestoreFolderMove(relativePath, movedFolderPaths))
-            {
-                return Task.FromResult<RestoreDestinationFile?>(null);
-            }
-
-            remainingDestinationFiles.Remove(relativePath, out var destinationFile);
-            return Task.FromResult(destinationFile);
-        }
-
-        async Task ConsumeRestoreObjectAsync
-        (
-            ArchiveProjectedObject desiredObject,
-            string relativePath,
-            RestoreDestinationFile? destinationFile,
-            CancellationToken currentCancellationToken
-        )
-        {
-            _ = desiredObject;
-            if (destinationFile is null) { return; }
-
-            var desiredFile = desiredFiles[relativePath];
-            if (failedDesiredPaths.Contains(relativePath)) { return; }
-
-            if (!byteForByte &&
-                logicalStateEntries.TryGetValue(relativePath, out var logicalStateEntry) &&
-                ArchiveChangeFingerprint.TryCreate(
-                    destinationFile.ContentLength,
-                    destinationFile.LastModifiedUtc,
-                    out var currentStatFingerprint) &&
-                string.Equals(
-                    currentStatFingerprint,
-                    logicalStateEntry.StatFingerprint,
-                    StringComparison.Ordinal) &&
-                string.Equals(
-                    desiredFile.ContentHash,
-                    logicalStateEntry.ContentHash,
-                    StringComparison.Ordinal))
-            {
-                filesToWrite.Remove(desiredFile);
-                unchangedDesiredPaths.Add(relativePath);
-                return;
-            }
-
-            _logger.ReportObjectReadOperation(relativePath, "restore destination comparison");
-            string destinationHash;
-            try
-            {
-                destinationHash = await ArchiveContentTransfer.ComputeStoredObjectHashAsync(
-                    destinationStore,
-                    destinationFile.ArchiveKey,
-                    currentCancellationToken);
-            }
-            catch (Exception ex)
-            {
+                _ = desiredObject;
                 currentCancellationToken.ThrowIfCancellationRequested();
-                if (ex is OperationCanceledException) { throw; }
+                if (IsUnderRestoreFolderMove(relativePath, movedFolderPaths))
+                {
+                    return Task.FromResult<RestoreDestinationFile?>(null);
+                }
 
-                filesToWrite.Remove(desiredFile);
-                failedDesiredPaths.Add(relativePath);
-                failures.Add(_logger.CreateReadFailure(
-                    relativePath,
-                    "restore destination comparison",
-                    ex));
-                return;
-            }
-            if (string.Equals(
-                    destinationHash,
-                    desiredFile.ContentHash,
-                    StringComparison.Ordinal))
-            {
-                filesToWrite.Remove(desiredFile);
-                unchangedDesiredPaths.Add(relativePath);
-                return;
+                remainingDestinationFiles.Remove(relativePath, out var destinationFile);
+                return Task.FromResult(destinationFile);
             }
 
-            changedDestinationFilePaths.Add(relativePath);
-            changedDesiredPaths.Add(relativePath);
-        }
-
-        await ArchiveReconciler.ReconcileAsync
-        (
-            restorePlan.Files,
-            restorePlan.Directories,
-            pathComparer,
-            static _ => { },
-            TakeExistingRestoreObjectAsync,
-            ConsumeRestoreObjectAsync,
-            cancellationToken
-        );
-
-        var orderedDestinationFiles = destinationState.Files.Values
-            .OrderBy(file => file.RelativePath, StringComparer.Ordinal);
-        foreach (var destinationFile in orderedDestinationFiles)
-        {
-            if (IsUnderRestoreFolderMove(destinationFile.RelativePath, movedFolderPaths))
+            async Task ConsumeRestoreObjectAsync
+            (
+                ArchiveProjectedObject desiredObject,
+                string relativePath,
+                RestoreDestinationFile? destinationFile,
+                CancellationToken currentCancellationToken
+            )
             {
-                continue;
+                _ = desiredObject;
+                if (destinationFile is null) { return; }
+
+                var desiredFile = desiredFiles[relativePath];
+                if (failedDesiredPaths.Contains(relativePath)) { return; }
+
+                if (!byteForByte &&
+                    logicalStateEntries.TryGetValue(relativePath, out var logicalStateEntry) &&
+                    ArchiveChangeFingerprint.TryCreate(
+                        destinationFile.ContentLength,
+                        destinationFile.LastModifiedUtc,
+                        out var currentStatFingerprint) &&
+                    string.Equals(
+                        currentStatFingerprint,
+                        logicalStateEntry.StatFingerprint,
+                        StringComparison.Ordinal) &&
+                    string.Equals(
+                        desiredFile.ContentHash,
+                        logicalStateEntry.ContentHash,
+                        StringComparison.Ordinal))
+                {
+                    filesToWrite.Remove(desiredFile);
+                    unchangedDesiredPaths.Add(relativePath);
+                    return;
+                }
+
+                _logger.ReportObjectReadOperation(relativePath, "restore destination comparison");
+                string destinationHash;
+                try
+                {
+                    destinationHash = await ArchiveContentTransfer.ComputeStoredObjectHashAsync(
+                        destinationStore,
+                        destinationFile.ArchiveKey,
+                        currentCancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    currentCancellationToken.ThrowIfCancellationRequested();
+                    if (ex is OperationCanceledException) { throw; }
+
+                    filesToWrite.Remove(desiredFile);
+                    failedDesiredPaths.Add(relativePath);
+                    failures.Add(_logger.CreateReadFailure(
+                        relativePath,
+                        "restore destination comparison",
+                        ex));
+                    return;
+                }
+                if (string.Equals(
+                        destinationHash,
+                        desiredFile.ContentHash,
+                        StringComparison.Ordinal))
+                {
+                    filesToWrite.Remove(desiredFile);
+                    unchangedDesiredPaths.Add(relativePath);
+                    return;
+                }
+
+                changedDestinationFilePaths.Add(relativePath);
+                changedDesiredPaths.Add(relativePath);
             }
 
-            if (changedDestinationFilePaths.Contains(destinationFile.RelativePath))
+            await ArchiveReconciler.ReconcileAsync
+            (
+                restorePlan.Files,
+                restorePlan.Directories,
+                pathComparer,
+                static _ => { },
+                TakeExistingRestoreObjectAsync,
+                ConsumeRestoreObjectAsync,
+                cancellationToken
+            );
+
+            var orderedDestinationFiles = destinationState.Files.Values
+                .OrderBy(file => file.RelativePath, StringComparer.Ordinal);
+            foreach (var destinationFile in orderedDestinationFiles)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (IsUnderRestoreFolderMove(destinationFile.RelativePath, movedFolderPaths))
+                {
+                    continue;
+                }
+
+                if (changedDestinationFilePaths.Contains(destinationFile.RelativePath))
+                {
+                    historyMoves.Add(new(destinationFile.RelativePath, IsFolder: false));
+                    continue;
+                }
+
+                if (!remainingDestinationFiles.ContainsKey(destinationFile.RelativePath))
+                {
+                    continue;
+                }
+
                 historyMoves.Add(new(destinationFile.RelativePath, IsFolder: false));
-                continue;
+                if (restorePlan.IsDirectory(destinationFile.RelativePath))
+                {
+                    changedDesiredPaths.Add(destinationFile.RelativePath);
+                }
+                else
+                {
+                    extraCount++;
+                }
             }
 
-            if (!remainingDestinationFiles.ContainsKey(destinationFile.RelativePath))
+            foreach (var emptyDirectory in restorePlan.EmptyDirectories)
             {
-                continue;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (changedDesiredPaths.Contains(emptyDirectory)) { continue; }
+
+                if (destinationState.Directories.Contains(emptyDirectory))
+                {
+                    unchangedDesiredPaths.Add(emptyDirectory);
+                }
             }
 
-            historyMoves.Add(new(destinationFile.RelativePath, IsFolder: false));
-            if (desiredDirectories.Contains(destinationFile.RelativePath))
-            {
-                changedDesiredPaths.Add(destinationFile.RelativePath);
-            }
-            else
-            {
-                extraCount++;
-            }
+            var newDesiredPaths = desiredFiles.Keys
+                .Concat(restorePlan.EmptyDirectories)
+                .Where(path =>
+                    !changedDesiredPaths.Contains(path) &&
+                    !unchangedDesiredPaths.Contains(path) &&
+                    !failedDesiredPaths.Contains(path))
+                .ToHashSet(pathComparer);
+
+            return new
+            (
+                filesToWrite
+                    .OrderBy(file => file.RelativePath, StringComparer.Ordinal)
+                    .ToArray(),
+                historyMoves,
+                newDesiredPaths,
+                changedDesiredPaths,
+                unchangedDesiredPaths,
+                NewCount: newDesiredPaths.Count,
+                ChangedCount: changedDesiredPaths.Count,
+                ExtraCount: extraCount,
+                UnchangedCount: unchangedDesiredPaths.Count,
+                Failures: failures
+            );
         }
-
-        foreach (var emptyDirectory in desiredEmptyDirectories)
+        catch (Exception)
         {
-            if (changedDesiredPaths.Contains(emptyDirectory)) { continue; }
-
-            if (destinationState.Directories.Contains(emptyDirectory))
-            {
-                unchangedDesiredPaths.Add(emptyDirectory);
-            }
+            historyMoves.Dispose();
+            throw;
         }
-
-        var newDesiredPaths = desiredFiles.Keys
-            .Concat(desiredEmptyDirectories)
-            .Where(path =>
-                !changedDesiredPaths.Contains(path) &&
-                !unchangedDesiredPaths.Contains(path) &&
-                !failedDesiredPaths.Contains(path))
-            .ToHashSet(pathComparer);
-
-        return new
-        (
-            filesToWrite
-                .OrderBy(file => file.RelativePath, StringComparer.Ordinal)
-                .ToArray(),
-            historyMoves,
-            newDesiredPaths,
-            changedDesiredPaths,
-            unchangedDesiredPaths,
-            NewCount: newDesiredPaths.Count,
-            ChangedCount: changedDesiredPaths.Count,
-            ExtraCount: extraCount,
-            UnchangedCount: unchangedDesiredPaths.Count,
-            Failures: failures
-        );
     }
 
     private static bool IsUnderRestoreFolderMove

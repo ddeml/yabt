@@ -202,7 +202,6 @@ internal sealed class RestoreExecutor
         );
         ArchiveHistorizer? historizer = null;
         var mutationStarted = false;
-        var pendingHistoryMoves = reconciliation.HistoryMoves.ToHashSet();
 
         async Task EnsureMutationStartedAsync(CancellationToken currentCancellationToken)
         {
@@ -258,16 +257,13 @@ internal sealed class RestoreExecutor
         )
         {
             await EnsureMutationStartedAsync(currentCancellationToken);
-            foreach (var historyMove in reconciliation.HistoryMoves)
+            var blockers = reconciliation.HistoryMoves.GetBlockers(
+                file.RelativePath,
+                currentCancellationToken);
+            foreach (var historyMove in blockers)
             {
-                if (!pendingHistoryMoves.Contains(historyMove) ||
-                    !RestoreHistoryMoveBlocksFile(historyMove, file.RelativePath, plan.Namespace.PathComparer))
-                {
-                    continue;
-                }
-
                 await MoveHistoryItemAsync(historyMove, currentCancellationToken);
-                pendingHistoryMoves.Remove(historyMove);
+                reconciliation.HistoryMoves.MarkCompleted(historyMove);
             }
         }
 
@@ -287,11 +283,10 @@ internal sealed class RestoreExecutor
         }
 
         await EnsureMutationStartedAsync(cancellationToken);
-        foreach (var historyMove in reconciliation.HistoryMoves)
+        foreach (var historyMove in reconciliation.HistoryMoves.EnumeratePending(cancellationToken))
         {
-            if (!pendingHistoryMoves.Remove(historyMove)) { continue; }
-
             await MoveHistoryItemAsync(historyMove, cancellationToken);
+            reconciliation.HistoryMoves.MarkCompleted(historyMove);
         }
 
         await restoreTarget.CreateDirectoryAsync(
@@ -316,9 +311,9 @@ internal sealed class RestoreExecutor
             }
         }
 
-        foreach (var directoryPath in reconciliation.ChangedDesiredPaths
-                     .Where(path => plan.Directories.Contains(path, plan.Namespace.PathComparer) &&
-                         !plan.EmptyDirectories.Contains(path, plan.Namespace.PathComparer)))
+        var changedDirectories = reconciliation.ChangedDesiredPaths
+            .Where(path => plan.IsDirectory(path) && !plan.IsEmptyDirectory(path));
+        foreach (var directoryPath in changedDirectories)
         {
             _logger.ReportRestoreItemWritten("changed", "directory", directoryPath);
         }
@@ -365,11 +360,14 @@ internal sealed class RestoreExecutor
         );
         await manifestTransaction.PublishAsync(nextLogicalStateManifest, cancellationToken);
 
-        foreach (var relativePath in reconciliation.UnchangedDesiredPaths)
+        if (_logger.IsEnabled(LogLevel.Debug))
         {
-            _logger.ReportRestoreItemUnchanged(
-                ArchiveOperationLogging.GetRestoreItemKind(plan, relativePath),
-                relativePath);
+            foreach (var relativePath in reconciliation.UnchangedDesiredPaths)
+            {
+                _logger.ReportRestoreItemUnchanged(
+                    ArchiveOperationLogging.GetRestoreItemKind(plan, relativePath),
+                    relativePath);
+            }
         }
 
         return failures;
@@ -529,26 +527,6 @@ internal sealed class RestoreExecutor
         }
 
         return failures;
-    }
-
-    private static bool RestoreHistoryMoveBlocksFile
-    (
-        RestoreHistoryMove historyMove,
-        string fileRelativePath,
-        StringComparer comparer
-    )
-    {
-        var historyPath = ObjectPath.Parse(historyMove.RelativePath);
-        var filePath = ObjectPath.Parse(fileRelativePath);
-        if (comparer.Equals(historyPath.Value, filePath.Value)) { return true; }
-        if (historyMove.IsFolder) { return false; }
-
-        for (var parent = filePath.Parent; !parent.IsRoot; parent = parent.Parent)
-        {
-            if (comparer.Equals(historyPath.Value, parent.Value)) { return true; }
-        }
-
-        return false;
     }
 
     internal async Task<IReadOnlyList<SyncItemFailure>> ValidateRestorePlanContentAsync

@@ -5,7 +5,7 @@ namespace Yabt.Sync.Implementation;
 internal sealed record RestoreReconciliation
 (
     IReadOnlyList<ArchiveProjectedObject> FilesToWrite,
-    IReadOnlyList<RestoreHistoryMove> HistoryMoves,
+    RestoreHistoryPlan HistoryMoves,
     IReadOnlySet<string> NewDesiredPaths,
     IReadOnlySet<string> ChangedDesiredPaths,
     IReadOnlySet<string> UnchangedDesiredPaths,
@@ -14,4 +14,7 @@ internal sealed record RestoreReconciliation
     int ExtraCount,
     int UnchangedCount,
     IReadOnlyList<SyncItemFailure> Failures
-);
+) : IDisposable
+{
+    public void Dispose() => HistoryMoves.Dispose();
+}

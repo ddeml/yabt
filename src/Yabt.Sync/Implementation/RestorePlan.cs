@@ -6,8 +6,7 @@ namespace Yabt.Sync.Implementation;
 internal sealed class RestorePlan
 (
     IReadOnlyList<ArchiveProjectedObject> _files,
-    IReadOnlyList<string> _directories,
-    IReadOnlyList<string> _emptyDirectories,
+    RestoreDirectoryIndex _directories,
     IReadOnlyList<ArchiveRestoreProjection> _projections,
     IReadOnlyDictionary<string, IReadOnlyList<ArchiveRestoreProjection>>
         _fileProjectionDependencies,
@@ -18,9 +17,13 @@ internal sealed class RestorePlan
 
     public IReadOnlyList<ArchiveProjectedObject> Files => _files;
 
-    public IReadOnlyList<string> Directories => _directories;
+    public IReadOnlyCollection<string> Directories => _directories.Directories;
 
-    public IReadOnlyList<string> EmptyDirectories => _emptyDirectories;
+    public IReadOnlyCollection<string> EmptyDirectories => _directories.EmptyDirectories;
+
+    public bool IsDirectory(string relativePath) => _directories.IsDirectory(relativePath);
+
+    public bool IsEmptyDirectory(string relativePath) => _directories.IsEmptyDirectory(relativePath);
 
     public IReadOnlyList<ArchiveRestoreProjection> Projections => _projections;
 
@@ -34,9 +37,16 @@ internal sealed class RestorePlan
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var projection in _projections)
+        try
         {
-            await projection.DisposeAsync();
+            foreach (var projection in _projections)
+            {
+                await projection.DisposeAsync();
+            }
+        }
+        finally
+        {
+            _directories.Dispose();
         }
     }
 }
