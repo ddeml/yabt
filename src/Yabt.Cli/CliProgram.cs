@@ -43,6 +43,7 @@ public static class CliProgram
         }
 
         builder.Services
+            .AddYabtTemporaryContent(TemporaryContentOptions.DefaultConfigurationSectionPath)
             .AddYabtFileSystemObjectStore("ObjectStores:FileSystem")
             .AddYabtAzureBlobObjectStore()
             .AddYabtWebDavObjectStore("ObjectStores:WebDav")

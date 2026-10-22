@@ -403,6 +403,21 @@ empty, moves to history when that folder gains content or changes format, and is
 hidden from normal YABT traversal. Treat it as durable YABT folder plumbing, not
 ordinary user data or temporary cleanup residue.
 
+Generated or replayable large content uses `ITemporaryContentFactory` and owned
+`TemporaryContent`. Construction is seekable; sealing makes the bytes immutable
+and permits independent readers. The owner and all reader leases must finish
+before backing storage is released. Never dispose backing beneath a started
+worker. Payload buffers default to an 8 MiB threshold and a shared 64 MiB
+allocated-capacity budget per host. Spill immediately when either is exceeded,
+including a single large write; zero forces disk. Spilled buffers remain on disk.
+Trusted runtime settings are `TemporaryContent:MemoryThresholdBytes`,
+`TemporaryContent:TotalMemoryBudgetBytes`, and
+`TemporaryContent:TemporaryDirectory`. The directory defaults to OS temporary
+storage and an override must exist. Disk failures propagate through contextual
+I/O handling without an unlimited-memory fallback. Provider upload and restore
+staging retain their same-filesystem placement. These payload settings do not
+claim a bound on all process memory or impose a total payload-size limit.
+
 ## Formats And Packaging
 
 Folders may optionally be packaged before upload. Packaging is controlled by

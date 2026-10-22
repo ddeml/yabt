@@ -710,6 +710,12 @@ Eighteen new regression cases cover missing/inaccurate lengths, byte boundaries,
 exact BOM preservation, runtime reloads, and refusal without lock mutation.
 
 
+**Stage 2 implemented:** A shared temporary-content factory accounts allocated
+buffer capacity, spills on per-buffer or aggregate budget pressure, and owns
+sealed bytes through independent reader leases. Focused tests cover threshold
+crossings, large writes, concurrent reservations, runtime reload, seek/truncate,
+cancellation, failed spill cleanup, and readers surviving owner disposal.
+
 [ArchiveProjectionObjectStore.cs](../src/Yabt.Sync/Implementation/ArchiveProjectionObjectStore.cs)
 retains projected objects/scopes. Their delegates retain
 `ZipPackageProjectionMaterialization` in

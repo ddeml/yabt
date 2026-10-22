@@ -230,3 +230,15 @@ Limits count actual input bytes, including whitespace and UTF-8 BOM bytes;
 oversized documents fail explicitly. Generated root descriptors and remote
 locks must also fit their configured limit. File-count-dependent manifests are
 not small configuration documents and do not use these limits.
+
+### Temporary content
+
+Replayable generated content can use memory up to 8 MiB per buffer, sharing a
+64 MiB allocated-capacity budget across the host. It spills to private temporary
+files when either limit is reached. Configure
+`TemporaryContent:MemoryThresholdBytes`,
+`TemporaryContent:TotalMemoryBudgetBytes`, and
+`TemporaryContent:TemporaryDirectory` through runtime configuration. Zero for
+either memory setting forces disk; a custom temporary directory must already
+exist. The default directory is the OS temporary directory. Disk exhaustion is
+an I/O error; these settings do not limit payload size or total process memory.
