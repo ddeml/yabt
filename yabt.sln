@@ -41,6 +41,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{BDA4E899-0
 		docs\yabt-root-format.md = docs\yabt-root-format.md
 		docs\architecture.md = docs\architecture.md
 		docs\after-model-change-review.md = docs\after-model-change-review.md
+		docs\plan-memory-measurements.md = docs\plan-memory-measurements.md
+		docs\plan-memory-results.json = docs\plan-memory-results.json
 		docs\yabt-policy-format.md = docs\yabt-policy-format.md
 		docs\manifest-format.md = docs\manifest-format.md
 		docs\storage-layout.md = docs\storage-layout.md
@@ -87,6 +89,10 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Core.Tests", "tests\Yabt.Core.Tests\Yabt.Core.Tests.csproj", "{F9D7932A-78EB-40DE-8AAF-B7AFAFD5E824}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.WebDav.Tests", "tests\Yabt.WebDav.Tests\Yabt.WebDav.Tests.csproj", "{8DC847DA-1FB7-4B04-9A40-9AE2D7EB9F6E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{07C2787E-EAC7-C090-1BA3-A61EC2A24D84}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Profiling", "tools\Yabt.Profiling\Yabt.Profiling.csproj", "{E8D66188-2579-4A63-A781-EF51CB7A5CB9}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -182,6 +188,10 @@ Global
 		{8DC847DA-1FB7-4B04-9A40-9AE2D7EB9F6E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8DC847DA-1FB7-4B04-9A40-9AE2D7EB9F6E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8DC847DA-1FB7-4B04-9A40-9AE2D7EB9F6E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E8D66188-2579-4A63-A781-EF51CB7A5CB9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E8D66188-2579-4A63-A781-EF51CB7A5CB9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E8D66188-2579-4A63-A781-EF51CB7A5CB9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E8D66188-2579-4A63-A781-EF51CB7A5CB9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -190,6 +200,7 @@ Global
 		{BDA4E899-03B4-43A1-AC2B-CA8FCB6543CF} = {C92C132C-6018-4E38-B71B-4F9C64E3D9D7}
 		{862545BA-EE39-4945-8A60-FB40BC48F501} = {C92C132C-6018-4E38-B71B-4F9C64E3D9D7}
 		{6DB32EB6-A817-4B7A-A373-00E8E4D2BE39} = {C92C132C-6018-4E38-B71B-4F9C64E3D9D7}
+		{E8D66188-2579-4A63-A781-EF51CB7A5CB9} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {C808C5B7-4B46-4DA9-8F76-080585294DFF}

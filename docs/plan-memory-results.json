@@ -1,0 +1,1470 @@
+{
+  "schemaVersion": 1,
+  "documentType": "yabt.planMemoryMeasurements",
+  "sourceDirectory": "artifacts/plan-memory/results",
+  "generator": "tools/Yabt.Profiling/summarize.py",
+  "generatorSha256": "8609c0d55bbe94dfee789131ee8e43926c549feb9275c5b3c49b38bbd07c4037",
+  "statisticsOrder": [
+    "median",
+    "minimum",
+    "maximum"
+  ],
+  "totalRunCount": 38,
+  "allRunsSucceeded": true,
+  "allExpectedOutcomeCountsValidated": true,
+  "allReleasedScratchLengthsZero": true,
+  "firstStartedUtc": "2026-10-23T02:52:44.4276996+00:00",
+  "lastStartedUtc": "2026-10-23T03:42:33.5754293+00:00",
+  "productionCommit": "17aa2b3a2612e02a3aeba281ac6f5742bd0436c1",
+  "environment": {
+    "build": "1.0.0+17aa2b3a2612e02a3aeba281ac6f5742bd0436c1",
+    "machine": "CODEXSANDBOX01",
+    "runtime": ".NET 10.0.13",
+    "os": "Microsoft Windows 10.0.26300",
+    "architecture": "X64",
+    "processors": 8,
+    "serverGc": false,
+    "restoreMaximumConcurrency": 5,
+    "payloadMemoryThresholdBytes": 8388608,
+    "payloadTotalMemoryBudgetBytes": 67108864,
+    "maximumPrivateBytes": 2147483648,
+    "sampleIntervalMilliseconds": 250
+  },
+  "interpretation": [
+    "Statistic arrays contain median, minimum, maximum in the named unit.",
+    "Only normal public-command runs have comparable wall-clock timings.",
+    "Retained diagnostics include forced-GC observer CPU and allocations.",
+    "Retained planning probes require a 100 ms asynchronous delay before collection; this is practical quiescence, not a strict guarantee.",
+    "Baseline-adjusted managed bytes are computed within each run before aggregation.",
+    "Scratch lengths are checkpoint file lengths, not I/O volume or peak physical allocation.",
+    "Sampled peaks may miss short spikes; private memory includes managed and native memory.",
+    "Other-process CPU is endpoint-observed guest CPU, not proof of host or guest idleness.",
+    "Filename selection excludes heap captures, smoke, preparation, and checkpoint sidecars."
+  ],
+  "groups": [
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 1000,
+      "scenario": "empty",
+      "operation": "plan",
+      "mode": "retained",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [100, 100, 100],
+      "maximumSeconds": [175, 175, 175],
+      "sources": [
+        {
+          "report": "flat-001000-empty-retained-1.json",
+          "sha256": "39d87ef191b4b566b28d6154f34bea759bb08e1eb7c0fe3d622cf2190bebf3cb",
+          "watchdog": "flat-001000-empty-retained-1.watchdog.json",
+          "watchdogSha256": "296a43bcd6e5a8b3f32ffaa347b90a9dab351b35f6060c924b8e7680770eb10f",
+          "startedUtc": "2026-10-23T03:32:33.0595242+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        },
+        {
+          "report": "flat-001000-empty-retained-2.json",
+          "sha256": "ae4ac1bf431432e29670b16a598d6d923b3df7f9adf0202e52e8f0969670c05e",
+          "watchdog": "flat-001000-empty-retained-2.watchdog.json",
+          "watchdogSha256": "84ceca881664a5e2ea54df4db378ee34a640e62045fbae92b8cfa1b43b29841c",
+          "startedUtc": "2026-10-23T03:32:46.4350331+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        },
+        {
+          "report": "flat-001000-empty-retained-3.json",
+          "sha256": "72feed9ce8374fb1a802553a9f9a33ee3749d3d27e4e925f30913fdb69cb8a8a",
+          "watchdog": "flat-001000-empty-retained-3.watchdog.json",
+          "watchdogSha256": "36df122d42697eb816b0cc48dfc91d6325195f3c6e1b2605e7c3a33040e0323d",
+          "startedUtc": "2026-10-23T03:32:59.6693851+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        }
+      ],
+      "validatedSharedOutcome": {
+        "archiveObjectCount": 1001,
+        "plannedFileCount": 1001,
+        "plannedDirectoryCount": 0,
+        "emptyDirectoryCount": 0,
+        "projectionCount": 1001,
+        "filesToWriteCount": 1001,
+        "historyMoveCount": 0,
+        "newCount": 1001,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 0
+      },
+      "allocatedBytesDelta": [52328984, 52098032, 52535232],
+      "processCpuMillisecondsDelta": [2890.625, 2640.625, 2906.25],
+      "sampledPeakPrivateBytes": [37273600, 37142528, 37281792],
+      "sampledPeakWorkingSetBytes": [76615680, 74633216, 76656640],
+      "sampledPeakManagedBytes": [17205336, 16698656, 17791232],
+      "observedOtherProcessCpuSeconds": [0, 0, 0],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {},
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1126936, 1124864, 1250568],
+          "managedBytesAboveBaseline": [0, 0, 0],
+          "fragmentedBytesAtLastCollection": [81976, 81912, 82000],
+          "gen2CollectionsAboveBaseline": [0, 0, 0]
+        },
+        {
+          "phase": "prepared",
+          "scratchLogicalBytes": [33304, 33304, 33304],
+          "managedBytes": [1458336, 1328992, 1481768],
+          "managedBytesAboveBaseline": [207768, 204128, 354832],
+          "fragmentedBytesAtLastCollection": [21096, 21064, 21168],
+          "gen2CollectionsAboveBaseline": [2, 2, 2],
+          "allocatedBytesSincePreviousCheckpoint": [4723880, 4723488, 4874584]
+        },
+        {
+          "phase": "enumerated",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [1472424, 1343224, 1495856],
+          "managedBytesAboveBaseline": [221856, 218360, 368920],
+          "fragmentedBytesAtLastCollection": [1736, 1736, 2024],
+          "gen2CollectionsAboveBaseline": [4, 4, 4],
+          "allocatedBytesSincePreviousCheckpoint": [29357920, 29354560, 29372384]
+        },
+        {
+          "phase": "planned",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [2233912, 2104648, 2257368],
+          "managedBytesAboveBaseline": [983344, 979784, 1130432],
+          "fragmentedBytesAtLastCollection": [17848, 17792, 153056],
+          "gen2CollectionsAboveBaseline": [6, 6, 6],
+          "allocatedBytesSincePreviousCheckpoint": [16469520, 16371896, 16830288]
+        },
+        {
+          "phase": "destination-manifest",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [2234072, 2104808, 2257528],
+          "managedBytesAboveBaseline": [983504, 979944, 1130592],
+          "fragmentedBytesAtLastCollection": [50848, 50792, 184768],
+          "gen2CollectionsAboveBaseline": [8, 8, 8],
+          "allocatedBytesSincePreviousCheckpoint": [28120, 28120, 28184]
+        },
+        {
+          "phase": "reconciled",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [2283280, 2154016, 2306672],
+          "managedBytesAboveBaseline": [1032712, 1029152, 1179736],
+          "fragmentedBytesAtLastCollection": [1912, 1632, 1944],
+          "gen2CollectionsAboveBaseline": [10, 10, 10],
+          "allocatedBytesSincePreviousCheckpoint": [1559600, 1559600, 1562952]
+        },
+        {
+          "phase": "released",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1443152, 1313888, 1474832],
+          "managedBytesAboveBaseline": [192584, 189024, 347896],
+          "fragmentedBytesAtLastCollection": [2448, 2416, 2472],
+          "gen2CollectionsAboveBaseline": [12, 12, 12],
+          "allocatedBytesSincePreviousCheckpoint": [25784, 23008, 25784]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1443280, 1322240, 1466736],
+          "managedBytesAboveBaseline": [197376, 192712, 339800],
+          "fragmentedBytesAtLastCollection": [8528, 8496, 17952],
+          "gen2CollectionsAboveBaseline": [14, 14, 14],
+          "allocatedBytesSincePreviousCheckpoint": [13392, 12816, 16368]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 1000,
+      "scenario": "mixed",
+      "operation": "plan",
+      "mode": "retained",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [100, 100, 100],
+      "maximumSeconds": [175, 175, 175],
+      "sources": [
+        {
+          "report": "flat-001000-mixed-retained-1.json",
+          "sha256": "50ff05bd77311bd0fd78f9318962d4e5367cff091ee63edf13bc76749bb0069a",
+          "watchdog": "flat-001000-mixed-retained-1.watchdog.json",
+          "watchdogSha256": "672666030c1da1dbb0c48811e9c01ec76073098e4585dbea1fe801cbb7225d2a",
+          "startedUtc": "2026-10-23T03:32:41.4999492+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        },
+        {
+          "report": "flat-001000-mixed-retained-2.json",
+          "sha256": "424a7aa13997a92f4c430be1a655b91f3f7294b1bccea8f403e887ec9f3cde8d",
+          "watchdog": "flat-001000-mixed-retained-2.watchdog.json",
+          "watchdogSha256": "9a6c703d600130e6cea6368bc7ea11fdbc051e9c53f696a076eee83b397717ca",
+          "startedUtc": "2026-10-23T03:32:54.8108609+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        },
+        {
+          "report": "flat-001000-mixed-retained-3.json",
+          "sha256": "42f9c854aa26a611052ed6fd22060273201a3be8749f8a40c9150d4ae86b70ab",
+          "watchdog": "flat-001000-mixed-retained-3.watchdog.json",
+          "watchdogSha256": "edda99e6d8f6493b669d2cedde1d5b6dcf7de147acb2ef02e9f7ba47635f720b",
+          "startedUtc": "2026-10-23T03:33:08.0139855+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        }
+      ],
+      "validatedSharedOutcome": {
+        "archiveObjectCount": 1001,
+        "plannedFileCount": 1001,
+        "plannedDirectoryCount": 0,
+        "emptyDirectoryCount": 0,
+        "projectionCount": 1001,
+        "filesToWriteCount": 200,
+        "historyMoveCount": 200,
+        "newCount": 100,
+        "changedCount": 100,
+        "extraCount": 100,
+        "unchangedCount": 801
+      },
+      "allocatedBytesDelta": [82728848, 82560728, 82768216],
+      "processCpuMillisecondsDelta": [4546.875, 4546.875, 4687.5],
+      "sampledPeakPrivateBytes": [41299968, 41213952, 41410560],
+      "sampledPeakWorkingSetBytes": [81711104, 80904192, 81727488],
+      "sampledPeakManagedBytes": [17652568, 16394464, 17733328],
+      "observedOtherProcessCpuSeconds": [0, 0, 0],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {},
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1280320, 1254328, 1281600],
+          "managedBytesAboveBaseline": [0, 0, 0],
+          "fragmentedBytesAtLastCollection": [81984, 81960, 82032],
+          "gen2CollectionsAboveBaseline": [0, 0, 0]
+        },
+        {
+          "phase": "prepared",
+          "scratchLogicalBytes": [33304, 33304, 33304],
+          "managedBytes": [1484176, 1457440, 1485376],
+          "managedBytesAboveBaseline": [203776, 203112, 203856],
+          "fragmentedBytesAtLastCollection": [21048, 21024, 21072],
+          "gen2CollectionsAboveBaseline": [2, 2, 2],
+          "allocatedBytesSincePreviousCheckpoint": [7197264, 7196872, 7197296]
+        },
+        {
+          "phase": "enumerated",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [1497544, 1469384, 1498744],
+          "managedBytesAboveBaseline": [217144, 215056, 217224],
+          "fragmentedBytesAtLastCollection": [16840, 16264, 17040],
+          "gen2CollectionsAboveBaseline": [4, 4, 4],
+          "allocatedBytesSincePreviousCheckpoint": [29393480, 29237840, 29396864]
+        },
+        {
+          "phase": "planned",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [2223624, 2196856, 2224824],
+          "managedBytesAboveBaseline": [943224, 942528, 943304],
+          "fragmentedBytesAtLastCollection": [54448, 44472, 55096],
+          "gen2CollectionsAboveBaseline": [6, 6, 6],
+          "allocatedBytesSincePreviousCheckpoint": [14847968, 14822936, 14864800]
+        },
+        {
+          "phase": "destination-manifest",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [2261960, 2234928, 2263344],
+          "managedBytesAboveBaseline": [981640, 980600, 981744],
+          "fragmentedBytesAtLastCollection": [8080, 7968, 8856],
+          "gen2CollectionsAboveBaseline": [8, 8, 8],
+          "allocatedBytesSincePreviousCheckpoint": [4000336, 3996744, 4000688]
+        },
+        {
+          "phase": "reconciled",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [2447136, 2422400, 2448520],
+          "managedBytesAboveBaseline": [1166920, 1166816, 1168072],
+          "fragmentedBytesAtLastCollection": [9256, 8624, 10168],
+          "gen2CollectionsAboveBaseline": [10, 10, 10],
+          "allocatedBytesSincePreviousCheckpoint": [27084488, 27046808, 27095480]
+        },
+        {
+          "phase": "released",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1586472, 1561472, 1587856],
+          "managedBytesAboveBaseline": [306256, 306152, 307144],
+          "fragmentedBytesAtLastCollection": [26192, 25304, 27808],
+          "gen2CollectionsAboveBaseline": [12, 12, 12],
+          "allocatedBytesSincePreviousCheckpoint": [216952, 203848, 216952]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1586288, 1561288, 1587672],
+          "managedBytesAboveBaseline": [306072, 305968, 306960],
+          "fragmentedBytesAtLastCollection": [32248, 31360, 35040],
+          "gen2CollectionsAboveBaseline": [14, 14, 14],
+          "allocatedBytesSincePreviousCheckpoint": [13392, 13392, 13392]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 1000,
+      "scenario": "unchanged",
+      "operation": "backup",
+      "mode": "normal",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [0, 0, 0],
+      "maximumSeconds": [595, 595, 595],
+      "sources": [
+        {
+          "report": "flat-001000-unchanged-backup-1.json",
+          "sha256": "d23237e06ccf4f1c8943423e100381e7fb45c525097c9f09a9390cad33075336",
+          "watchdog": "flat-001000-unchanged-backup-1.watchdog.json",
+          "watchdogSha256": "35168bf97127c6fdb4d19ab73e1cd5633c63559bc5c2c83609e966650f17e9b2",
+          "startedUtc": "2026-10-23T02:52:48.8201876+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        },
+        {
+          "report": "flat-001000-unchanged-backup-2.json",
+          "sha256": "fdfc63b6925ffc39197a1ec0550ccda5163da820909a857b76e6f04533dbe8b4",
+          "watchdog": "flat-001000-unchanged-backup-2.watchdog.json",
+          "watchdogSha256": "d219a44ed1c6df30c76d43fc2593c37b297872e7d94059333876a049dd3e31f1",
+          "startedUtc": "2026-10-23T02:53:13.1886827+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        },
+        {
+          "report": "flat-001000-unchanged-backup-3.json",
+          "sha256": "4a04f15eb97586a95722c08c536da0e72c1b3c1fc6f933e7558a6d3a579125b2",
+          "watchdog": "flat-001000-unchanged-backup-3.watchdog.json",
+          "watchdogSha256": "ae4149fa1ea65b608d5f033356e6d39beaac631548f5605ef77c039d9ec73057",
+          "startedUtc": "2026-10-23T02:53:37.4286367+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        }
+      ],
+      "validatedSharedOutcome": {
+        "completed": true,
+        "newCount": 0,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 1001,
+        "failedCount": 0
+      },
+      "elapsedMilliseconds": [1419.7983, 1403.1604, 1506.1224],
+      "allocatedBytesDelta": [52932984, 52898624, 53038904],
+      "processCpuMillisecondsDelta": [1609.375, 1578.125, 1687.5],
+      "sampledPeakPrivateBytes": [35368960, 35213312, 35799040],
+      "sampledPeakWorkingSetBytes": [73457664, 73265152, 74055680],
+      "sampledPeakManagedBytes": [16649392, 16574904, 19378224],
+      "observedOtherProcessCpuSeconds": [0, 0, 0],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {},
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 1000,
+      "scenario": "unchanged",
+      "operation": "plan",
+      "mode": "retained",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [100, 100, 100],
+      "maximumSeconds": [175, 175, 175],
+      "sources": [
+        {
+          "report": "flat-001000-unchanged-retained-1.json",
+          "sha256": "ae14fd26b290be1c6dfec08b01cb5e234fa5e3771c9d57ad19221e0bbc41380e",
+          "watchdog": "flat-001000-unchanged-retained-1.watchdog.json",
+          "watchdogSha256": "d0e703a60e16731604452072d5e7c4c61dd6e45c4d691dd43cb48f40f38ea6ac",
+          "startedUtc": "2026-10-23T03:32:36.7848205+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        },
+        {
+          "report": "flat-001000-unchanged-retained-2.json",
+          "sha256": "744d923b85834b8e307501c75353fb7ceb280ba55ce33ac8800ccc25b932e45e",
+          "watchdog": "flat-001000-unchanged-retained-2.watchdog.json",
+          "watchdogSha256": "51ff792f7f8ea6e40aed953b923068379934030f165cc9ef82a4aa1ba0210d85",
+          "startedUtc": "2026-10-23T03:32:50.093599+00:00",
+          "observedOtherProcessCpuSeconds": 0.203125
+        },
+        {
+          "report": "flat-001000-unchanged-retained-3.json",
+          "sha256": "09038fcae3779944651db34f2b9bb227744c60f3c46173b84a192f83b839b3a0",
+          "watchdog": "flat-001000-unchanged-retained-3.watchdog.json",
+          "watchdogSha256": "2c7f95f4603c799aaf9f986b899c7750685473669c21aef7f4b25e62e76cae07",
+          "startedUtc": "2026-10-23T03:33:03.358539+00:00",
+          "observedOtherProcessCpuSeconds": 0.109375
+        }
+      ],
+      "validatedSharedOutcome": {
+        "archiveObjectCount": 1001,
+        "plannedFileCount": 1001,
+        "plannedDirectoryCount": 0,
+        "emptyDirectoryCount": 0,
+        "projectionCount": 1001,
+        "filesToWriteCount": 0,
+        "historyMoveCount": 0,
+        "newCount": 0,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 1001
+      },
+      "allocatedBytesDelta": [79561968, 79457824, 79591728],
+      "processCpuMillisecondsDelta": [4562.5, 4484.375, 4640.625],
+      "sampledPeakPrivateBytes": [41402368, 41320448, 42061824],
+      "sampledPeakWorkingSetBytes": [81743872, 81567744, 82006016],
+      "sampledPeakManagedBytes": [16444664, 16163240, 17298064],
+      "observedOtherProcessCpuSeconds": [0.109375, 0, 0.203125],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "com.docker.backend": 0.3125
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1251984, 1099848, 1255424],
+          "managedBytesAboveBaseline": [0, 0, 0],
+          "fragmentedBytesAtLastCollection": [81984, 81904, 82008],
+          "gen2CollectionsAboveBaseline": [0, 0, 0]
+        },
+        {
+          "phase": "prepared",
+          "scratchLogicalBytes": [33304, 33304, 33304],
+          "managedBytes": [1458344, 1325592, 1613656],
+          "managedBytesAboveBaseline": [225744, 202920, 361672],
+          "fragmentedBytesAtLastCollection": [21040, 21024, 21152],
+          "gen2CollectionsAboveBaseline": [2, 2, 2],
+          "allocatedBytesSincePreviousCheckpoint": [7292064, 7250928, 7434408]
+        },
+        {
+          "phase": "enumerated",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [1470288, 1320544, 1626976],
+          "managedBytesAboveBaseline": [220696, 214864, 374992],
+          "fragmentedBytesAtLastCollection": [18064, 16296, 33608],
+          "gen2CollectionsAboveBaseline": [4, 4, 4],
+          "allocatedBytesSincePreviousCheckpoint": [29392424, 29388008, 29394560]
+        },
+        {
+          "phase": "planned",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [2197760, 2064792, 2353072],
+          "managedBytesAboveBaseline": [964944, 942336, 1101088],
+          "fragmentedBytesAtLastCollection": [44880, 29528, 46912],
+          "gen2CollectionsAboveBaseline": [6, 6, 6],
+          "allocatedBytesSincePreviousCheckpoint": [14784848, 14784248, 14907168]
+        },
+        {
+          "phase": "destination-manifest",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [2255000, 2104296, 2391424],
+          "managedBytesAboveBaseline": [1004448, 999576, 1139440],
+          "fragmentedBytesAtLastCollection": [8640, 8120, 10288],
+          "gen2CollectionsAboveBaseline": [8, 8, 8],
+          "allocatedBytesSincePreviousCheckpoint": [3999032, 3997160, 4019744]
+        },
+        {
+          "phase": "reconciled",
+          "scratchLogicalBytes": [41512, 41512, 41512],
+          "managedBytes": [2303552, 2145152, 2440336],
+          "managedBytesAboveBaseline": [1048128, 1045304, 1188352],
+          "fragmentedBytesAtLastCollection": [5288, 5136, 6344],
+          "gen2CollectionsAboveBaseline": [10, 10, 10],
+          "allocatedBytesSincePreviousCheckpoint": [23952928, 23948024, 23953328]
+        },
+        {
+          "phase": "released",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1434432, 1283992, 1571176],
+          "managedBytesAboveBaseline": [184144, 179008, 319192],
+          "fragmentedBytesAtLastCollection": [27696, 25936, 28392],
+          "gen2CollectionsAboveBaseline": [12, 12, 12],
+          "allocatedBytesSincePreviousCheckpoint": [23136, 22848, 26488]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1434248, 1283808, 1570992],
+          "managedBytesAboveBaseline": [183960, 178824, 319008],
+          "fragmentedBytesAtLastCollection": [34448, 33168, 34928],
+          "gen2CollectionsAboveBaseline": [14, 14, 14],
+          "allocatedBytesSincePreviousCheckpoint": [13392, 13392, 13392]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 1000,
+      "scenario": "unchanged",
+      "operation": "restore",
+      "mode": "normal",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [0, 0, 0],
+      "maximumSeconds": [595, 595, 595],
+      "sources": [
+        {
+          "report": "flat-001000-unchanged-restore-1.json",
+          "sha256": "0da3531cae6edc22d7bd34b6d59bb03ce096e25cbc514e8bf5671ad1c57a32d2",
+          "watchdog": "flat-001000-unchanged-restore-1.watchdog.json",
+          "watchdogSha256": "3f45613f4c44603f177de11216cd1fa6613980e4466e0795aaa5f75502b9fad9",
+          "startedUtc": "2026-10-23T02:52:44.4276996+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        },
+        {
+          "report": "flat-001000-unchanged-restore-2.json",
+          "sha256": "9fdfef3a7415afa96316fd7b81efc551bdb5bc9620371ee29928bdfece25ca58",
+          "watchdog": "flat-001000-unchanged-restore-2.watchdog.json",
+          "watchdogSha256": "5322ecaff6ac8923ff10fa36e07dd2b109b9deb77ec0240145a7adf3b961e265",
+          "startedUtc": "2026-10-23T02:53:08.7462479+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        },
+        {
+          "report": "flat-001000-unchanged-restore-3.json",
+          "sha256": "27d763c7dcff1d6a111ce69df56cf70cc49a0bce8754a19d3409548ff31c7f88",
+          "watchdog": "flat-001000-unchanged-restore-3.watchdog.json",
+          "watchdogSha256": "117b81ab41bcfd9523ec4886be811c06019cfa4884b8b9a268e78535b255becc",
+          "startedUtc": "2026-10-23T02:53:33.0048768+00:00",
+          "observedOtherProcessCpuSeconds": 0.109375
+        }
+      ],
+      "validatedSharedOutcome": {
+        "completed": true,
+        "newCount": 0,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 1001,
+        "failedCount": 0
+      },
+      "elapsedMilliseconds": [3721.6618, 3692.3455, 3735.0023],
+      "allocatedBytesDelta": [103259040, 103197512, 103288120],
+      "processCpuMillisecondsDelta": [4953.125, 4937.5, 4968.75],
+      "sampledPeakPrivateBytes": [43196416, 40210432, 43323392],
+      "sampledPeakWorkingSetBytes": [83845120, 80265216, 83906560],
+      "sampledPeakManagedBytes": [17441800, 17154096, 17587144],
+      "observedOtherProcessCpuSeconds": [0, 0, 0.109375],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "ChatGPT": 0.109375
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 10000,
+      "scenario": "empty",
+      "operation": "plan",
+      "mode": "retained",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [100, 100, 100],
+      "maximumSeconds": [175, 175, 175],
+      "sources": [
+        {
+          "report": "flat-010000-empty-retained-1.json",
+          "sha256": "e4a9636e601e01a308006c9da854ccc2f7080839190cedcc88024ed74846351d",
+          "watchdog": "flat-010000-empty-retained-1.watchdog.json",
+          "watchdogSha256": "719fa57187eb5ddd78ddab79eda8f379e4e19a05082ccdefe29c2f070173497e",
+          "startedUtc": "2026-10-23T03:33:12.888213+00:00",
+          "observedOtherProcessCpuSeconds": 0.125
+        },
+        {
+          "report": "flat-010000-empty-retained-2.json",
+          "sha256": "441aa12095e995b9c9af9860759e805faf0397b3092f2772b2294d2173c3a2b4",
+          "watchdog": "flat-010000-empty-retained-2.watchdog.json",
+          "watchdogSha256": "25c30ab572f59318227a261f4aa5620d268c5a08f2a58b55d76130df6031032b",
+          "startedUtc": "2026-10-23T03:34:35.6388394+00:00",
+          "observedOtherProcessCpuSeconds": 0.21875
+        },
+        {
+          "report": "flat-010000-empty-retained-3.json",
+          "sha256": "721c98252e3f4705e06b3ae5e383efea4d63943277254b5b8de85fba9979b642",
+          "watchdog": "flat-010000-empty-retained-3.watchdog.json",
+          "watchdogSha256": "79f4b10c1250166309b7050b2ea1d1dfed43412a78564a09413b58a7f5cf6387",
+          "startedUtc": "2026-10-23T03:35:57.7797295+00:00",
+          "observedOtherProcessCpuSeconds": 1.140625
+        }
+      ],
+      "validatedSharedOutcome": {
+        "archiveObjectCount": 10001,
+        "plannedFileCount": 10001,
+        "plannedDirectoryCount": 0,
+        "emptyDirectoryCount": 0,
+        "projectionCount": 10001,
+        "filesToWriteCount": 10001,
+        "historyMoveCount": 0,
+        "newCount": 10001,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 0
+      },
+      "allocatedBytesDelta": [565962336, 565918496, 566007896],
+      "processCpuMillisecondsDelta": [20234.375, 19953.125, 20765.625],
+      "sampledPeakPrivateBytes": [57016320, 56791040, 57561088],
+      "sampledPeakWorkingSetBytes": [96989184, 96780288, 97046528],
+      "sampledPeakManagedBytes": [26649064, 26424976, 26847976],
+      "observedOtherProcessCpuSeconds": [0.21875, 0.125, 1.140625],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "ChatGPT": 0.96875,
+        "codex": 0.34375,
+        "com.docker.backend": 0.171875
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1255960, 1226520, 1262408],
+          "managedBytesAboveBaseline": [0, 0, 0],
+          "fragmentedBytesAtLastCollection": [81984, 81912, 82032],
+          "gen2CollectionsAboveBaseline": [0, 0, 0]
+        },
+        {
+          "phase": "prepared",
+          "scratchLogicalBytes": [922136, 922136, 922136],
+          "managedBytes": [1459616, 1454320, 1484472],
+          "managedBytesAboveBaseline": [222064, 203656, 227800],
+          "fragmentedBytesAtLastCollection": [1048, 960, 1152],
+          "gen2CollectionsAboveBaseline": [2, 2, 2],
+          "allocatedBytesSincePreviousCheckpoint": [40249648, 40237416, 40280184]
+        },
+        {
+          "phase": "enumerated",
+          "scratchLogicalBytes": [13419048, 13390376, 13431336],
+          "managedBytes": [1465896, 1460928, 1491080],
+          "managedBytesAboveBaseline": [228672, 209936, 234408],
+          "fragmentedBytesAtLastCollection": [51848, 46440, 61040],
+          "gen2CollectionsAboveBaseline": [4, 4, 4],
+          "allocatedBytesSincePreviousCheckpoint": [335825000, 335762144, 335861264]
+        },
+        {
+          "phase": "planned",
+          "scratchLogicalBytes": [13419048, 13390376, 13431336],
+          "managedBytes": [8739856, 8729816, 8865032],
+          "managedBytesAboveBaseline": [7503296, 7477448, 7609072],
+          "fragmentedBytesAtLastCollection": [718448, 588536, 738616],
+          "gen2CollectionsAboveBaseline": [7, 7, 7],
+          "allocatedBytesSincePreviousCheckpoint": [174769872, 174731104, 174774400]
+        },
+        {
+          "phase": "destination-manifest",
+          "scratchLogicalBytes": [13419048, 13390376, 13431336],
+          "managedBytes": [8748240, 8729976, 8873416],
+          "managedBytesAboveBaseline": [7503456, 7485832, 7617456],
+          "fragmentedBytesAtLastCollection": [751448, 621536, 771616],
+          "gen2CollectionsAboveBaseline": [9, 9, 9],
+          "allocatedBytesSincePreviousCheckpoint": [28440, 28440, 28728]
+        },
+        {
+          "phase": "reconciled",
+          "scratchLogicalBytes": [13419048, 13390376, 13431336],
+          "managedBytes": [9040648, 9031792, 9298160],
+          "managedBytesAboveBaseline": [7805272, 7778240, 8042200],
+          "fragmentedBytesAtLastCollection": [1553840, 1545664, 1566808],
+          "gen2CollectionsAboveBaseline": [11, 11, 11],
+          "allocatedBytesSincePreviousCheckpoint": [15065048, 15064832, 15065328]
+        },
+        {
+          "phase": "released",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1014560, 1004584, 1272048],
+          "managedBytesAboveBaseline": [-221936, -247848, 16088],
+          "fragmentedBytesAtLastCollection": [135040, 1704, 264936],
+          "gen2CollectionsAboveBaseline": [13, 13, 13],
+          "allocatedBytesSincePreviousCheckpoint": [25544, 25352, 25680]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1014688, 1004672, 1272176],
+          "managedBytesAboveBaseline": [-221848, -247720, 16216],
+          "fragmentedBytesAtLastCollection": [141184, 7784, 270992],
+          "gen2CollectionsAboveBaseline": [15, 15, 15],
+          "allocatedBytesSincePreviousCheckpoint": [13392, 13392, 13520]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 10000,
+      "scenario": "mixed",
+      "operation": "plan",
+      "mode": "retained",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [100, 100, 100],
+      "maximumSeconds": [175, 175, 175],
+      "sources": [
+        {
+          "report": "flat-010000-mixed-retained-1.json",
+          "sha256": "c23bbf9dd64c9186a56ce7633107e37c2547900fab673b07437829eefd42e46e",
+          "watchdog": "flat-010000-mixed-retained-1.watchdog.json",
+          "watchdogSha256": "f27eec2a3f97cc067188993db2ec18a135a850e6b9bf90277954ad4e5a19c6e0",
+          "startedUtc": "2026-10-23T03:34:03.8722423+00:00",
+          "observedOtherProcessCpuSeconds": 0.421875
+        },
+        {
+          "report": "flat-010000-mixed-retained-2.json",
+          "sha256": "5e796e1b5d74a3d631823edd43ae10033d80d38ecbf0bfb907396cc79ab9c704",
+          "watchdog": "flat-010000-mixed-retained-2.watchdog.json",
+          "watchdogSha256": "46d2c1470cd9cafebf018cfdfa0fefc1a3a526077e6f3ae28a72e31b0c9a5e5b",
+          "startedUtc": "2026-10-23T03:35:26.1873425+00:00",
+          "observedOtherProcessCpuSeconds": 0.125
+        },
+        {
+          "report": "flat-010000-mixed-retained-3.json",
+          "sha256": "b2769596ba9b19156d7581ebe48d82a686ec080ae5393af2b48791e14bb34311",
+          "watchdog": "flat-010000-mixed-retained-3.watchdog.json",
+          "watchdogSha256": "fd7803fcafb20aeec67769c8989e5f2320b8c95da3dc13a19d3bce4af3046e66",
+          "startedUtc": "2026-10-23T03:36:47.8891631+00:00",
+          "observedOtherProcessCpuSeconds": 0.140625
+        }
+      ],
+      "validatedSharedOutcome": {
+        "archiveObjectCount": 10001,
+        "plannedFileCount": 10001,
+        "plannedDirectoryCount": 0,
+        "emptyDirectoryCount": 0,
+        "projectionCount": 10001,
+        "filesToWriteCount": 2000,
+        "historyMoveCount": 2000,
+        "newCount": 1000,
+        "changedCount": 1000,
+        "extraCount": 1000,
+        "unchangedCount": 8001
+      },
+      "allocatedBytesDelta": [892485248, 891655680, 892606512],
+      "processCpuMillisecondsDelta": [32390.625, 32281.25, 32593.75],
+      "sampledPeakPrivateBytes": [65318912, 64397312, 65343488],
+      "sampledPeakWorkingSetBytes": [106201088, 105943040, 106860544],
+      "sampledPeakManagedBytes": [30415416, 29985272, 30769992],
+      "observedOtherProcessCpuSeconds": [0.140625, 0.125, 0.421875],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "ChatGPT": 0.296875,
+        "codex": 0.25,
+        "com.docker.backend": 0.140625
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1255040, 1250040, 1281792],
+          "managedBytesAboveBaseline": [0, 0, 0],
+          "fragmentedBytesAtLastCollection": [82080, 82008, 82080],
+          "gen2CollectionsAboveBaseline": [0, 0, 0]
+        },
+        {
+          "phase": "prepared",
+          "scratchLogicalBytes": [922136, 922136, 922136],
+          "managedBytes": [1483088, 1457840, 1490552],
+          "managedBytesAboveBaseline": [208760, 207800, 228048],
+          "fragmentedBytesAtLastCollection": [888, 888, 888],
+          "gen2CollectionsAboveBaseline": [2, 2, 2],
+          "allocatedBytesSincePreviousCheckpoint": [64397304, 64369776, 64435600]
+        },
+        {
+          "phase": "enumerated",
+          "scratchLogicalBytes": [13410856, 13406760, 13414952],
+          "managedBytes": [1489880, 1464432, 1497344],
+          "managedBytesAboveBaseline": [215552, 214392, 234840],
+          "fragmentedBytesAtLastCollection": [47552, 47504, 51920],
+          "gen2CollectionsAboveBaseline": [4, 4, 4],
+          "allocatedBytesSincePreviousCheckpoint": [335454136, 335417680, 335458352]
+        },
+        {
+          "phase": "planned",
+          "scratchLogicalBytes": [13410856, 13406760, 13414952],
+          "managedBytes": [9027984, 8956208, 9063672],
+          "managedBytesAboveBaseline": [7746192, 7701168, 7813632],
+          "fragmentedBytesAtLastCollection": [456432, 389096, 521864],
+          "gen2CollectionsAboveBaseline": [7, 7, 7],
+          "allocatedBytesSincePreviousCheckpoint": [159413112, 159402392, 159465880]
+        },
+        {
+          "phase": "destination-manifest",
+          "scratchLogicalBytes": [13410856, 13406760, 13414952],
+          "managedBytes": [9072928, 8999504, 9089944],
+          "managedBytesAboveBaseline": [7791136, 7744464, 7839904],
+          "fragmentedBytesAtLastCollection": [474240, 349384, 482128],
+          "gen2CollectionsAboveBaseline": [9, 9, 9],
+          "allocatedBytesSincePreviousCheckpoint": [36811816, 36794792, 36813464]
+        },
+        {
+          "phase": "reconciled",
+          "scratchLogicalBytes": [13410856, 13406760, 13414952],
+          "managedBytes": [9505000, 9499520, 9577072],
+          "managedBytesAboveBaseline": [8249960, 8249480, 8295280],
+          "fragmentedBytesAtLastCollection": [2126584, 2012216, 2161992],
+          "gen2CollectionsAboveBaseline": [11, 11, 11],
+          "allocatedBytesSincePreviousCheckpoint": [294395016, 293620208, 294582072]
+        },
+        {
+          "phase": "released",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1557368, 1551888, 1629440],
+          "managedBytesAboveBaseline": [302328, 301848, 347648],
+          "fragmentedBytesAtLastCollection": [2478264, 2475160, 2614904],
+          "gen2CollectionsAboveBaseline": [13, 13, 13],
+          "allocatedBytesSincePreviousCheckpoint": [1958088, 1946552, 1971408]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1556824, 1551344, 1628896],
+          "managedBytesAboveBaseline": [301784, 301304, 347104],
+          "fragmentedBytesAtLastCollection": [2485368, 2481152, 2622008],
+          "gen2CollectionsAboveBaseline": [15, 15, 15],
+          "allocatedBytesSincePreviousCheckpoint": [13264, 13264, 13264]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 10000,
+      "scenario": "unchanged",
+      "operation": "backup",
+      "mode": "normal",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [0, 0, 0],
+      "maximumSeconds": [595, 595, 595],
+      "sources": [
+        {
+          "report": "flat-010000-unchanged-backup-1.json",
+          "sha256": "fd6d78f056202d85445524a97539f11e102dc300c5c03aa8fb79a0fe72705d28",
+          "watchdog": "flat-010000-unchanged-backup-1.watchdog.json",
+          "watchdogSha256": "d7ed324290ba87f8d36351c6cd61332eae76bb5d0f47b992c999a972893c2171",
+          "startedUtc": "2026-10-23T02:58:34.626677+00:00",
+          "observedOtherProcessCpuSeconds": 0.234375
+        },
+        {
+          "report": "flat-010000-unchanged-backup-2.json",
+          "sha256": "70b76a5ef93967a8831b9bee2173a72ec94121b70ab68929200d4015fe4332ce",
+          "watchdog": "flat-010000-unchanged-backup-2.watchdog.json",
+          "watchdogSha256": "624c051c2f6e9e213c2d5367a8c6008a6d73a0f73b76783a05464a6615ffabcc",
+          "startedUtc": "2026-10-23T03:01:36.3274568+00:00",
+          "observedOtherProcessCpuSeconds": 0.234375
+        },
+        {
+          "report": "flat-010000-unchanged-backup-3.json",
+          "sha256": "7304fc73d8f7bf4fcdd0c646c3c583f35eb8ed04468263ee452ef97db47051ed",
+          "watchdog": "flat-010000-unchanged-backup-3.watchdog.json",
+          "watchdogSha256": "17c1444b0646703deed4c67c1aa378053cfeed0d4c7ed91440ad3f9306d32f5a",
+          "startedUtc": "2026-10-23T03:04:37.9441859+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        }
+      ],
+      "validatedSharedOutcome": {
+        "completed": true,
+        "newCount": 0,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 10001,
+        "failedCount": 0
+      },
+      "elapsedMilliseconds": [11540.872, 11514.4661, 11599.8532],
+      "allocatedBytesDelta": [592539608, 592470376, 592543768],
+      "processCpuMillisecondsDelta": [12734.375, 12718.75, 12812.5],
+      "sampledPeakPrivateBytes": [56938496, 56668160, 57561088],
+      "sampledPeakWorkingSetBytes": [97902592, 97157120, 98430976],
+      "sampledPeakManagedBytes": [27723496, 27403096, 27765864],
+      "observedOtherProcessCpuSeconds": [0.234375, 0, 0.234375],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "codex": 0.359375,
+        "com.docker.backend": 0.109375
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 10000,
+      "scenario": "unchanged",
+      "operation": "plan",
+      "mode": "retained",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [100, 100, 100],
+      "maximumSeconds": [175, 175, 175],
+      "sources": [
+        {
+          "report": "flat-010000-unchanged-retained-1.json",
+          "sha256": "80c3a0abedf4d029a1cb2ee40f548c147b341a8b6bdb6c8448b648579dd2369b",
+          "watchdog": "flat-010000-unchanged-retained-1.watchdog.json",
+          "watchdogSha256": "994c90b78b7223c5a3db5b0a52f4e5c7636689da038b8d809adc9fd8dd5082a2",
+          "startedUtc": "2026-10-23T03:33:33.79469+00:00",
+          "observedOtherProcessCpuSeconds": 0.28125
+        },
+        {
+          "report": "flat-010000-unchanged-retained-2.json",
+          "sha256": "b76e2cf8934022568d7b7871901dcd6012f803508e1ef4165117c135a698b28a",
+          "watchdog": "flat-010000-unchanged-retained-2.watchdog.json",
+          "watchdogSha256": "796c1af63b56d05e85d595d6a4a5d3450aab18ed528c6ba69c2e54ac938db471",
+          "startedUtc": "2026-10-23T03:34:56.0759035+00:00",
+          "observedOtherProcessCpuSeconds": 0.421875
+        },
+        {
+          "report": "flat-010000-unchanged-retained-3.json",
+          "sha256": "fdb58ecc46784e746defbdd0b4aa7b8cfb6192ce9e23395c1bc2718c8d45cd82",
+          "watchdog": "flat-010000-unchanged-retained-3.watchdog.json",
+          "watchdogSha256": "7fd3afa38e129057d700ff853ffb097aee125a1d07b7641e0f49e084dfd4da5f",
+          "startedUtc": "2026-10-23T03:36:17.8718762+00:00",
+          "observedOtherProcessCpuSeconds": 0.109375
+        }
+      ],
+      "validatedSharedOutcome": {
+        "archiveObjectCount": 10001,
+        "plannedFileCount": 10001,
+        "plannedDirectoryCount": 0,
+        "emptyDirectoryCount": 0,
+        "projectionCount": 10001,
+        "filesToWriteCount": 0,
+        "historyMoveCount": 0,
+        "newCount": 0,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 10001
+      },
+      "allocatedBytesDelta": [858176800, 857925072, 858203816],
+      "processCpuMillisecondsDelta": [30171.875, 30093.75, 30406.25],
+      "sampledPeakPrivateBytes": [64106496, 63709184, 64303104],
+      "sampledPeakWorkingSetBytes": [104177664, 104022016, 104583168],
+      "sampledPeakManagedBytes": [29471752, 29287656, 29964592],
+      "observedOtherProcessCpuSeconds": [0.28125, 0.109375, 0.421875],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "ChatGPT": 0.109375,
+        "codex": 0.3125,
+        "com.docker.backend": 0.390625
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1251288, 1126256, 1252656],
+          "managedBytesAboveBaseline": [0, 0, 0],
+          "fragmentedBytesAtLastCollection": [81936, 81864, 81952],
+          "gen2CollectionsAboveBaseline": [0, 0, 0]
+        },
+        {
+          "phase": "prepared",
+          "scratchLogicalBytes": [922136, 922136, 922136],
+          "managedBytes": [1456064, 1356352, 1477888],
+          "managedBytesAboveBaseline": [225232, 204776, 230096],
+          "fragmentedBytesAtLastCollection": [888, 856, 888],
+          "gen2CollectionsAboveBaseline": [2, 2, 2],
+          "allocatedBytesSincePreviousCheckpoint": [64837520, 64826152, 64856968]
+        },
+        {
+          "phase": "enumerated",
+          "scratchLogicalBytes": [13410856, 13406760, 13427240],
+          "managedBytes": [1462592, 1363144, 1484680],
+          "managedBytesAboveBaseline": [232024, 211304, 236888],
+          "fragmentedBytesAtLastCollection": [48376, 47528, 62040],
+          "gen2CollectionsAboveBaseline": [4, 4, 4],
+          "allocatedBytesSincePreviousCheckpoint": [335487672, 335295400, 335566952]
+        },
+        {
+          "phase": "planned",
+          "scratchLogicalBytes": [13410856, 13406760, 13427240],
+          "managedBytes": [9079976, 8961816, 9099568],
+          "managedBytesAboveBaseline": [7835560, 7828688, 7846912],
+          "fragmentedBytesAtLastCollection": [388656, 373400, 388880],
+          "gen2CollectionsAboveBaseline": [7, 7, 7],
+          "allocatedBytesSincePreviousCheckpoint": [158796392, 158772176, 158844536]
+        },
+        {
+          "phase": "destination-manifest",
+          "scratchLogicalBytes": [13410856, 13406760, 13427240],
+          "managedBytes": [9106288, 8988760, 9126512],
+          "managedBytesAboveBaseline": [7862504, 7855000, 7873856],
+          "fragmentedBytesAtLastCollection": [348880, 333640, 357056],
+          "gen2CollectionsAboveBaseline": [9, 9, 9],
+          "allocatedBytesSincePreviousCheckpoint": [36795848, 36794992, 36799264]
+        },
+        {
+          "phase": "reconciled",
+          "scratchLogicalBytes": [13410856, 13406760, 13427240],
+          "managedBytes": [8987016, 8866960, 9134904],
+          "managedBytesAboveBaseline": [7740704, 7734360, 7883616],
+          "fragmentedBytesAtLastCollection": [2701072, 2550432, 2702496],
+          "gen2CollectionsAboveBaseline": [11, 11, 11],
+          "allocatedBytesSincePreviousCheckpoint": [262171896, 262151536, 262187664]
+        },
+        {
+          "phase": "released",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [995328, 875208, 1143416],
+          "managedBytesAboveBaseline": [-251048, -257328, -107872],
+          "fragmentedBytesAtLastCollection": [41144, 41056, 172704],
+          "gen2CollectionsAboveBaseline": [13, 13, 13],
+          "allocatedBytesSincePreviousCheckpoint": [26848, 23496, 26848]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [994784, 874664, 1142872],
+          "managedBytesAboveBaseline": [-251592, -257872, -108416],
+          "fragmentedBytesAtLastCollection": [60736, 47112, 178760],
+          "gen2CollectionsAboveBaseline": [15, 15, 15],
+          "allocatedBytesSincePreviousCheckpoint": [13392, 13392, 16744]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 10000,
+      "scenario": "unchanged",
+      "operation": "restore",
+      "mode": "normal",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [0, 0, 0],
+      "maximumSeconds": [595, 595, 595],
+      "sources": [
+        {
+          "report": "flat-010000-unchanged-restore-1.json",
+          "sha256": "f2db6c6d3895593be5b7639e33861c83fcc583fec98bd27f18d338b03f99ecfa",
+          "watchdog": "flat-010000-unchanged-restore-1.watchdog.json",
+          "watchdogSha256": "9da5576b59f462a5c4547abc419b32d17bc096a083ca06a21a08ff3d18c5453c",
+          "startedUtc": "2026-10-23T02:58:00.5428138+00:00",
+          "observedOtherProcessCpuSeconds": 0.125
+        },
+        {
+          "report": "flat-010000-unchanged-restore-2.json",
+          "sha256": "e001fb4e3c5020a69a47038e786619d47097b1bf3295a1442dae8c278c4a7dd3",
+          "watchdog": "flat-010000-unchanged-restore-2.watchdog.json",
+          "watchdogSha256": "604b08cb34cd0e7f2c3d5cc7afcc22fd36fdc0683df169c4554c221afafe31cf",
+          "startedUtc": "2026-10-23T03:01:02.3738667+00:00",
+          "observedOtherProcessCpuSeconds": 0.75
+        },
+        {
+          "report": "flat-010000-unchanged-restore-3.json",
+          "sha256": "39e402bb3effc6659461624df39b00ac8e9b84918b95d46c4ae60d3011774392",
+          "watchdog": "flat-010000-unchanged-restore-3.watchdog.json",
+          "watchdogSha256": "cd9f5775322713292ad2df4206ea6e2504eba9395654455450213e40ccc7f081",
+          "startedUtc": "2026-10-23T03:04:04.2536005+00:00",
+          "observedOtherProcessCpuSeconds": 0.296875
+        }
+      ],
+      "validatedSharedOutcome": {
+        "completed": true,
+        "newCount": 0,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 10001,
+        "failedCount": 0
+      },
+      "elapsedMilliseconds": [33295.9288, 33028.6893, 33416.2995],
+      "allocatedBytesDelta": [1125597712, 1125511216, 1125737080],
+      "processCpuMillisecondsDelta": [34734.375, 34484.375, 35078.125],
+      "sampledPeakPrivateBytes": [67969024, 67727360, 68132864],
+      "sampledPeakWorkingSetBytes": [108490752, 108228608, 108904448],
+      "sampledPeakManagedBytes": [34952936, 33880512, 35123024],
+      "observedOtherProcessCpuSeconds": [0.296875, 0.125, 0.75],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "ChatGPT": 0.671875,
+        "codex": 0.5
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 30000,
+      "scenario": "unchanged",
+      "operation": "backup",
+      "mode": "normal",
+      "sampleCount": 1,
+      "retainedCheckpointDelayMilliseconds": [0, 0, 0],
+      "maximumSeconds": [295, 295, 295],
+      "sources": [
+        {
+          "report": "flat-030000-unchanged-backup-1.json",
+          "sha256": "38c938f7ffba38ea0d211c31b097e38758e20ed47dd487a6c8ca1935d6893ac1",
+          "watchdog": "flat-030000-unchanged-backup-1.watchdog.json",
+          "watchdogSha256": "9fde79950d64f3c5eac0109fbc39a348b038a73651ecc7b471d841a787d32ac5",
+          "startedUtc": "2026-10-23T03:20:52.5467187+00:00",
+          "observedOtherProcessCpuSeconds": 0.484375
+        }
+      ],
+      "validatedSharedOutcome": {
+        "completed": true,
+        "newCount": 0,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 30001,
+        "failedCount": 0
+      },
+      "elapsedMilliseconds": [32972.9784, 32972.9784, 32972.9784],
+      "allocatedBytesDelta": [1873917240, 1873917240, 1873917240],
+      "processCpuMillisecondsDelta": [34296.875, 34296.875, 34296.875],
+      "sampledPeakPrivateBytes": [80023552, 80023552, 80023552],
+      "sampledPeakWorkingSetBytes": [121364480, 121364480, 121364480],
+      "sampledPeakManagedBytes": [45377448, 45377448, 45377448],
+      "observedOtherProcessCpuSeconds": [0.484375, 0.484375, 0.484375],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "ChatGPT": 0.125,
+        "codex": 0.109375,
+        "com.docker.backend": 0.25
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 30000,
+      "scenario": "unchanged",
+      "operation": "plan",
+      "mode": "retained",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [100, 100, 100],
+      "maximumSeconds": [175, 175, 175],
+      "sources": [
+        {
+          "report": "flat-030000-unchanged-retained-1.json",
+          "sha256": "a0bc6d8606353cbf9bfb722016a7a41e73ece32700e2163b891828a562fa1ab2",
+          "watchdog": "flat-030000-unchanged-retained-1.watchdog.json",
+          "watchdogSha256": "1f55dbf3a4843ea622f5099d8cf99bb56758e0f272ab3c032dca4bbdb1140929",
+          "startedUtc": "2026-10-23T03:37:19.3118123+00:00",
+          "observedOtherProcessCpuSeconds": 1.5625
+        },
+        {
+          "report": "flat-030000-unchanged-retained-2.json",
+          "sha256": "a5ca8be86eeed147dd55ab32609d1edf06d525866fc1a0fce2ad902b7ff1db5b",
+          "watchdog": "flat-030000-unchanged-retained-2.watchdog.json",
+          "watchdogSha256": "b061d789c685775dd3380a6db99e41650d49131ffc782fcea645d312521f0e17",
+          "startedUtc": "2026-10-23T03:38:45.9207647+00:00",
+          "observedOtherProcessCpuSeconds": 5.078125
+        },
+        {
+          "report": "flat-030000-unchanged-retained-3.json",
+          "sha256": "a3927c46334ced9f4bdd9edc804475af69b186457de3a66b316e3a93be5653b1",
+          "watchdog": "flat-030000-unchanged-retained-3.watchdog.json",
+          "watchdogSha256": "5e9520741fc603e29e318e5f608cb478f4fde6cc0987683be4ce6c23bd993e84",
+          "startedUtc": "2026-10-23T03:40:13.5918328+00:00",
+          "observedOtherProcessCpuSeconds": 0.953125
+        }
+      ],
+      "validatedSharedOutcome": {
+        "archiveObjectCount": 30001,
+        "plannedFileCount": 30001,
+        "plannedDirectoryCount": 0,
+        "emptyDirectoryCount": 0,
+        "projectionCount": 30001,
+        "filesToWriteCount": 0,
+        "historyMoveCount": 0,
+        "newCount": 0,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 30001
+      },
+      "allocatedBytesDelta": [2682200904, 2681631960, 2682901584],
+      "processCpuMillisecondsDelta": [86625.0, 86578.125, 87781.25],
+      "sampledPeakPrivateBytes": [88317952, 87891968, 88862720],
+      "sampledPeakWorkingSetBytes": [128999424, 127819776, 129110016],
+      "sampledPeakManagedBytes": [58629704, 58470952, 58991624],
+      "observedOtherProcessCpuSeconds": [1.5625, 0.953125, 5.078125],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "ChatGPT": 4.453125,
+        "codex": 2.25,
+        "com.docker.backend": 0.890625
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1255144, 1252016, 1275032],
+          "managedBytesAboveBaseline": [0, 0, 0],
+          "fragmentedBytesAtLastCollection": [81960, 81936, 82032],
+          "gen2CollectionsAboveBaseline": [0, 0, 0]
+        },
+        {
+          "phase": "prepared",
+          "scratchLogicalBytes": [6287896, 6287896, 6287896],
+          "managedBytes": [1423288, 1399016, 1549304],
+          "managedBytesAboveBaseline": [148256, 147000, 294160],
+          "fragmentedBytesAtLastCollection": [68832, 68832, 68864],
+          "gen2CollectionsAboveBaseline": [2, 2, 2],
+          "allocatedBytesSincePreviousCheckpoint": [192471224, 192465752, 192628136]
+        },
+        {
+          "phase": "enumerated",
+          "scratchLogicalBytes": [40133160, 40116776, 40165928],
+          "managedBytes": [1312520, 1298816, 1375520],
+          "managedBytesAboveBaseline": [57376, 23784, 123504],
+          "fragmentedBytesAtLastCollection": [228600, 123424, 319144],
+          "gen2CollectionsAboveBaseline": [4, 4, 4],
+          "allocatedBytesSincePreviousCheckpoint": [1072164608, 1071729640, 1073023720]
+        },
+        {
+          "phase": "planned",
+          "scratchLogicalBytes": [40133160, 40116776, 40165928],
+          "managedBytes": [23040336, 23038176, 23102576],
+          "managedBytesAboveBaseline": [21785192, 21763144, 21850560],
+          "fragmentedBytesAtLastCollection": [5583120, 5484416, 5596072],
+          "gen2CollectionsAboveBaseline": [8, 8, 8],
+          "allocatedBytesSincePreviousCheckpoint": [490512688, 490503960, 490524272]
+        },
+        {
+          "phase": "destination-manifest",
+          "scratchLogicalBytes": [40133160, 40116776, 40165928],
+          "managedBytes": [23117008, 23102312, 23165664],
+          "managedBytesAboveBaseline": [21847168, 21841976, 21913648],
+          "fragmentedBytesAtLastCollection": [1726376, 1629240, 1729008],
+          "gen2CollectionsAboveBaseline": [10, 10, 10],
+          "allocatedBytesSincePreviousCheckpoint": [109778008, 109776896, 109793936]
+        },
+        {
+          "phase": "reconciled",
+          "scratchLogicalBytes": [40133160, 40116776, 40165928],
+          "managedBytes": [23603728, 23599184, 23603848],
+          "managedBytesAboveBaseline": [22347168, 22328696, 22348704],
+          "fragmentedBytesAtLastCollection": [7134528, 7110712, 7160184],
+          "gen2CollectionsAboveBaseline": [12, 12, 12],
+          "allocatedBytesSincePreviousCheckpoint": [817086808, 817060416, 817093792]
+        },
+        {
+          "phase": "released",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [845280, 841720, 845896],
+          "managedBytesAboveBaseline": [-410296, -429752, -409248],
+          "fragmentedBytesAtLastCollection": [42776, 41736, 43528],
+          "gen2CollectionsAboveBaseline": [14, 14, 14],
+          "allocatedBytesSincePreviousCheckpoint": [27360, 26464, 27360]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [844736, 841176, 845352],
+          "managedBytesAboveBaseline": [-410840, -430296, -409792],
+          "fragmentedBytesAtLastCollection": [49752, 47664, 50504],
+          "gen2CollectionsAboveBaseline": [16, 16, 16],
+          "allocatedBytesSincePreviousCheckpoint": [13136, 13136, 13136]
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "shape": "flat",
+      "payloadFileCount": 30000,
+      "scenario": "unchanged",
+      "operation": "restore",
+      "mode": "normal",
+      "sampleCount": 1,
+      "retainedCheckpointDelayMilliseconds": [0, 0, 0],
+      "maximumSeconds": [295, 295, 295],
+      "sources": [
+        {
+          "report": "flat-030000-unchanged-restore-1.json",
+          "sha256": "4cba88a1ff06ae73a7ff251e8de57abb255cc456791f9e062d5d7dd28bb1c503",
+          "watchdog": "flat-030000-unchanged-restore-1.watchdog.json",
+          "watchdogSha256": "9dafb8d5044d85abb3b818860abd52eefc0163ad72d226e289341079701c562b",
+          "startedUtc": "2026-10-23T03:18:53.1047651+00:00",
+          "observedOtherProcessCpuSeconds": 2.3125
+        }
+      ],
+      "validatedSharedOutcome": {
+        "completed": true,
+        "newCount": 0,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 30001,
+        "failedCount": 0
+      },
+      "elapsedMilliseconds": [118762.1893, 118762.1893, 118762.1893],
+      "allocatedBytesDelta": [3503822200, 3503822200, 3503822200],
+      "processCpuMillisecondsDelta": [120125.0, 120125.0, 120125.0],
+      "sampledPeakPrivateBytes": [102965248, 102965248, 102965248],
+      "sampledPeakWorkingSetBytes": [143691776, 143691776, 143691776],
+      "sampledPeakManagedBytes": [71281688, 71281688, 71281688],
+      "observedOtherProcessCpuSeconds": [2.3125, 2.3125, 2.3125],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "ChatGPT": 1.046875,
+        "codex": 0.671875,
+        "com.docker.backend": 0.59375
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0]
+        }
+      ]
+    },
+    {
+      "format": "zip",
+      "shape": "flat",
+      "payloadFileCount": 10000,
+      "scenario": "unchanged",
+      "operation": "plan",
+      "mode": "retained",
+      "sampleCount": 3,
+      "retainedCheckpointDelayMilliseconds": [100, 100, 100],
+      "maximumSeconds": [175, 175, 175],
+      "sources": [
+        {
+          "report": "zip-010000-unchanged-retained-1.json",
+          "sha256": "af811a118645bcbc795481151fa3e401c696e185d7e1c90920b37da29c96dcbd",
+          "watchdog": "zip-010000-unchanged-retained-1.watchdog.json",
+          "watchdogSha256": "3c1e77595876fa20acfc770b03a973be35786f7d5a076cf70bad8c234434781b",
+          "startedUtc": "2026-10-23T03:41:40.3428126+00:00",
+          "observedOtherProcessCpuSeconds": 0.59375
+        },
+        {
+          "report": "zip-010000-unchanged-retained-2.json",
+          "sha256": "cb3e1dd0f299bce7a7f893e2b32a42ad77dca7ec5d7dca62c6e854e2ca461772",
+          "watchdog": "zip-010000-unchanged-retained-2.watchdog.json",
+          "watchdogSha256": "a40dcd6f556775c1106036b623b519a1ed886341b661b961a41d3f51de2c2162",
+          "startedUtc": "2026-10-23T03:42:07.0325654+00:00",
+          "observedOtherProcessCpuSeconds": 0
+        },
+        {
+          "report": "zip-010000-unchanged-retained-3.json",
+          "sha256": "6049a76149271ef8a3ab8e49ba4608d0225bdf1414b38cfad6c06e91cc1e6331",
+          "watchdog": "zip-010000-unchanged-retained-3.watchdog.json",
+          "watchdogSha256": "8032d94d4c99e3ba3c8453691b83323efa412c9d1ab60a1c00460cf3a45c01d1",
+          "startedUtc": "2026-10-23T03:42:33.5754293+00:00",
+          "observedOtherProcessCpuSeconds": 0.109375
+        }
+      ],
+      "validatedSharedOutcome": {
+        "archiveObjectCount": 2,
+        "plannedFileCount": 10001,
+        "plannedDirectoryCount": 0,
+        "emptyDirectoryCount": 0,
+        "projectionCount": 1,
+        "filesToWriteCount": 0,
+        "historyMoveCount": 0,
+        "newCount": 0,
+        "changedCount": 0,
+        "extraCount": 0,
+        "unchangedCount": 10001
+      },
+      "allocatedBytesDelta": [621409240, 621395504, 621543024],
+      "processCpuMillisecondsDelta": [26578.125, 26531.25, 26593.75],
+      "sampledPeakPrivateBytes": [63926272, 63913984, 64069632],
+      "sampledPeakWorkingSetBytes": [105607168, 105488384, 105648128],
+      "sampledPeakManagedBytes": [31931568, 31369192, 32917488],
+      "observedOtherProcessCpuSeconds": [0.109375, 0, 0.59375],
+      "observedOtherProcessCpuSecondsAcrossRunsByName": {
+        "ChatGPT": 0.15625,
+        "codex": 0.28125,
+        "com.docker.backend": 0.265625
+      },
+      "checkpoints": [
+        {
+          "phase": "baseline",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1381320, 1374432, 1503712],
+          "managedBytesAboveBaseline": [0, 0, 0],
+          "fragmentedBytesAtLastCollection": [90136, 90064, 90144],
+          "gen2CollectionsAboveBaseline": [0, 0, 0]
+        },
+        {
+          "phase": "prepared",
+          "scratchLogicalBytes": [29200, 29200, 29200],
+          "managedBytes": [1588536, 1574256, 1732384],
+          "managedBytesAboveBaseline": [207216, 199824, 228672],
+          "fragmentedBytesAtLastCollection": [688, 688, 720],
+          "gen2CollectionsAboveBaseline": [2, 2, 2],
+          "allocatedBytesSincePreviousCheckpoint": [25184520, 25160480, 25198272]
+        },
+        {
+          "phase": "enumerated",
+          "scratchLogicalBytes": [37408, 37408, 37408],
+          "managedBytes": [1655952, 1614912, 1758760],
+          "managedBytesAboveBaseline": [255048, 233592, 281520],
+          "fragmentedBytesAtLastCollection": [369928, 1992, 370200],
+          "gen2CollectionsAboveBaseline": [4, 4, 4],
+          "allocatedBytesSincePreviousCheckpoint": [378752, 378752, 489464]
+        },
+        {
+          "phase": "planned",
+          "scratchLogicalBytes": [3658280, 3625512, 3772968],
+          "managedBytes": [11485648, 11444720, 11590896],
+          "managedBytesAboveBaseline": [10087184, 10063400, 10111216],
+          "fragmentedBytesAtLastCollection": [306008, 301776, 306416],
+          "gen2CollectionsAboveBaseline": [7, 7, 7],
+          "allocatedBytesSincePreviousCheckpoint": [297503952, 297453264, 297507872]
+        },
+        {
+          "phase": "destination-manifest",
+          "scratchLogicalBytes": [3658280, 3625512, 3772968],
+          "managedBytes": [11499248, 11458320, 11604536],
+          "managedBytesAboveBaseline": [10100824, 10077000, 10124816],
+          "fragmentedBytesAtLastCollection": [306032, 302960, 307600],
+          "gen2CollectionsAboveBaseline": [9, 9, 9],
+          "allocatedBytesSincePreviousCheckpoint": [36959352, 36959312, 36962664]
+        },
+        {
+          "phase": "reconciled",
+          "scratchLogicalBytes": [8942120, 8925736, 8946216],
+          "managedBytes": [11442088, 11311448, 11449712],
+          "managedBytesAboveBaseline": [10067656, 9807736, 10068392],
+          "fragmentedBytesAtLastCollection": [2593568, 2548024, 2828832],
+          "gen2CollectionsAboveBaseline": [11, 11, 11],
+          "allocatedBytesSincePreviousCheckpoint": [261381640, 261327656, 261384648]
+        },
+        {
+          "phase": "released",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1302288, 1171976, 1309976],
+          "managedBytesAboveBaseline": [-72144, -331736, -71344],
+          "fragmentedBytesAtLastCollection": [67384, 65448, 196808],
+          "gen2CollectionsAboveBaseline": [13, 13, 13],
+          "allocatedBytesSincePreviousCheckpoint": [24696, 24696, 27984]
+        },
+        {
+          "phase": "finished",
+          "scratchLogicalBytes": [0, 0, 0],
+          "managedBytes": [1301216, 1170904, 1308904],
+          "managedBytesAboveBaseline": [-73216, -332808, -72416],
+          "fragmentedBytesAtLastCollection": [74488, 72552, 202800],
+          "gen2CollectionsAboveBaseline": [15, 15, 15],
+          "allocatedBytesSincePreviousCheckpoint": [13264, 13264, 13264]
+        }
+      ]
+    }
+  ]
+}

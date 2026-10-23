@@ -980,15 +980,35 @@ Linux-only skips**, with no build warnings. Independent review checked blocker
 semantics, provider comparer ownership, deferred cleanup, and disposal. The final
 `git diff --check`, UTF-8, CRLF, and Markdown wrap checks also pass.
 
-**Recommended next step:** Measure retained plan memory in `RestorePlanner`,
-`RestoreReconciler`, and `ArchiveBackupOperation`. Desired-object lists,
-projection dependency maps, destination snapshots, namespace-validation
-dictionaries, and
-some reporting lists still grow with file count. Use bounded representative
-fixtures to record allocations, peak working set, provider calls, and scratch I/O
-before choosing the next plan-storage change. Native Linux and deployed-service
-acceptance from I04 also remain outstanding. The current changes do not claim a
-total process-memory bound or complete large-tree performance coverage.
+**Memory follow-up (2026-10-23):** The new real-filesystem profiling runner
+separates normal public-command timings from retained-memory diagnostics, with
+bounded watchdogs and disposable fixtures. See
+[plan-memory-measurements.md](plan-memory-measurements.md) and the committed
+[numerical results](plan-memory-results.json). Mirror fixtures cover 1,000,
+10,000, and 30,000 payload files; a 10,000-file ZIP case checks format-specific
+ownership. Heap snapshots caught an inline async-completion-stack measurement
+artifact; all retained samples were repeated after adding quiescent checkpoints.
+
+The corrected evidence identifies the restore plan's per-file objects, openers,
+projection owners, and dependency graph as the main persistent-memory target.
+Enumeration retains little additional managed memory but still allocates
+substantially. Reconciliation dictionaries and reporting/backup state also
+remain candidates for transient-memory and allocation work. Normal backup and
+restore timings do not exhibit quadratic growth in these measured cases;
+phase-specific backup ownership, provider-call counts, and actual scratch I/O
+volume were not measured here.
+
+**Recommended next step:** Establish stable path/row identities and move restore
+reconciliation bookkeeping into operation-owned `TemporaryIndex` storage as
+isolated groundwork. Then replace the retained plan's opener/dependency graph
+with replayable metadata and explicit content-source ownership. Never serialize
+delegates or hide an unbounded per-file delegate registry behind a disk index.
+Preserve format/provider ownership, comparison semantics, deferred cleanup, and
+started-worker lifetime guarantees, with deterministic work-count and recovery
+tests. Re-measure before attributing an improvement to any specific collection.
+Native Linux and deployed-service acceptance from I04 remain outstanding. The
+current changes do not claim a total process-memory bound or complete large-tree
+performance coverage.
 
 ## Suggested Codex-Sandbox-01 sequence
 
