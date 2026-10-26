@@ -39,6 +39,7 @@ public static class YabtSyncServiceCollectionExtensions
         services.AddSingleton<BackupTargetReconciler>();
         services.AddSingleton<ArchiveContentTransfer>();
         services.AddSingleton<ArchiveManifestStore>();
+        services.AddSingleton<OperationProgressFactory>();
         services.AddSingleton<IArchiveSynchronizer, ArchiveSynchronizer>();
         services.AddSingleton<IRestorePathVerifier, RestorePathVerifier>();
         services.AddSingleton<IHistoryDeduplicator, HistoryDeduplicator>();

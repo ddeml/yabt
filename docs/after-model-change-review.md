@@ -1030,16 +1030,27 @@ and cancellation recovery, read-only traversal, nested case transitions, package
 ownership across folder units, and rejection of hidden projection collisions.
 Independent review and UTF-8, CRLF, Markdown-wrap, and diff checks passed.
 
-**Recommended next step:** Add batched, crash-surviving, disposable progress
-evidence for completed folders and pending work, followed by incremental restore
-integration. Bind reused state to operation identity and freshness evidence;
-prioritize unfinished work while revalidating completed units before success.
-Scheduling children after a collected payload failure must never be mistaken for
-a successful folder checkpoint. Use complete package groups initially, without
-resuming partial ZIP construction or individual folder-listing cursors. Preserve
-provider comparison, deferred cleanup, and started-worker lifetimes. Measure time
-to first verified commit and restart-to-next-new-commit alongside ordinary run
-overhead. Native Linux and deployed-service acceptance from I04 remain pending.
+**Durable backup progress (2026-10-26):** Mutating backup now retains a private
+machine-local SQLite journal of unit completion and immediate child frontiers.
+Updates are atomic and flushed in bounded batches, with controlled-failure
+flushing. Restart uses fresh rooted traversal and current policies, prioritizes
+unfinished subtrees, and revalidates every completed folder before success.
+The journal contains no payloads or authoritative comparison evidence. A crash
+can require repeating the latest batch; journal failures fall back to fresh
+traversal. Successful final publication removes the database; the empty lease
+file remains to avoid lock-name races.
+
+Provider-owned opaque identities bind progress to configured locations without
+retaining connection secrets. Location checks reject overlap with operation data.
+Native regular-file identity checks reject shared or linked journal controls,
+reusing the filesystem provider's existing evidence implementation. Dry runs and
+verification do not open progress storage. Package work completes only after
+every artifact consistency check succeeds; partial ZIP construction is never
+persisted. Generic artifact groups spanning folders conservatively leave their
+earlier units pending.
+
+Incremental restore and timing validation follow in separate commits. Native
+Linux and deployed-service acceptance from I04 remain pending.
 
 ## Suggested Codex-Sandbox-01 sequence
 

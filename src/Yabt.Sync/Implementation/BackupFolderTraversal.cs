@@ -4,19 +4,24 @@ using Yabt.Core.Models;
 namespace Yabt.Sync.Implementation;
 
 /// <summary>
-/// Operation-local discovery frontier. A completed folder schedules its immediate
-/// children; this disposable index is not a durable resume checkpoint.
+/// Fresh discovery frontier with disposable priorities from earlier operation
+/// progress. Saved paths never bypass current ancestor discovery or validation.
 /// </summary>
 internal sealed class BackupFolderTraversal : IDisposable
 {
     private readonly DiskEntryCollection<BackupFolderWorkItem> _pendingFolders;
+    private readonly DiskEntryCollection<BackupFolderWorkItem> _completedFolders;
     private readonly DiskSet _desiredFolders;
+    private readonly OperationProgress? _progress;
     private long _nextFolder;
+    private long _nextCompletedFolder;
 
-    public BackupFolderTraversal(TemporaryIndex index)
+    public BackupFolderTraversal(TemporaryIndex index, OperationProgress? progress = null)
     {
         _pendingFolders = index.CreateCollection<BackupFolderWorkItem>();
+        _completedFolders = index.CreateCollection<BackupFolderWorkItem>();
         _desiredFolders = index.CreateSet();
+        _progress = progress;
         _pendingFolders.Add(new(string.Empty));
         _desiredFolders.Add(string.Empty);
     }
@@ -27,6 +32,11 @@ internal sealed class BackupFolderTraversal : IDisposable
     {
         if (_nextFolder == _pendingFolders.LongCount)
         {
+            if (_nextCompletedFolder != _completedFolders.LongCount)
+            {
+                work = _completedFolders.Get(_nextCompletedFolder++);
+                return true;
+            }
             work = null!;
             return false;
         }
@@ -89,7 +99,8 @@ internal sealed class BackupFolderTraversal : IDisposable
             // The earliest removed ancestor models the entire recreated subtree.
             // Keep only that path instead of accumulating every preceding removal.
             removedPaths.TryGetValue(child, out var removedChild);
-            _pendingFolders.Add(new(child, work.RemovedAncestorPath ?? removedChild));
+            var queue = _progress?.HasUnfinishedSubtree(child) == false ? _completedFolders : _pendingFolders;
+            queue.Add(new(child, work.RemovedAncestorPath ?? removedChild));
         }
     }
 
@@ -108,6 +119,7 @@ internal sealed class BackupFolderTraversal : IDisposable
     public void Dispose()
     {
         _pendingFolders.Dispose();
+        _completedFolders.Dispose();
         _desiredFolders.Dispose();
     }
 }

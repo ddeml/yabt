@@ -20,7 +20,8 @@ internal sealed class ArchiveBackupOperation
     ArchiveRootDocuments _rootDocuments,
     BackupTargetReconciler _targetReconciler,
     ArchiveContentTransfer _contentTransfer,
-    ArchiveManifestStore _manifests
+    ArchiveManifestStore _manifests,
+    OperationProgressFactory _progressFactory
 )
 {
     internal async Task<SyncRunResult> RunBackupOperationAsync
@@ -705,7 +706,14 @@ internal sealed class ArchiveBackupOperation
 
         var folderProjector = context.FormatHandler.ProjectsBesideSourceFolder ? null :
             context.FormatHandler as IArchiveBackupFolderProjector;
-        using var folderTraversal = folderProjector is null ? null : new BackupFolderTraversal(manifestIndex);
+        using var progress = writeChanges ? _progressFactory.Open
+        (
+            "backup", context.SourceStore, context.TargetStore,
+            [context.SourceDescriptor.ArchiveId, context.SourcePrefix,
+                context.SourceDocument?.ContentHash, context.Policy.Format,
+                context.TargetDescriptor.Layout.LivePrefix, context.TargetDescriptor.Layout.HistPrefix]
+        ) : null;
+        using var folderTraversal = folderProjector is null ? null : new BackupFolderTraversal(manifestIndex, progress);
         IReadOnlySet<string> desiredFolderPaths;
         try
         {
@@ -716,6 +724,7 @@ internal sealed class ArchiveBackupOperation
                 while (folderTraversal!.TryTake(out var work))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    progress?.StartUnit(work.RelativePath);
                     await using var unit = await folderProjector.ProjectBackupFolderAsync
                     (
                         projectionRequest, work.RelativePath, cancellationToken
@@ -773,12 +782,19 @@ internal sealed class ArchiveBackupOperation
                         cancellationToken
                     );
                     folderTraversal.ScheduleChildren(work, unit, conflicts, unitNamespace.PathComparer, cancellationToken);
+                    // A generic projection may span folders. Its owner and every
+                    // consistency check must finish before recording completion.
+                    if (sourceReadFailures.Count == 0 && backupProjectionGroups.Count == 0)
+                    {
+                        progress?.CompleteUnit(unit.RelativePath, unit.ChildFolderPaths);
+                    }
                 }
 
                 desiredFolderPaths = folderTraversal.DesiredFolderPaths;
             }
             else
             {
+                progress?.StartUnit(string.Empty);
                 // Handlers without folder-local ownership retain complete projection
                 // preflight, including a packaged selected root.
                 var desiredObjects = new List<ArchiveProjectedObject>();
@@ -818,6 +834,10 @@ internal sealed class ArchiveBackupOperation
                     cancellationToken
                 );
                 desiredFolderPaths = reconciliationTraversal.DesiredFolderPaths;
+                if (sourceReadFailures.Count == 0 && backupProjectionGroups.Count == 0)
+                {
+                    progress?.CompleteUnit(string.Empty, []);
+                }
             }
         }
         catch (Exception ex) when (SourceObjectReadException.FindAll(ex).Count != 0)
@@ -904,6 +924,7 @@ internal sealed class ArchiveBackupOperation
             {
                 await historizer.CompleteAsync(cancellationToken);
             }
+            progress?.CompleteOperation();
         }
 
         sourceReadFailures = SyncFailureReporting.NormalizeFailures(sourceReadFailures);

@@ -12,6 +12,9 @@ public static class YabtEventIds
     public const int RestorePathVerificationRequested = 1006;
     public const int RestorePathVerificationCompleted = 1007;
     public const int ArchiveSyncIncomplete = 1008;
+    public const int OperationProgressUnavailable = 1009;
+    public const int OperationProgressResumed = 1010;
+    public const int OperationProgressCleanupFailed = 1011;
 
     public const int ArchiveObjectUnchanged = 1100;
     public const int BackupObjectAdded = 1101;

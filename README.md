@@ -231,6 +231,25 @@ oversized documents fail explicitly. Generated root descriptors and remote
 locks must also fit their configured limit. File-count-dependent manifests are
 not small configuration documents and do not use these limits.
 
+### Operation progress
+
+Mutating operations retain local progress after interruption and use it to visit
+unfinished branches first on the next run. All source and destination state is
+still revalidated before success. `Sync:ProgressEnabled` defaults to `true`;
+`Sync:ProgressFlushUnitCount` defaults to `32` and
+`Sync:ProgressFlushIntervalSeconds` defaults to `5`. A crash may repeat the last
+batch. Successful completion removes the journal. Dry runs and verification do
+not create one. Journal failures warn and fall back to fresh traversal.
+
+Progress defaults to `%LOCALAPPDATA%\Yabt\Progress` on Windows,
+`$XDG_STATE_HOME/yabt/progress` or `~/.local/state/yabt/progress` on Linux, and
+`~/Library/Application Support/Yabt/Progress` on macOS. Override this trusted
+per-user location with `Sync:ProgressDirectory`; it must remain outside source,
+archive, and restore data. Journals contain only disposable scheduling hints and
+never replace archive files or manifests as the source of truth. Empty lease
+files may remain after success to prevent lock-name races. A corrupt journal is
+ignored; it can be deleted when no operation is using that progress directory.
+
 ### Temporary content
 
 Replayable generated content can use memory up to 8 MiB per buffer, sharing a

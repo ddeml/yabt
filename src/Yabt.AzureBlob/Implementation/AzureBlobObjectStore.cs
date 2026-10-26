@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using Azure;
 using Azure.Storage;
 using Azure.Storage.Blobs;
@@ -17,10 +19,29 @@ internal sealed class AzureBlobObjectStore
     AzureBlobContainerClientFactory _containerClientFactory,
     ILogger<AzureBlobObjectStore> _logger,
     TimeProvider _timeProvider
-) : IArchiveMutableObjectStore
+) : IArchiveMutableObjectStore, IObjectStoreOperationIdentity
 {
     private readonly object _contextLock = new();
     private AzureBlobObjectStoreContext? _context;
+
+    public string OperationIdentity
+    {
+        get
+        {
+            var context = GetContext();
+            var location = new UriBuilder(context.ContainerClient.Uri)
+            {
+                UserName = string.Empty,
+                Password = string.Empty,
+                Query = string.Empty,
+                Fragment = string.Empty,
+            };
+            return "azureBlob-v1:" + Convert.ToHexString
+            (
+                SHA256.HashData(Encoding.UTF8.GetBytes(location.Uri.AbsoluteUri + "\0" + context.ObjectStorePrefix))
+            );
+        }
+    }
 
     public Task<bool> IsIndependentMaterializationAsync
     (

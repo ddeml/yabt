@@ -299,8 +299,32 @@ failure/recovery path. They do not authorize renaming, skipping desired content,
 or treating it as removed. A later backup unit may fail after earlier units have
 committed; previous bytes remain in history and unrelated cleanup and successful
 manifest publication remain suppressed. Operations are not whole-tree
-transactions. This first incremental slice does not persist progress across
-processes; reruns still rediscover source state.
+transactions. Reruns rediscover current source state, using disposable local
+progress to prioritize unfinished subtrees ahead of completed branches.
+
+Mutating operations retain a machine-local SQLite progress journal after failure.
+It records unit status and immediate child frontiers atomically, with durable
+batches after 32 completed units or the next completed unit after five seconds.
+Controlled shutdown flushes completed work; a process crash can lose the latest
+batch without affecting archive safety. Successful final publication removes the
+journal. Dry runs and verification never create one.
+
+Journals contain scheduling hints, not cached payloads or reusable mutation
+commands. Restart traverses from the current root, rediscovers policies, and
+validates every completed unit before final success. It cannot enter a saved
+child directly because an ancestor's format or directory-link policy may have
+changed. Unknown folders and branches with pending descendants take priority.
+No extra payload scan is performed just to record progress. The complete current
+manifest still requires root-wide validation and rebuilding.
+
+Provider-owned opaque identities distinguish configured source and target stores
+without retaining connection secrets. Providers lacking this optional capability
+continue without durable progress. Journal corruption, lock contention, or local
+I/O failure disables the optimization; ordinary data safety checks still apply.
+Progress storage uses a trusted private per-user directory, validated against
+operation data through provider-owned location checks. Runtime settings are
+`Sync:ProgressEnabled`, `Sync:ProgressDirectory`, `Sync:ProgressFlushUnitCount`,
+and `Sync:ProgressFlushIntervalSeconds`.
 
 Backup plans file/directory transitions and provider-equivalent spelling changes
 before opening replacement payloads. It validates each work unit's layout through

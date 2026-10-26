@@ -1,3 +1,5 @@
+using Yabt.Common;
+
 namespace Yabt.Sync;
 
 public sealed class YabtSyncOptions
@@ -16,6 +18,38 @@ public sealed class YabtSyncOptions
     /// Defaults to 64 KiB. Native filesystem locking does not deserialize a document.
     /// </summary>
     public long? LockDocumentMaximumBytes { get; init; }
+
+    /// <summary>Retain disposable local scheduling progress after interruption. Defaults to true.</summary>
+    public bool? ProgressEnabled { get; init; }
+
+    /// <summary>Local per-user checkpoint directory, outside every operation data location.</summary>
+    public string? ProgressDirectory { get; init; }
+
+    /// <summary>Flush after this many completed units. Defaults to 32.</summary>
+    public int? ProgressFlushUnitCount { get; init; }
+
+    /// <summary>Flush at the next completed unit after this interval. Defaults to five seconds.</summary>
+    public double? ProgressFlushIntervalSeconds { get; init; }
+
+    internal string GetEffectiveProgressDirectory() => ProgressDirectory is null ?
+        LocalStateDirectory.GetProgressDirectory() : Path.GetFullPath(ProgressDirectory);
+
+    internal int GetValidatedProgressFlushUnitCount()
+    {
+        var count = ProgressFlushUnitCount ?? 32;
+        if (count <= 0) { throw new YabtSyncException("Progress flush unit count must be greater than zero."); }
+        return count;
+    }
+
+    internal TimeSpan GetValidatedProgressFlushInterval()
+    {
+        var seconds = ProgressFlushIntervalSeconds ?? 5;
+        if (!double.IsFinite(seconds) || seconds <= 0 || seconds > TimeSpan.MaxValue.TotalSeconds)
+        {
+            throw new YabtSyncException("Progress flush interval must be a finite positive number of seconds.");
+        }
+        return TimeSpan.FromSeconds(seconds);
+    }
 
     internal long GetValidatedLockDocumentMaximumBytes()
     {

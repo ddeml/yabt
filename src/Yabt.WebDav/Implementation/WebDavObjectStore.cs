@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
@@ -16,7 +17,7 @@ internal sealed class WebDavObjectStore
 (
     IOptionsMonitor<WebDavObjectStoreOptions> _options,
     ILogger<WebDavObjectStore> _logger
-) : IArchiveMutableObjectStore
+) : IArchiveMutableObjectStore, IObjectStoreOperationIdentity
 {
     private const string DepthHeaderName = "Depth";
     private const string DestinationHeaderName = "Destination";
@@ -28,6 +29,19 @@ internal sealed class WebDavObjectStore
     private static readonly HttpMethod MoveMethod = new("MOVE");
     private static readonly HttpMethod PropFindMethod = new("PROPFIND");
     private static readonly XNamespace DavNamespace = "DAV:";
+
+    public string OperationIdentity
+    {
+        get
+        {
+            var location = new UriBuilder(BuildUri(GetPathContext(), [], trailingSlash: true))
+            {
+                UserName = string.Empty,
+                Password = string.Empty,
+            };
+            return "webDav-v1:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(location.Uri.AbsoluteUri)));
+        }
+    }
 
     public Task<bool> IsIndependentMaterializationAsync
     (

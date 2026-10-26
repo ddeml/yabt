@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Win32.SafeHandles;
+using Yabt.Common;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.FileSystem.Implementation;
@@ -31,6 +32,11 @@ public sealed class FileSystemHardLinkTests
         Assert.AreEqual(2u, aliasIdentity.LinkCount);
         Assert.AreNotEqual(originalIdentity.Id, independentIdentity.Id);
         Assert.AreEqual(1u, independentIdentity.LinkCount);
+        using var handle = File.OpenHandle(original, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        var sharedIdentity = NativeFileIdentity.Read(handle, original);
+        Assert.AreEqual(originalIdentity.Id, sharedIdentity.Id);
+        Assert.AreEqual(originalIdentity.LinkCount, sharedIdentity.LinkCount);
+        Assert.ThrowsExactly<YabtException>(() => NativeFileIdentity.RequireIndependent(handle, original));
     }
 
     [TestMethod]
@@ -66,6 +72,7 @@ public sealed class FileSystemHardLinkTests
     public void UnavailableOpenedHandleEvidenceIsRejected()
     {
         using var invalidHandle = new SafeFileHandle(new IntPtr(-1), ownsHandle: false);
+        Assert.ThrowsExactly<YabtException>(() => NativeFileIdentity.Read(invalidHandle, "invalid"));
         Assert.ThrowsExactly<YabtFileSystemException>(() => FileSystemFileIdentity.Read(invalidHandle, "invalid"));
     }
 

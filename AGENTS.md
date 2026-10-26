@@ -850,6 +850,30 @@ components.
 
 ## Algorithm And Memory Scalability
 
+Mutating operations may retain disposable machine-local progress in the private
+per-user YABT progress directory. `Sync:ProgressEnabled` defaults to true;
+`ProgressDirectory` overrides the location, `ProgressFlushUnitCount` defaults to
+32, and `ProgressFlushIntervalSeconds` defaults to 5. Flush at completed-unit
+boundaries and on controlled disposal; a crash may require repeating the last
+batch. Journal failures warn and fall back to fresh discovery. Reject configured
+locations overlapping operation data through the existing provider-owned checks.
+
+Progress stores only scheduling hints, never payloads, credentials, authoritative
+metadata, or commands to replay. Bind it to provider-owned opaque source/target
+identities and operation settings. Rediscover from the root and validate current
+ancestor policies; prioritize pending subtrees before revalidating completed
+branches. Never jump directly to saved descendants or skip a completed unit's
+current validation. Complete-unit records and the discovered child frontier are
+atomic. A collected read failure or unfinished artifact consistency group cannot
+complete a unit. Remove the journal only after final manifest publication and
+history recovery succeed. Dry runs and verification do not open journals.
+
+The journal is an optional local optimization. Unsupported providers without
+`IObjectStoreOperationIdentity` use fresh traversal. Provider identities describe
+configured locations; they are not physical-alias or snapshot evidence. The
+configured local state directory is trusted per-user state and must not be
+modified concurrently by other software.
+
 Actively review algorithm cost when implementing or changing code. Consider file
 count, directory count, path depth, payload size, provider calls, and retained
 memory. Identify repeated full-collection scans inside per-file/per-folder loops

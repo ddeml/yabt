@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Yabt.Common;
@@ -12,13 +14,18 @@ internal sealed class FileSystemObjectStore
 (
     IOptionsMonitor<FileSystemObjectStoreOptions> _options,
     ILogger<FileSystemObjectStore> _logger
-) : IArchiveMutableObjectStore, ISourceDirectoryTraversal, ILocalObjectStore
+) : IArchiveMutableObjectStore, ISourceDirectoryTraversal, ILocalObjectStore, IObjectStoreOperationIdentity
 {
     private const int DefaultBufferSize = 81_920;
     private const int DefaultListChunkSize = 1_000;
     private FileSystemSourceTraversal? _sourceTraversal;
 
     public string RootPath => GetRootPath();
+
+    public string OperationIdentity => "fileSystem-v1:" + Convert.ToHexString
+    (
+        SHA256.HashData(Encoding.UTF8.GetBytes(Path.TrimEndingDirectorySeparator(GetRootPath())))
+    );
 
     public IObjectStoreNamespace Namespace => new FileSystemObjectStoreNamespace(GetRootPath());
 

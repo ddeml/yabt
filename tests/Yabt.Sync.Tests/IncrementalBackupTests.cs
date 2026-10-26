@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Yabt.Core;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
@@ -184,19 +185,142 @@ public sealed class IncrementalBackupTests
         CollectionAssert.AreEqual(new[] { "", "branch" }, fixture.Source.ListedFolders);
     }
 
+    [TestMethod]
+    public async Task ResumePrioritizesUnfinishedDescendantsThenRevalidatesCompletedFolders()
+    {
+        using var fixture = new BackupFixture(withProgress: true);
+        await PrepareInterruptedProgressAsync(fixture);
+        await fixture.ReplaceSourceAsync("a/done.txt", "changed after interruption");
+        fixture.Source.BeforeListing = prefix =>
+        {
+            if (prefix == "a") { Assert.AreEqual("pending payload", fixture.ReadTarget("b/deep/new.txt")); }
+        };
+
+        var result = await fixture.BackupAsync();
+
+        Assert.IsTrue(result.Completed, result.Message);
+        CollectionAssert.AreEqual(new[] { "", "b", "b/deep", "a" }, fixture.Source.ListedFolders);
+        Assert.AreEqual("changed after interruption", fixture.ReadTarget("a/done.txt"));
+        Assert.IsTrue(fixture.Target.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
+        Assert.IsFalse(Directory.EnumerateFiles(fixture.ProgressDirectory!, "*.sqlite").Any());
+    }
+
+    [TestMethod]
+    public async Task ResumeRevalidatesAncestorPolicyBeforeFollowingSavedFrontier()
+    {
+        using var fixture = new BackupFixture(withProgress: true);
+        await PrepareInterruptedProgressAsync(fixture);
+        await fixture.WriteSourceAsync("b/.yabt-policy.json", "{\"format\":\"unsupported-format\"}");
+        fixture.Source.ReadPolicy = path => path.Value == "b" ? new("unsupported-format") : FolderPolicy.Default;
+
+        await Assert.ThrowsAsync<YabtSyncException>(() => fixture.BackupAsync());
+
+        CollectionAssert.AreEqual(new[] { "" }, fixture.Source.ListedFolders);
+        Assert.IsFalse(fixture.Source.OpenedKeys.Contains("b/deep/new.txt"));
+        Assert.IsFalse(fixture.Target.TryGetObject("b/deep/new.txt", out _));
+        Assert.IsFalse(fixture.Target.TryGetObject(ArchiveChangeManifest.BrotliFileName, out _));
+    }
+
+    [TestMethod]
+    public async Task CollectedPayloadFailureDoesNotMarkFolderComplete()
+    {
+        using var fixture = new BackupFixture(withProgress: true);
+        await fixture.WriteSourceAsync("a/done.txt", "completed payload");
+        await fixture.WriteSourceAsync("b/bad.txt", "pending payload");
+        fixture.Source.BeforeRead = key =>
+        {
+            if (key == "b/bad.txt") { throw new IOException("Interrupted payload."); }
+        };
+        var failed = await fixture.BackupAsync();
+        Assert.IsFalse(failed.Completed);
+        Assert.AreEqual("completed payload", fixture.ReadTarget("a/done.txt"));
+        fixture.Source.BeforeRead = null;
+        fixture.Source.ListedFolders.Clear();
+
+        var result = await fixture.BackupAsync();
+
+        Assert.IsTrue(result.Completed, result.Message);
+        CollectionAssert.AreEqual(new[] { "", "b", "a" }, fixture.Source.ListedFolders);
+        Assert.AreEqual("pending payload", fixture.ReadTarget("b/bad.txt"));
+    }
+
+    [TestMethod]
+    public async Task CorruptProgressFallsBackToFreshTraversalWithoutLosingWork()
+    {
+        using var fixture = new BackupFixture(withProgress: true);
+        await PrepareInterruptedProgressAsync(fixture);
+        var journal = Directory.EnumerateFiles(fixture.ProgressDirectory!, "*.sqlite").Single();
+        await File.WriteAllTextAsync(journal, "This is deliberately not a SQLite database.");
+
+        var result = await fixture.BackupAsync();
+
+        Assert.IsTrue(result.Completed, result.Message);
+        CollectionAssert.AreEqual(new[] { "", "a", "b", "b/deep" }, fixture.Source.ListedFolders);
+        Assert.AreEqual("completed payload", fixture.ReadTarget("a/done.txt"));
+        Assert.AreEqual("pending payload", fixture.ReadTarget("b/deep/new.txt"));
+    }
+
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, true)]
+    public async Task DisabledProgressAndDryRunDoNotCreateProgressStorage(bool progressEnabled, bool dryRun)
+    {
+        using var fixture = new BackupFixture(withProgress: true, progressEnabled: progressEnabled);
+        await fixture.WriteSourceAsync("branch/file.txt", "payload");
+
+        var result = await fixture.BackupAsync(dryRun);
+
+        Assert.IsTrue(result.Completed, result.Message);
+        Assert.IsFalse(Directory.Exists(fixture.ProgressDirectory));
+        Assert.AreEqual(!dryRun, fixture.Target.TryGetObject("branch/file.txt", out _));
+    }
+
+    private static async Task PrepareInterruptedProgressAsync(BackupFixture fixture)
+    {
+        await fixture.WriteSourceAsync("root.txt", "root payload");
+        await fixture.WriteSourceAsync("a/done.txt", "completed payload");
+        await fixture.WriteSourceAsync("b/parent.txt", "completed parent");
+        await fixture.WriteSourceAsync("b/deep/new.txt", "pending payload");
+        fixture.Source.BeforeListing = prefix =>
+        {
+            if (prefix == "b/deep") { throw new IOException("Interrupted before the next folder."); }
+        };
+        await Assert.ThrowsAsync<IOException>(() => fixture.BackupAsync());
+        Assert.AreEqual("completed payload", fixture.ReadTarget("a/done.txt"));
+        Assert.AreEqual("completed parent", fixture.ReadTarget("b/parent.txt"));
+        Assert.IsFalse(fixture.Target.TryGetObject("b/deep/new.txt", out _));
+        Assert.AreEqual(1, Directory.EnumerateFiles(fixture.ProgressDirectory!, "*.sqlite").Count());
+        fixture.Source.BeforeListing = null;
+        fixture.Source.ListedFolders.Clear();
+        fixture.Source.OpenedKeys.Clear();
+    }
+
     private sealed class BackupFixture : IDisposable
     {
         private readonly ServiceProvider _services;
 
-        public BackupFixture()
+        public BackupFixture(bool withProgress = false, bool progressEnabled = true)
         {
             var services = new ServiceCollection();
             services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
             services.AddYabtMetadata();
             services.AddYabtMirrorFormatHandler();
             services.AddYabtSync();
+            if (withProgress)
+            {
+                ProgressDirectory = Path.Combine(Path.GetTempPath(), "yabt-progress-test-" + Guid.NewGuid().ToString("N"));
+                services.AddSingleton<IOptionsMonitor<YabtSyncOptions>>(new ProgressOptionsMonitor(new()
+                {
+                    ProgressDirectory = ProgressDirectory,
+                    ProgressEnabled = progressEnabled,
+                    ProgressFlushUnitCount = 2,
+                }));
+            }
             services.AddSingleton<IArchiveLocationResolver>(new TestLocationResolver(Source));
-            services.AddSingleton<IBackupRootStoreResolver>(new TestStoreResolver(Target));
+            services.AddSingleton<IBackupRootStoreResolver>
+            (
+                new TestStoreResolver(withProgress ? new IdentifiedTarget(Target) : Target)
+            );
             services.AddSingleton<IRestoreDestinationFactory>(new ReplayFactory());
             _services = services.BuildServiceProvider();
         }
@@ -205,10 +329,23 @@ public sealed class IncrementalBackupTests
 
         public MemoryObjectStore Target { get; } = new();
 
+        public string? ProgressDirectory { get; }
+
         public Task<SyncRunResult> BackupAsync(bool dryRun = false, CancellationToken cancellationToken = default) =>
             _services.GetRequiredService<IArchiveSynchronizer>().BackupAsync(new("source", DryRun: dryRun), cancellationToken);
 
         public Task WriteSourceAsync(string key, string content) => WriteAsync(Source.Contents, key, content);
+
+        public async Task ReplaceSourceAsync(string key, string content)
+        {
+            var existing = Source.Contents.GetObject(key);
+            await using var replacement = new MemoryStream(Encoding.UTF8.GetBytes(content));
+            Assert.IsTrue(await Source.Contents.TryReplaceIfContentHashMatchesAsync
+            (
+                key, ArchiveHash.Compute(existing.Content.Span), replacement,
+                "text/plain", new Dictionary<string, string>()
+            ));
+        }
 
         public async Task PrepareChangedRootAsync()
         {
@@ -246,7 +383,14 @@ public sealed class IncrementalBackupTests
         public string[] TargetSnapshot() => Target.Snapshot().Select(item =>
             $"{item.Key}|{item.LastModifiedUtc:O}|{Convert.ToBase64String(item.Content.Span)}").ToArray();
 
-        public void Dispose() => _services.Dispose();
+        public void Dispose()
+        {
+            _services.Dispose();
+            if (ProgressDirectory is not null && Directory.Exists(ProgressDirectory))
+            {
+                Directory.Delete(ProgressDirectory, recursive: true);
+            }
+        }
 
         private static async Task WriteAsync(MemoryObjectStore store, string key, string content)
         {
@@ -255,8 +399,10 @@ public sealed class IncrementalBackupTests
         }
     }
 
-    private sealed class ObservedSource : IObjectStore
+    private sealed class ObservedSource : IObjectStore, IObjectStoreOperationIdentity
     {
+        public string OperationIdentity { get; } = "test-source:" + Guid.NewGuid().ToString("N");
+
         public MemoryObjectStore Contents { get; } = new();
 
         public List<string> ListedFolders { get; } = [];
@@ -268,6 +414,8 @@ public sealed class IncrementalBackupTests
         public Action<string, ArchiveFolderItem>? AfterListedItem { get; set; }
 
         public Action<string>? BeforeRead { get; set; }
+
+        public Func<ObjectPath, FolderPolicy>? ReadPolicy { get; set; }
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken = default) =>
             Contents.EnsureReadyAsync(cancellationToken);
@@ -325,7 +473,7 @@ public sealed class IncrementalBackupTests
         ) => throw new InvalidOperationException("Backup must not mutate its source.");
     }
 
-    private sealed class TestLocationResolver(IObjectStore _source) : IArchiveLocationResolver
+    private sealed class TestLocationResolver(ObservedSource _source) : IArchiveLocationResolver
     {
         public Task<ArchiveSourceLocation> LocateSourceAsync
         (
@@ -363,7 +511,7 @@ public sealed class IncrementalBackupTests
             ArchiveSourceLocation source,
             ObjectPath prefix,
             CancellationToken cancellationToken = default
-        ) => Task.FromResult(FolderPolicy.Default);
+        ) => Task.FromResult(_source.ReadPolicy?.Invoke(prefix) ?? FolderPolicy.Default);
 
         public void ValidateRestoreLocations
         (
@@ -388,5 +536,64 @@ public sealed class IncrementalBackupTests
             throw new NotSupportedException();
 
         public Stream CreateComparisonReplayStream() => new MemoryStream();
+    }
+
+    private sealed class ProgressOptionsMonitor(YabtSyncOptions _value) : IOptionsMonitor<YabtSyncOptions>
+    {
+        public YabtSyncOptions CurrentValue => _value;
+
+        public YabtSyncOptions Get(string? name) => _value;
+
+        public IDisposable? OnChange(Action<YabtSyncOptions, string?> listener) => null;
+    }
+
+    private sealed class IdentifiedTarget(MemoryObjectStore _inner) : IArchiveMutableObjectStore, IObjectStoreOperationIdentity
+    {
+        public string OperationIdentity { get; } = "test-target:" + Guid.NewGuid().ToString("N");
+
+        public Task EnsureReadyAsync(CancellationToken cancellationToken = default) => _inner.EnsureReadyAsync(cancellationToken);
+
+        public Task InitializeAsync(CancellationToken cancellationToken = default) => _inner.InitializeAsync(cancellationToken);
+
+        public Task<ArchiveObjectContent> OpenReadAsync(string key, CancellationToken cancellationToken = default) =>
+            _inner.OpenReadAsync(key, cancellationToken);
+
+        public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => _inner.ExistsAsync(key, cancellationToken);
+
+        public IAsyncEnumerable<ArchiveFolderItem> GetFolderItemsAsync
+        (
+            string? folderPrefix,
+            bool recursive = false,
+            CancellationToken cancellationToken = default
+        ) => _inner.GetFolderItemsAsync(folderPrefix, recursive, cancellationToken);
+
+        public Task UploadAsync
+        (
+            string key, Stream content, string contentType, IReadOnlyDictionary<string, string> metadata,
+            CancellationToken cancellationToken = default
+        ) => _inner.UploadAsync(key, content, contentType, metadata, cancellationToken);
+
+        public Task MoveAsync(string source, string destination, CancellationToken cancellationToken = default) =>
+            _inner.MoveAsync(source, destination, cancellationToken);
+
+        public Task MoveFolderAsync(string sourcePrefix, string destinationPrefix, CancellationToken cancellationToken = default) =>
+            _inner.MoveFolderAsync(sourcePrefix, destinationPrefix, cancellationToken);
+
+        public Task<bool> IsIndependentMaterializationAsync(string key, CancellationToken cancellationToken = default) =>
+            _inner.IsIndependentMaterializationAsync(key, cancellationToken);
+
+        public Task<bool> TryReplaceIfContentHashMatchesAsync
+        (
+            string key, string expectedContentHash, Stream replacementContent, string contentType,
+            IReadOnlyDictionary<string, string> metadata, CancellationToken cancellationToken = default
+        ) => _inner.TryReplaceIfContentHashMatchesAsync
+        (
+            key, expectedContentHash, replacementContent, contentType, metadata, cancellationToken
+        );
+
+        public Task<bool> TryDeleteIfContentHashMatchesAsync
+        (
+            string key, string expectedContentHash, CancellationToken cancellationToken = default
+        ) => _inner.TryDeleteIfContentHashMatchesAsync(key, expectedContentHash, cancellationToken);
     }
 }
