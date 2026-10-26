@@ -20,7 +20,8 @@ internal sealed class ArchiveRestoreOperation
     RestoreReconciler _reconciler,
     RestoreExecutor _executor,
     ArchiveManifestStore _manifests,
-    IncrementalRestoreOperation _incremental
+    IncrementalRestoreOperation _incremental,
+    OperationProgressFactory _progressFactory
 )
 {
     internal async Task<SyncRunResult> RunRestoreOperationAsync
@@ -207,6 +208,14 @@ internal sealed class ArchiveRestoreOperation
                 restoreTarget);
         }
 
+        using var progress = request.DryRun ? null : _progressFactory.Open
+        (
+            "restore-projection",
+            context.ArchiveStore, destinationStore,
+            [context.Descriptor.ArchiveId, destinationLayout.LivePrefix, destinationLayout.HistPrefix,
+                changeManifest.ManifestHash, request.ReplaceRootDescriptor.ToString()]
+        );
+        progress?.StartUnit(string.Empty);
         var failures = new List<SyncItemFailure>();
         if (request.ByteForByte && request.DryRun)
         {
@@ -283,6 +292,8 @@ internal sealed class ArchiveRestoreOperation
             );
         }
 
+        progress?.CompleteUnit(string.Empty, []);
+        progress?.CompleteOperation();
         _logger.LogArchiveSyncCompleted(
             operationName,
             reconciliation.NewCount,

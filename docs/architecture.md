@@ -299,7 +299,11 @@ frontiers use disposable disk indexes. Root-wide manifest integrity validation
 and destination safety traversal still precede writes; archive payload discovery
 and reconciliation are local to each unit. One operation-owned mutation session
 keeps history allocation and manifest invalidation consistent across units.
-Legacy and packaged archives retain complete expanded-plan preflight.
+Adjacent package groups become complete subtree units. Each unit reverses its
+whole outer projection, including nested formats, and owns exactly its ordinal
+logical subtree. Parent units reserve that subtree but defer its blockers and
+directory changes until package validation. Selected root ZIPs, legacy archives,
+and scattered custom artifact groups retain complete expanded-plan preflight.
 Mapping failures use ordinary contextual YABT exceptions and the existing
 failure/recovery path. They do not authorize renaming, skipping desired content,
 or treating it as removed. A later work unit may fail after earlier units have
@@ -438,21 +442,28 @@ bidirectional handlers, desired-object reconciliation, and historization. Mirror
 backup discovers and applies complete folder work units, retaining at most one
 comparison replay object at a time. Package sibling consistency still spans the
 complete artifact group, including artifacts exposed through separate units;
-release uses an indexed projection-owner lookup. Restore completes metadata,
-path-safety, and reconciliation preflight globally, then prepares final files
-concurrently and commits each validated file independently.
+release uses an indexed projection-owner lookup. Restore validates the root
+manifest and destination safety globally, then reconciles folder and package
+units. It prepares files concurrently and commits each validated file
+independently within the current unit.
 
 Nested package projections may expose immediate sibling artifacts or descendant
 artifacts within their registered source-folder scope. Deeper outputs under
 unrelated sibling folders are rejected because the projection adapter cannot
 route traversal to them. Built-in ZIP groups use immediate sibling artifacts.
 
-The next incremental stages are batched, crash-surviving progress evidence and
-restore integration. Progress must remain disposable, bind operation identity
-and freshness evidence, and record completed work only after successful commits.
-Ordinary folder boundaries and complete package groups are the initial intended
-checkpoint granularity. Partial ZIP construction, within-folder listing cursors,
-and independently verifiable manifest shards remain separate work.
+Progress records ordinary folder boundaries and complete package groups. Backup
+can prioritize unfinished adjacent groups inside a validated containing folder,
+while restore treats each outer package and its nested projections as one unit.
+Naming discovery remains necessary before backup can validate a folder's entire
+namespace. Package evidence must validate before directory-only changes even if
+its files already match. Structural ancestors of nested history remain in place;
+only ordinary obsolete siblings are eligible for deferred cleanup.
+
+Final logical-state evidence comes from fresh folder-local destination listings
+and disk-backed indexes, without a whole-tree destination dictionary. Partial
+ZIP construction, within-folder listing cursors, and independently verifiable
+manifest shards remain separate work.
 
 Projection provenance is carried both in schema-version-3 root change-manifest
 entries and in nested package-manifest entries. Restore reverses these groups

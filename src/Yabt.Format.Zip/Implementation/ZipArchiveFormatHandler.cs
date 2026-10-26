@@ -454,7 +454,7 @@ internal sealed class ZipArchiveFormatHandler
                 }
             }
             if (filePaths.LongCount == 0 && validate is not null) { await validate(cancellationToken); }
-            return new ArchiveRestoreProjection(EnumerateFiles(), directoryPaths, lifetime);
+            return new ArchiveRestoreProjection(EnumerateFiles(), directoryPaths, lifetime, validate);
         }
         catch (Exception)
         {

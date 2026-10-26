@@ -33,8 +33,12 @@ internal sealed class RestoreMutationSession
     {
         _logger.LogTrace(nameof(EnsureMutationStartedAsync));
         if (_mutationStarted) { return; }
-        await _manifestTransaction.BeginAsync(
-            liveStateChanged, _rootDescriptorRestore.NeedsWrite, cancellationToken);
+        await _manifestTransaction.BeginAsync
+        (
+            liveStateChanged,
+            _rootDescriptorRestore.NeedsWrite,
+            cancellationToken
+        );
         _historizer = new(_destinationStore, _destinationLayout, _timeProvider.GetUtcNow(), _logger);
         await _historizer.InspectRecoveryStateAsync(cancellationToken);
         _mutationStarted = true;
@@ -79,12 +83,14 @@ internal sealed class RestoreMutationSession
     (
         RestorePlan plan,
         RestoreReconciliation reconciliation,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        IReadOnlySet<string>? deferredDirectories = null
     )
     {
         _logger.LogTrace(nameof(CreateUnitDirectoriesAsync));
         foreach (var directory in plan.Directories)
         {
+            if (deferredDirectories?.Contains(directory) == true) { continue; }
             foreach (var move in reconciliation.HistoryMoves.GetBlockers(directory, cancellationToken))
             {
                 await MoveHistoryItemAsync(move, cancellationToken);
@@ -96,12 +102,18 @@ internal sealed class RestoreMutationSession
                 await EnsureMutationStartedAsync(true, cancellationToken);
                 await _restoreTarget.CreateDirectoryAsync(destinationPath, cancellationToken);
             }
-            if (reconciliation.NewDesiredPaths.Contains(directory) ||
-                reconciliation.ChangedDesiredPaths.Contains(directory))
+            if
+            (
+                reconciliation.NewDesiredPaths.Contains(directory) ||
+                reconciliation.ChangedDesiredPaths.Contains(directory)
+            )
             {
-                _logger.ReportRestoreItemWritten(
+                _logger.ReportRestoreItemWritten
+                (
                     ArchiveOperationLogging.GetRestoreChangeKind(reconciliation, directory),
-                    "directory", directory);
+                    "directory",
+                    directory
+                );
             }
         }
     }
@@ -115,34 +127,46 @@ internal sealed class RestoreMutationSession
     )
     {
         _logger.LogTrace(nameof(CompleteAsync));
-        await EnsureMutationStartedAsync(
+        await EnsureMutationStartedAsync
+        (
             reconciliation.NewCount != 0 || reconciliation.ChangedCount != 0 ||
-                reconciliation.ExtraCount != 0, cancellationToken);
+                reconciliation.ExtraCount != 0,
+            cancellationToken
+        );
         foreach (var historyMove in reconciliation.HistoryMoves.EnumeratePending(cancellationToken))
         {
             await MoveHistoryItemAsync(historyMove, cancellationToken);
             reconciliation.HistoryMoves.MarkCompleted(historyMove);
         }
 
-        await _restoreTarget.CreateDirectoryAsync(
+        await _restoreTarget.CreateDirectoryAsync
+        (
             _destinationLayout.ToLiveObjectKey(string.Empty),
-            cancellationToken);
+            cancellationToken
+        );
         if (restoreRootNeedsCreation)
         {
             _logger.ReportRestoreItemWritten("new", "directory", ".");
         }
         foreach (var directoryPath in plan.EmptyDirectories)
         {
-            await _restoreTarget.CreateDirectoryAsync(
+            await _restoreTarget.CreateDirectoryAsync
+            (
                 _destinationLayout.ToLiveObjectKey(directoryPath),
-                cancellationToken);
-            if (reconciliation.NewDesiredPaths.Contains(directoryPath) ||
-                reconciliation.ChangedDesiredPaths.Contains(directoryPath))
+                cancellationToken
+            );
+            if
+            (
+                reconciliation.NewDesiredPaths.Contains(directoryPath) ||
+                reconciliation.ChangedDesiredPaths.Contains(directoryPath)
+            )
             {
-                _logger.ReportRestoreItemWritten(
+                _logger.ReportRestoreItemWritten
+                (
                     ArchiveOperationLogging.GetRestoreChangeKind(reconciliation, directoryPath),
                     "directory",
-                    directoryPath);
+                    directoryPath
+                );
             }
         }
 
@@ -157,34 +181,44 @@ internal sealed class RestoreMutationSession
         {
             if (_archiveRootDocument is null)
             {
-                throw new YabtSyncException(
-                    "Restore planned a root descriptor write without preserved archive bytes.");
+                throw new YabtSyncException
+                (
+                    "Restore planned a root descriptor write without preserved archive bytes."
+                );
             }
 
             if (_rootDescriptorRestore.MoveExistingToHistory)
             {
-                await (_historizer ??
-                    throw new YabtSyncException(
-                        "Restore root descriptor historization was not initialized."))
-                    .MoveRootObjectAsync(
+                await
+                (
+                    _historizer ??
+                    throw new YabtSyncException("Restore root descriptor historization was not initialized.")
+                ).MoveRootObjectAsync
+                (
                     BackupRootFileNames.Primary,
                     "Restore",
-                    cancellationToken);
-                _logger.LogControlMetadataOperation(
+                    cancellationToken
+                );
+                _logger.LogControlMetadataOperation
+                (
                     "Moved to restore history",
-                    BackupRootFileNames.Primary);
+                    BackupRootFileNames.Primary
+                );
             }
 
-            await _rootDocuments.UploadRootDocumentAsync(
+            await _rootDocuments.UploadRootDocumentAsync
+            (
                 _destinationStore,
                 _archiveRootDocument,
-                cancellationToken);
+                cancellationToken
+            );
         }
 
-        await (_historizer ??
-            throw new YabtSyncException(
-                "Restore mutation did not initialize historization."))
-            .CompleteAsync(cancellationToken);
+        await
+        (
+            _historizer ??
+            throw new YabtSyncException("Restore mutation did not initialize historization.")
+        ).CompleteAsync(cancellationToken);
 
         using var nextLogicalStateManifest = await _manifests.CreateLogicalStateManifestAsync
         (
@@ -194,6 +228,5 @@ internal sealed class RestoreMutationSession
             cancellationToken
         );
         await _manifestTransaction.PublishAsync(nextLogicalStateManifest, cancellationToken);
-
     }
 }

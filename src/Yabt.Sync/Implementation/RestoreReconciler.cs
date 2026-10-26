@@ -53,7 +53,7 @@ internal sealed class RestoreReconciler
         }
         return await CreateRestoreFolderReconciliationAsync(
             destinationStore, restorePlan, destinationState, logicalStateEntries,
-            byteForByte, blockedRestorePaths, cancellationToken);
+            byteForByte, blockedRestorePaths, cancellationToken, destinationLayout);
     }
 
     internal async Task<RestoreReconciliation> CreateRestoreFolderReconciliationAsync
@@ -64,7 +64,8 @@ internal sealed class RestoreReconciler
         IReadOnlyDictionary<string, ArchiveLogicalStateManifestEntry> logicalStateEntries,
         bool byteForByte,
         HashSet<string> blockedRestorePaths,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ArchiveLayout? destinationLayout = null
     )
     {
         _logger.LogTrace(nameof(CreateRestoreFolderReconciliationAsync));
@@ -104,7 +105,9 @@ internal sealed class RestoreReconciler
                     continue;
                 }
 
-                if (!restorePlan.IsDirectory(directoryPath))
+                if (!restorePlan.IsDirectory(directoryPath) &&
+                    (destinationLayout is null ||
+                        !RestoreHistoryProtection.IsProtectedDirectory(directoryPath, destinationLayout)))
                 {
                     historyMoves.Add(new(directoryPath, IsFolder: true));
                     movedFolderPaths.Add(directoryPath);
@@ -313,7 +316,8 @@ internal sealed class RestoreReconciler
         IObjectStore destinationStore,
         ArchiveLayout destinationLayout,
         StringComparer pathComparer,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        string relativeRootPath = ""
     )
     {
         _logger.LogTrace(nameof(LoadRestoreDestinationStateAsync));
@@ -335,7 +339,10 @@ internal sealed class RestoreReconciler
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var archiveKey = ArchiveLayout.NormalizeObjectKey(item.Key);
-                if (ArchivePathRules.IsInternalObject(archiveKey, destinationLayout)) { continue; }
+                if (ArchivePathRules.IsInternalObjectPrefix(archiveKey,
+                        ArchivePathRules.CreateInternalObjectPrefixes(destinationLayout)) ||
+                    (item.IsObject && ArchivePathRules.IsInternalObjectKey(archiveKey,
+                        ArchivePathRules.CreateInternalObjectKeys(destinationLayout)))) { continue; }
 
                 var relativePath = ArchiveLayout.RemovePrefix(
                     archiveKey,
@@ -367,7 +374,8 @@ internal sealed class RestoreReconciler
             }
         }
 
-        await LoadFolderAsync(string.Empty);
+        if (relativeRootPath.Length != 0) { directories.Add(relativeRootPath); }
+        await LoadFolderAsync(relativeRootPath);
         return new(files, directories);
     }
 }

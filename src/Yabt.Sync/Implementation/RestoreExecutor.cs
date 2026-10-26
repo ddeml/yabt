@@ -235,9 +235,12 @@ internal sealed class RestoreExecutor
     )
     {
         _logger.LogTrace(nameof(CreateSession));
-        return new(destinationStore, destinationLayout, restoreTarget, logicalStateManifestLoad,
+        return new
+        (
+            destinationStore, destinationLayout, restoreTarget, logicalStateManifestLoad,
             rootDescriptorRestore, archiveRootDocument, _manifests, _rootDocuments,
-            _timeProvider, _logger);
+            _timeProvider, _logger
+        );
     }
 
     internal async Task<IReadOnlyList<SyncItemFailure>> ApplyRestoreFilesAsync
@@ -253,6 +256,28 @@ internal sealed class RestoreExecutor
     )
     {
         _logger.LogTrace(nameof(ApplyRestoreFilesAsync));
+
+        var missingDirectory = plan.Directories.FirstOrDefault
+        (
+            directory =>
+            !restoreTarget.DirectoryExists(ObjectPath.Parse(destinationLayout.ToLiveObjectKey(directory)))
+        );
+        if (missingDirectory is not null)
+        {
+            try
+            {
+                foreach (var projection in plan.Projections)
+                {
+                    await projection.ValidateAsync(cancellationToken);
+                }
+            }
+            catch (Exception ex)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ex is OperationCanceledException) { throw; }
+                return [_logger.CreateReadFailure(missingDirectory, "restore archive directory validation", ex)];
+            }
+        }
 
         var pathComparer = plan.Namespace.PathComparer;
         var alreadyFailedPaths = reconciliation.Failures

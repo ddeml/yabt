@@ -11,8 +11,7 @@ internal sealed class RestoreFolderSource
     RestoreFolderIndex _index
 )
 {
-    internal async Task<(IReadOnlyList<ArchiveProjectedObject> Objects, string[] Children,
-        string[] DesiredChildren)> ReadAsync
+    internal async Task<(IReadOnlyList<ArchiveProjectedObject> Objects, string[] Children, string[] DesiredChildren, string[] PackagePaths)> ReadAsync
     (
         string folderPath,
         CancellationToken cancellationToken
@@ -49,8 +48,10 @@ internal sealed class RestoreFolderSource
             if (ArchivePathRules.IsInternalObjectKey(key.Value, internalKeys)) { continue; }
             if (!entries.ContainsKey(relativePath))
             {
-                throw new YabtSyncException(
-                    $"Archive contains live object '{relativePath}' that is not covered by the change manifest.");
+                throw new YabtSyncException
+                (
+                    $"Archive contains live object '{relativePath}' that is not covered by the change manifest."
+                );
             }
             if (item.Object is not null && !listed.TryAdd(relativePath, item.Object))
             {
@@ -71,10 +72,35 @@ internal sealed class RestoreFolderSource
             {
                 lastModified = sourceTime;
             }
-            objects.Add(new(path, token => _archiveStore.OpenReadAsync(key, token),
-                info?.ContentLength ?? entry.ArtifactLength, lastModified, entry.ContentHash,
-                entry.ChangeFingerprint, entry.Projection));
+            objects.Add
+            (
+                new
+                (
+                    path,
+                    token => _archiveStore.OpenReadAsync(key, token),
+                    info?.ContentLength ?? entry.ArtifactLength,
+                    lastModified,
+                    entry.ContentHash,
+                    entry.ChangeFingerprint,
+                    entry.Projection
+                )
+            );
         }
-        return (objects, children.Order(StringComparer.Ordinal).ToArray(), desiredChildren);
+        var packagePaths = objects.Where(item => item.Projection is not null)
+            .Select(item => item.Projection!.LogicalPath).Distinct(StringComparer.Ordinal).ToArray();
+        foreach (var package in packagePaths)
+        {
+            if (children.Contains(package))
+            {
+                throw new YabtSyncException($"Packaged folder '{package}' also has a plain archive folder representation.");
+            }
+        }
+        return
+        (
+            objects.Where(item => item.Projection is null).ToArray(),
+            children.Concat(packagePaths).Order(StringComparer.Ordinal).ToArray(),
+            desiredChildren.Concat(packagePaths).ToArray(),
+            packagePaths
+        );
     }
 }

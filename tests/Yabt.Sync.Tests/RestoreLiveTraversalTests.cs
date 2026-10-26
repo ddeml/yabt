@@ -8,6 +8,7 @@ using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.FileSystem;
 using Yabt.Format.Mirror;
+using Yabt.Format.Zip;
 using Yabt.Metadata;
 using Yabt.Tests;
 
@@ -165,8 +166,11 @@ public sealed class RestoreLiveTraversalTests
         {
             if (folder.StartsWith(".yabt-", StringComparison.Ordinal))
             {
-                Assert.IsTrue(File.Exists(Path.Combine(fixture.DestinationRoot, "folder", "important.txt")),
-                    "Restart should finish the previously failed branch before rechecking completed siblings.");
+                Assert.IsTrue
+                (
+                    File.Exists(Path.Combine(fixture.DestinationRoot, "folder", "important.txt")),
+                    "Restart should finish the previously failed branch before rechecking completed siblings."
+                );
             }
         };
         var resumed = await fixture.RestoreAsync();
@@ -204,6 +208,65 @@ public sealed class RestoreLiveTraversalTests
         Assert.IsFalse(Directory.Exists(fixture.DestinationRoot));
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task PackageRestoreStartsAfterParentCommitAndResumesAfterPartialCancellation(bool nestedPackage)
+    {
+        using var fixture = await RestoreTraversalFixture.CreateAsync
+        (
+            ArchiveLayout.Default,
+            packagedChild: true, nestedPackage: nestedPackage
+        );
+        using var cancellation = new CancellationTokenSource();
+        string? committedPackagePath = null;
+        var packageReads = 0;
+        fixture.Archive.BeforeRead = key =>
+        {
+            if (!key.EndsWith(".zip", StringComparison.Ordinal)) { return; }
+            packageReads++;
+            Assert.AreEqual("root.txt", File.ReadAllText(Path.Combine(fixture.DestinationRoot, "root.txt")));
+        };
+        fixture.AfterCommit = path =>
+        {
+            if (!path.StartsWith("folder/", StringComparison.Ordinal) || committedPackagePath is not null) { return; }
+            committedPackagePath = path;
+            cancellation.Cancel();
+        };
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => fixture.RestoreAsync(cancellationToken: cancellation.Token));
+
+        Assert.IsNotNull(committedPackagePath);
+        var checkpointPath = Path.Combine(fixture.DestinationRoot, committedPackagePath);
+        var checkpointTimestamp = File.GetLastWriteTimeUtc(checkpointPath);
+        Assert.AreEqual(1, packageReads);
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.DestinationRoot, ArchiveLogicalStateManifest.FileName)));
+        fixture.AfterCommit = null;
+        var resumed = await fixture.RestoreAsync();
+        Assert.IsTrue(resumed.Completed, resumed.Message);
+        Assert.AreEqual(checkpointTimestamp, File.GetLastWriteTimeUtc(checkpointPath));
+        Assert.AreEqual(2, packageReads, "The unfinished package is reopened as one coarse unit.");
+        Assert.IsFalse(Directory.EnumerateFiles(Path.Combine(fixture.RootPath, "progress"), "*.sqlite").Any());
+        await fixture.AssertLivePayloadsAsync();
+    }
+
+    [TestMethod]
+    public async Task MissingEmptyDirectoryRequiresPackageValidationEvenWhenFilesAreUnchanged()
+    {
+        using var fixture = await RestoreTraversalFixture.CreateAsync(ArchiveLayout.Default, packagedChild: true);
+        Assert.IsTrue((await fixture.RestoreAsync()).Completed);
+        var emptyPath = Path.Combine(fixture.DestinationRoot, "folder", "empty");
+        Assert.IsTrue(Directory.Exists(emptyPath));
+        Directory.Delete(emptyPath);
+        await fixture.CorruptPackageAsync();
+
+        var result = await fixture.RestoreAsync();
+
+        Assert.IsFalse(result.Completed);
+        Assert.IsFalse(Directory.Exists(emptyPath), "Corrupt package evidence must not authorize a directory mutation.");
+        await fixture.AssertLivePayloadsAsync();
+    }
+
     private sealed class RestoreTraversalFixture : IDisposable
     {
         private const string FixturePrefix = "yabt-restore-traversal-";
@@ -225,6 +288,7 @@ public sealed class RestoreLiveTraversalTests
             [
                 "root.txt",
                 "folder/important.txt",
+                "folder/nested/deep.txt",
                 $"{layout.HistPrefix}-ordinary/keep.txt",
                 ".yabt-tmp-ordinary/keep.txt",
                 .. string.IsNullOrEmpty(layout.LivePrefix) ? [] :
@@ -234,7 +298,14 @@ public sealed class RestoreLiveTraversalTests
             var services = new ServiceCollection();
             services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
             services.AddYabtFileSystemObjectStore();
+            var nativeFactoryType = services.Single(service =>
+                service.ServiceType == typeof(IRestoreDestinationFactory)).ImplementationType!;
+            services.AddSingleton(nativeFactoryType);
+            services.AddSingleton<IRestoreDestinationFactory>(provider => new ObservedDestinationFactory(
+                (IRestoreDestinationFactory)provider.GetRequiredService(nativeFactoryType),
+                path => AfterCommit?.Invoke(path)));
             services.AddYabtMirrorFormatHandler();
+            services.AddYabtZipFormatHandler();
             services.AddYabtMetadata();
             services.AddSingleton<IBackupRootStoreResolver>(_resolver);
             services.AddYabtSync();
@@ -254,7 +325,9 @@ public sealed class RestoreLiveTraversalTests
 
         public ListingProbeObjectStore Archive { get; }
 
-        public static async Task<RestoreTraversalFixture> CreateAsync(ArchiveLayout layout)
+        public Action<string>? AfterCommit { get; set; }
+
+        public static async Task<RestoreTraversalFixture> CreateAsync(ArchiveLayout layout, bool packagedChild = false, bool nestedPackage = false)
         {
             var fixture = new RestoreTraversalFixture(layout);
             try
@@ -280,6 +353,17 @@ public sealed class RestoreLiveTraversalTests
                     await File.WriteAllTextAsync(physicalPath, livePath);
                 }
 
+                if (packagedChild)
+                {
+                    Directory.CreateDirectory(Path.Combine(fixture.SourceRoot, layout.ToLiveObjectKey("folder/empty")));
+                    await File.WriteAllTextAsync(Path.Combine(fixture.SourceRoot, layout.ToLiveObjectKey("folder/.yabt-policy.json")),
+                        "{\"format\":\"zip\"}");
+                }
+                if (nestedPackage)
+                {
+                    await File.WriteAllTextAsync(Path.Combine(fixture.SourceRoot, layout.ToLiveObjectKey("folder/nested/.yabt-policy.json")),
+                        "{\"format\":\"zip\"}");
+                }
                 var result = await fixture._services.GetRequiredService<IArchiveSynchronizer>()
                     .BackupAsync(new(fixture.SourceRoot));
                 Assert.IsTrue(result.Completed, result.Message);
@@ -301,6 +385,17 @@ public sealed class RestoreLiveTraversalTests
         {
             await using var content = new MemoryStream(Encoding.UTF8.GetBytes("excluded or untracked payload"));
             await _archiveStore.UploadAsync(key, content, "text/plain", new Dictionary<string, string>());
+        }
+
+        public async Task CorruptPackageAsync()
+        {
+            var package = _archiveStore.Snapshot().Single(item => item.Key.EndsWith(".zip", StringComparison.Ordinal));
+            await using var corrupt = new MemoryStream(Encoding.UTF8.GetBytes("invalid ZIP bytes"));
+            Assert.IsTrue(await _archiveStore.TryReplaceIfContentHashMatchesAsync
+            (
+                package.Key, ArchiveHash.Compute(package.Content.Span), corrupt,
+                "application/zip", new Dictionary<string, string>()
+            ));
         }
 
         public async Task AssertLivePayloadsAsync()
@@ -335,6 +430,46 @@ public sealed class RestoreLiveTraversalTests
         public string StoreKind => Kind;
 
         public IObjectStore ResolveStore(BackupRootStore store, string descriptorRootPath) => Store;
+    }
+
+    private sealed class ObservedDestinationFactory
+    (
+        IRestoreDestinationFactory inner,
+        Action<string> afterCommit
+    ) : IRestoreDestinationFactory
+    {
+        public IRestoreDestination Create(string rootPath, IObjectStore? store = null) =>
+            new ObservedDestination(inner.Create(rootPath, store), afterCommit);
+
+        public Stream CreateComparisonReplayStream() => inner.CreateComparisonReplayStream();
+    }
+
+    private sealed class ObservedDestination
+    (
+        IRestoreDestination inner,
+        Action<string> afterCommit
+    ) : IRestoreDestination
+    {
+        public string RootPath => inner.RootPath;
+        public IObjectStore Store => inner.Store;
+        public IObjectStoreNamespace Namespace => inner.Namespace;
+        public Task EnsureSafeAsync(string? livePrefix, string? historyPrefix, CancellationToken cancellationToken = default) =>
+            inner.EnsureSafeAsync(livePrefix, historyPrefix, cancellationToken);
+        public void ValidateRelativePath(string relativePath) => inner.ValidateRelativePath(relativePath);
+        public bool DirectoryExists(ObjectPath path) => inner.DirectoryExists(path);
+        public Task CreateDirectoryAsync(string? relativePath, CancellationToken cancellationToken = default) =>
+            inner.CreateDirectoryAsync(relativePath, cancellationToken);
+        public Task<IObjectStoreStagingArea> CreateStagingAreaAsync(CancellationToken cancellationToken = default) =>
+            inner.CreateStagingAreaAsync(cancellationToken);
+        public async Task CommitStagedFileAsync
+        (
+            string relativePath, string stagingToken,
+            DateTimeOffset? lastModifiedUtc, CancellationToken cancellationToken = default
+        )
+        {
+            await inner.CommitStagedFileAsync(relativePath, stagingToken, lastModifiedUtc, cancellationToken);
+            afterCommit(relativePath);
+        }
     }
 
     private sealed class RestoreOptionsMonitor(YabtSyncOptions value) : IOptionsMonitor<YabtSyncOptions>

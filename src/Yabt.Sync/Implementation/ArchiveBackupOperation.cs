@@ -159,6 +159,7 @@ internal sealed class ArchiveBackupOperation
         var backupProjectionGroups = new Dictionary<
             RestoreProjectionKey,
             BackupProjectionConsistencyGroup>();
+        BackupPackageProgress? packageProgress = null;
 
         void CaptureSourceReadFailures(Exception exception)
         {
@@ -617,6 +618,7 @@ internal sealed class ArchiveBackupOperation
             CancellationToken currentCancellationToken
         )
         {
+            packageProgress?.StartGroup(projectedObject.Projection);
             try
             {
                 await ProcessBackupObjectAsync(
@@ -656,6 +658,10 @@ internal sealed class ArchiveBackupOperation
                     --completedGroup.RemainingObjects == 0)
                 {
                     await CompleteBackupProjectionGroupAsync(completedGroup);
+                    packageProgress?.CompleteGroup
+                    (
+                        key, !completedGroup.SourceReadFailed && sourceReadFailures.Count == 0
+                    );
                     backupProjectionGroups.Remove(key);
                 }
             }
@@ -713,6 +719,7 @@ internal sealed class ArchiveBackupOperation
                 context.SourceDocument?.ContentHash, context.Policy.Format,
                 context.TargetDescriptor.Layout.LivePrefix, context.TargetDescriptor.Layout.HistPrefix]
         ) : null;
+        packageProgress = new(progress, (ArchiveProjectionObjectStore)projectionRequest.SourceStore);
         using var folderTraversal = folderProjector is null ? null : new BackupFolderTraversal(manifestIndex, progress);
         IReadOnlySet<string> desiredFolderPaths;
         try
@@ -765,6 +772,7 @@ internal sealed class ArchiveBackupOperation
                             unit.ChildFolderPaths.Select(ObjectPath.Parse)
                         );
                     RegisterProjectionGroups(unit.Objects, useKnownCounts: true);
+                    var prioritizedObjects = packageProgress.PrepareUnit(unit);
                     await _targetReconciler.ApplyBackupRepresentationConflictsAsync
                     (
                         context.TargetStore, historizer, context.TargetDescriptor.Layout,
@@ -773,7 +781,7 @@ internal sealed class ArchiveBackupOperation
                     );
                     await ArchiveReconciler.ReconcileAsync
                     (
-                        unit.Objects,
+                        prioritizedObjects,
                         unit.ChildFolderPaths,
                         StringComparer.Ordinal,
                         static _ => { },
@@ -786,7 +794,7 @@ internal sealed class ArchiveBackupOperation
                     // consistency check must finish before recording completion.
                     if (sourceReadFailures.Count == 0 && backupProjectionGroups.Count == 0)
                     {
-                        progress?.CompleteUnit(unit.RelativePath, unit.ChildFolderPaths);
+                        progress?.CompleteUnit(unit.RelativePath, packageProgress.ChildFrontier(unit));
                     }
                 }
 

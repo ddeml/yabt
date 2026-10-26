@@ -200,8 +200,10 @@ internal sealed class MirrorArchiveFormatHandler
             var path = ObjectPath.Parse(artifact.RelativePath);
             if (path.IsRoot || path.Parent != folder || artifact.Projection is not null)
             {
-                throw new YabtFormatMirrorException(
-                    $"Artifact '{path}' is not a plain immediate member of folder '{folder}'.");
+                throw new YabtFormatMirrorException
+                (
+                    $"Artifact '{path}' is not a plain immediate member of folder '{folder}'."
+                );
             }
             if (IsEmptyFolderMarker(path.Value))
             {

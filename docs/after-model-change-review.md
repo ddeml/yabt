@@ -1075,6 +1075,31 @@ Four focused cases validate one listing per folder, independent result ownership
 fresh stat evidence, and failure gates. Other per-folder and per-package state
 can still grow with their unit size; this is not a total process-memory bound.
 
+**Package checkpoints (2026-10-26):** Backup records complete adjacent package
+groups separately and prioritizes unfinished groups inside their already
+validated containing folder. Completed groups are revalidated afterward through
+a stable linear partition. Naming discovery still precedes the folder's writes;
+generic scattered groups remain conservative.
+
+Current-schema mirror restore routes each adjacent package group as a complete
+owning subtree unit, including nested formats. Its full namespace and ordinal
+ownership are validated before mutation. Package evidence is also validated
+before directory-only changes when existing files match. Root ZIP, legacy, and
+scattered custom groups retain complete-projection planning. Partial compressor
+state and within-folder listing cursors are not persisted.
+
+Cleanup preserves the structural ancestors of nested destination history and
+historizes only ordinary obsolete siblings. New regression coverage includes
+partial ZIP/manifest pairs, changed completed packages, sibling priority,
+nested-package restart, scope escapes, directory-only integrity, and history
+ancestor protection. Timing and normal-execution overhead measurements follow
+in the dedicated results report.
+
+The complete Release suite passes **1,212 tests**, with three existing Linux-only
+skips. The final linear priority partition and package safety checks also pass a
+27-case targeted rerun. No compiler/analyzer warnings were reported; NuGet's
+advisory lookup remains unavailable in this environment.
+
 ## Suggested Codex-Sandbox-01 sequence
 
 1. Check out the handoff commit and read `AGENTS.md` plus this document.
