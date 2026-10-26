@@ -1,9 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-(( $# == 2 )) || exit 64
+(( $# == 3 )) || exit 64
 source_root="$1"
 results="$2"
+provider="$3"
+filter='TestCategory=DeployedService'
+case "$provider" in
+    All) projects=(Yabt.AzureBlob.Tests Yabt.WebDav.Tests Yabt.Sync.Tests) ;;
+    AzureBlob)
+        projects=(Yabt.AzureBlob.Tests Yabt.Sync.Tests)
+        filter+='&FullyQualifiedName~Azure'
+        ;;
+    WebDav)
+        projects=(Yabt.WebDav.Tests Yabt.Sync.Tests)
+        filter+='&FullyQualifiedName~WebDav'
+        ;;
+    *) exit 64 ;;
+esac
 [[ "$source_root" == /work/checkouts/* && -f "$source_root/yabt.sln" ]] || exit 64
 [[ "$results" == /private-results ]] || exit 64
 [[ -r /run/secrets/providers.json ]] || exit 64
@@ -14,13 +28,13 @@ export YABT_SERVICE_ACCEPTANCE_SETTINGS=/run/secrets/providers.json
 export YABT_SERVICE_ACCEPTANCE_PRIVATE_RESULTS="$results/diagnostics"
 cd -- "$source_root"
 status=0
-for project in Yabt.AzureBlob.Tests Yabt.WebDav.Tests Yabt.Sync.Tests; do
+for project in "${projects[@]}"; do
     mkdir -- "$results/tests/$project"
     set +e
     timeout --signal=TERM --kill-after=30s 1200s \
         dotnet test "tests/$project/$project.csproj" --configuration Release \
         --verbosity minimal -m:1 --disable-build-servers \
-        --filter 'TestCategory=DeployedService' --logger trx \
+        --filter "$filter" --logger trx \
         --results-directory "$results/tests/$project"
     project_status=$?
     set -e

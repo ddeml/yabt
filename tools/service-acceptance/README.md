@@ -44,6 +44,10 @@ Commit the tested changes first, then run from this repository on the VM:
 ./tools/service-acceptance/Invoke-ServiceAcceptance.ps1 -Platform Linux
 ```
 
+Use `-Provider AzureBlob` or `-Provider WebDav` to retry just one service.
+Each selected service requires all nine of its cases to pass; the summary
+records the selection, so a partial run cannot stand for acceptance of both.
+
 The Linux invocation requires the existing `yabt-linux` environment to have
 been started using `tools/linux-acceptance/Invoke-LinuxAcceptance.ps1 -Action
 Start`. It creates a temporary companion container using the same SDK image and

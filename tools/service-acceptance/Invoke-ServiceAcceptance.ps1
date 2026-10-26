@@ -3,6 +3,8 @@
 param(
     [ValidateSet('Windows', 'Linux')]
     [string]$Platform = 'Windows',
+    [ValidateSet('All', 'AzureBlob', 'WebDav')]
+    [string]$Provider = 'All',
     [string]$SettingsPath = (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.yabt/service-acceptance/providers.local.json')
 )
 
@@ -28,7 +30,7 @@ $dirty = & git -C $repositoryRoot status --porcelain=v1 --untracked-files=normal
 if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Commit task changes before service acceptance.' }
 $revision = (& git -C $repositoryRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$') { throw 'Cannot resolve the source revision.' }
-$runId = $revision.Substring(0, 12) + '-' + $Platform.ToLowerInvariant() + '-' +
+$runId = $revision.Substring(0, 12) + '-' + $Platform.ToLowerInvariant() + '-' + $Provider.ToLowerInvariant() + '-' +
     [DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $privateRoot = Join-Path $settingsFile.DirectoryName "runs/$runId"
 $publicRoot = Join-Path $repositoryRoot "artifacts/service-acceptance/$runId"
@@ -48,7 +50,14 @@ foreach ($sid in @($userSid, [Security.Principal.SecurityIdentifier]::new('S-1-5
 Set-Acl -LiteralPath $privateRoot -AclObject $privateAcl
 [IO.Directory]::CreateDirectory($publicRoot) | Out-Null
 $issues = [Collections.Generic.List[string]]::new()
-$projects = @('Yabt.AzureBlob.Tests', 'Yabt.WebDav.Tests', 'Yabt.Sync.Tests')
+$projects = switch ($Provider) {
+    'AzureBlob' { @('Yabt.AzureBlob.Tests', 'Yabt.Sync.Tests') }
+    'WebDav' { @('Yabt.WebDav.Tests', 'Yabt.Sync.Tests') }
+    default { @('Yabt.AzureBlob.Tests', 'Yabt.WebDav.Tests', 'Yabt.Sync.Tests') }
+}
+$testFilter = 'TestCategory=DeployedService'
+if ($Provider -eq 'AzureBlob') { $testFilter += '&FullyQualifiedName~Azure' }
+if ($Provider -eq 'WebDav') { $testFilter += '&FullyQualifiedName~WebDav' }
 
 # Redirect every process stream to the private directory before starting it.
 # Never echo commands, configuration values, remote exceptions, or raw TRX.
@@ -101,7 +110,7 @@ if ($Platform -eq 'Windows') {
         $exitCode = Invoke-PrivateProcess 'dotnet' @(
             'test', "tests/$project/$project.csproj", '--configuration', 'Release',
             '--verbosity', 'minimal', '-m:1', '--disable-build-servers',
-            '--filter', 'TestCategory=DeployedService', '--logger', 'trx',
+            '--filter', $testFilter, '--logger', 'trx',
             '--results-directory', (Join-Path $testResults $project)
         ) $project $environment
         if ($exitCode -ne 0) { $issues.Add("$project exited with code $exitCode.") }
@@ -134,10 +143,10 @@ else {
         if ((Invoke-PrivateDocker @('exec', $containerName, 'bash', '-c', $import, 'yabt-import', $containerArchive, $checkout) 'source-import') -ne 0) {
             throw 'Cannot unpack the source snapshot.'
         }
-        Write-Output 'Running all deployed-service cases on Linux/ext4.'
+        Write-Output "Running $Provider deployed-service cases on Linux/ext4."
         $exitCode = Invoke-PrivateDocker @(
             'exec', '--env', "YABT_SOURCE_REVISION=$revision", $containerName,
-            'bash', "$checkout/tools/service-acceptance/run-service-acceptance.sh", $checkout, '/private-results'
+            'bash', "$checkout/tools/service-acceptance/run-service-acceptance.sh", $checkout, '/private-results', $Provider
         ) 'linux-tests' 3700
         if ($exitCode -ne 0) { $issues.Add("Linux tests exited with code $exitCode.") }
         $linuxResults = Join-Path $privateRoot 'linux'
@@ -170,8 +179,14 @@ $required = @{
     'Yabt.AzureBlob.Tests.AzureBlobDeployedServiceTests.ExactObjectAndSameNamedPrefixRemainDistinct' = 1
     'Yabt.WebDav.Tests.WebDavDeployedServiceTests.ProviderContract' = 6
     'Yabt.WebDav.Tests.WebDavDeployedServiceTests.WholeFolderMovePreservesNativeEmptyCollectionsAndRejectsCollisions' = 1
-    'Yabt.Sync.Tests.DeployedServiceSynchronizationTests.BackupRestorePreservesContentAndHistory' = 4
+    'Yabt.Sync.Tests.DeployedServiceSynchronizationTests.AzureBackupRestorePreservesContentAndHistory' = 2
+    'Yabt.Sync.Tests.DeployedServiceSynchronizationTests.WebDavBackupRestorePreservesContentAndHistory' = 2
 }
+foreach ($key in @($required.Keys)) {
+    if (($Provider -eq 'AzureBlob' -and $key.Contains('WebDav')) -or
+        ($Provider -eq 'WebDav' -and $key.Contains('Azure'))) { $required.Remove($key) }
+}
+$expectedCount = ($required.Values | Measure-Object -Sum).Sum
 $rows = [Collections.Generic.List[object]]::new()
 $rowKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($project in $projects) {
@@ -205,7 +220,7 @@ foreach ($entry in $required.GetEnumerator()) {
     }
 }
 $summary = [ordered]@{
-    schemaVersion = 1; sourceRevision = $revision; platform = $Platform
+    schemaVersion = 1; sourceRevision = $revision; platform = $Platform; provider = $Provider
     completedUtc = [DateTimeOffset]::UtcNow.ToString('O')
     accepted = $issues.Count -eq 0
     counts = @{ total = $rows.Count; passed = @($rows | Where-Object { $_.outcome -ceq 'Passed' }).Count }
@@ -215,5 +230,5 @@ $summaryPath = Join-Path $publicRoot 'acceptance-summary.json'
 [IO.File]::WriteAllText($summaryPath, ($summary | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
 Write-Output "Service acceptance summary: $summaryPath"
 Write-Output "Private diagnostics: $privateRoot"
-Write-Output "Passed $($summary.counts.passed) of $($summary.counts.total) observed cases; expected 18."
+Write-Output "Passed $($summary.counts.passed) of $($summary.counts.total) observed cases; expected $expectedCount."
 if (-not $summary.accepted) { throw 'Deployed-service acceptance did not pass. Inspect the summary and private diagnostics.' }

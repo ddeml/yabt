@@ -9,11 +9,18 @@ namespace Yabt.Sync.Tests;
 public sealed class DeployedServiceSynchronizationTests
 {
     [TestMethod]
-    [DataRow("azureBlob", "mirror")]
-    [DataRow("azureBlob", "zip")]
-    [DataRow("webDav", "mirror")]
-    [DataRow("webDav", "zip")]
-    public async Task BackupRestorePreservesContentAndHistory(string providerKind, string format)
+    [DataRow("mirror")]
+    [DataRow("zip")]
+    public Task AzureBackupRestorePreservesContentAndHistory(string format) =>
+        RunSynchronizationAsync("azureBlob", format);
+
+    [TestMethod]
+    [DataRow("mirror")]
+    [DataRow("zip")]
+    public Task WebDavBackupRestorePreservesContentAndHistory(string format) =>
+        RunSynchronizationAsync("webDav", format);
+
+    private static async Task RunSynchronizationAsync(string providerKind, string format)
     {
         if (!DeployedServiceFixture.IsEnabled)
         {
