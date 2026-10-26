@@ -105,6 +105,13 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "linux-acceptance", "linux-a
 		tools\linux-acceptance\README.md = tools\linux-acceptance\README.md
 	EndProjectSection
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "service-acceptance", "service-acceptance", "{13C95C81-DAE0-4B6F-AD69-36FC1F4777A6}"
+	ProjectSection(SolutionItems) = preProject
+		tools\service-acceptance\Initialize-ServiceAcceptanceSettings.ps1 = tools\service-acceptance\Initialize-ServiceAcceptanceSettings.ps1
+		tools\service-acceptance\providers.example.json = tools\service-acceptance\providers.example.json
+		tools\service-acceptance\README.md = tools\service-acceptance\README.md
+	EndProjectSection
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Profiling", "tools\Yabt.Profiling\Yabt.Profiling.csproj", "{E8D66188-2579-4A63-A781-EF51CB7A5CB9}"
 EndProject
 Global
@@ -215,6 +222,7 @@ Global
 		{6DB32EB6-A817-4B7A-A373-00E8E4D2BE39} = {C92C132C-6018-4E38-B71B-4F9C64E3D9D7}
 		{E8D66188-2579-4A63-A781-EF51CB7A5CB9} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 		{0F7172C8-7884-482D-AD22-9D7C60361D2A} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
+		{13C95C81-DAE0-4B6F-AD69-36FC1F4777A6} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {C808C5B7-4B46-4DA9-8F76-080585294DFF}

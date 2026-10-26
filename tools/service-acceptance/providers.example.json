@@ -1,0 +1,16 @@
+{
+  "ObjectStores": {
+    "AzureBlob": {
+      "ConnectionString": "",
+      "ServiceUri": null,
+      "ContainerName": "yabt-acceptance",
+      "Prefix": "codexsandbox01"
+    },
+    "WebDav": {
+      "Endpoint": "",
+      "RootPath": "yabt-acceptance/codexsandbox01",
+      "UserName": "",
+      "Password": ""
+    }
+  }
+}
