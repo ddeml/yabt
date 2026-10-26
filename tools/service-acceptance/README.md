@@ -73,6 +73,10 @@ root. Azure requires the selected container to exist. Successful cases remove
 only their owned child subtree and verify its removal. Failed cases retain their
 remote fixture for diagnosis. No test deletes a selected container or the
 configured base folder, and preexisting data is not cleaned up.
+WebDAV cleanup rejects DELETE 207 and, after successful deletion, polls only the
+owned collection for up to 30 seconds until PROPFIND returns 404. Only 207
+verification responses receive bounded retries; other failures still propagate.
+This cleanup wait does not relax the production operation assertions.
 
 Ordinary test runs skip these cases. Direct execution requires both
 `YABT_SERVICE_ACCEPTANCE=1` and an explicit

@@ -14,7 +14,8 @@ change, for follow-up work in **Codex-Sandbox-01**.
   document.
 - Status: **R01-R09 and I01-I03 are implemented for their documented scopes;
   I04 implementation, local contracts, Linux/ext4 acceptance, and deployed Azure
-  acceptance are complete; pCloud WebDAV acceptance awaits authentication**.
+  acceptance are complete; pCloud WebDAV consistency compatibility remains
+  unresolved**.
   Recording the baseline did not
   implement the fixes. R09 was added during the follow-up discussion on
   2026-09-21.
@@ -67,7 +68,7 @@ were not claimed as completed runtime reproductions in the review.
 | I01 | Improvement | ZIP buffers accumulate across a backup | Generated large-stream and projection-lifetime regression tests | Implemented |
 | I02 | Improvement | ZIP restore repeatedly parses the central directory | Entry-read instrumentation and large-manifest round-trip tests | Implemented |
 | I03 | Improvement | Current-live restore traverses history unnecessarily | Traversal-count and unreadable-subtree regression tests | Implemented |
-| I04 | Improvement | Synchronizer responsibilities and provider test coverage | Component extraction, provider contracts, recovery fault tests, Linux/ext4 and deployed Azure acceptance | Implemented; pCloud WebDAV authentication blocks remaining acceptance |
+| I04 | Improvement | Synchronizer responsibilities and provider test coverage | Component extraction, provider contracts, recovery fault tests, Linux/ext4 and deployed Azure acceptance | Implemented; pCloud post-write visibility blocks remaining acceptance |
 
 P1 means address before relying on the affected archival operation. P2 means a
 concrete correctness or usability defect. Investigate means the execution path
@@ -1254,12 +1255,67 @@ values contaminated exit-code checks, and Docker's archive endpoint missed the
 tmpfs report contents. Both were fixed and the accepted runs repeated with
 verified report export. No production provider change was needed for Azure.
 
-pCloud WebDAV returned **HTTP 401 during isolation preflight**, before any
-fixture creation. All nine Windows WebDAV cases were therefore unsuccessful;
-Linux observed the same authentication rejection. This is not accepted service
-compatibility evidence, and no WebDAV test data was written. Resume with
-`-Provider WebDav` after the configured account can authenticate, on both
-platforms. Do not repeat Azure cases solely to retry WebDAV authentication.
+pCloud WebDAV initially returned **HTTP 401 during isolation preflight**, before
+fixture creation. Richard subsequently confirmed the configured credentials in
+an incognito browser. The following VM probes, without an authentication-code
+change, succeeded with GET 200 and PROPFIND 207 at the account root; missing test
+paths returned 404. The cause of the earlier authentication rejection was not
+established. Authentication is no longer the acceptance blocker.
+
+**Authenticated pCloud results:** After correcting cleanup verification,
+**three of nine cases passed on each platform; six failed on each** at revision
+`174c04c2e763`. Traversal/exact names, create-if-absent, and failed-upload recovery
+passed, including confirmed cleanup. Conditional mutations, lock contention,
+the native-empty-folder move case, and mirror/ZIP synchronization stopped because
+newly uploaded objects did not yet provide the strong ETag required for safe
+conditional mutation. The whole-folder move case returned an HTTP 403 when
+immediately reopening the moved destination. These remain acceptance failures;
+the production guards and operation assertions were not relaxed.
+
+The public summaries are under `artifacts/service-acceptance/`:
+
+- `174c04c2e763-windows-webdav-20261026T192248Z-215d490b`
+- `174c04c2e763-linux-webdav-20261026T192249Z-15e03e37`
+
+Additional disposable protocol probes narrowed the behavior:
+
+- PUT returned 201 and GET immediately returned the complete expected bytes,
+  but GET omitted ETag through 941 ms in one probe. A strong ETag appeared at
+  1,222 ms. These observations diagnose availability, not a performance bound.
+- Once that validator was available, deliberately incorrect `If-Match` values
+  on GET, PUT, and DELETE all returned 412 and preserved the original bytes.
+  A later HEAD and `DAV:getetag` also supplied a strong validator. The existing
+  logical-hash mismatch tests alone would not establish server enforcement of
+  HTTP preconditions; these direct probes did.
+- A separate folder MOVE returned 201, followed by destination GET responses
+  of 403 and then 404 throughout a 5.4-second observation window. An earlier
+  failed move fixture was readable on a later inspection. Do not assume a
+  successful MOVE response establishes immediate readable destination state.
+- Moving to an occupied collection with `Overwrite: F` returned 412.
+- A probe collection DELETE returned 207 Multi-Status; subsequent PROPFIND
+  responses contained successful collection properties, not merely missing
+  property statuses. Complete removal was not established. Failed test/probe
+  subtrees remain for diagnosis; unrelated storage was not cleaned up.
+
+The test harness now issues DELETE only once, rejects ambiguous DELETE 207,
+and waits up to 30 seconds for an exact owned collection to return 404 after a
+successful deletion. Only verification 207 is retried, with capped backoff;
+authentication, transport, other statuses, cancellation, and timeout still
+fail. Ten controlled handler checks covered these boundaries, including a
+persistent-207 timeout at 30.03 seconds. All 54 ordinary WebDAV regression tests
+also passed. This cleanup-only wait does not change production semantics.
+
+**Proposed next scope:** Add bounded provider-owned handling of delayed strong
+validators and visibility after acknowledged writes/moves/deletes. Do not put
+pCloud-specific delays into the synchronizer or make tests sleep before using
+the provider. Bind bytes to the same strong validator used by the conditional
+mutation; never combine an earlier unvalidated read with a later ETag, replace
+`If-Match` with unconditional mutation, or interpret a temporary failure as an
+empty/missing source. Examine per-resource 207 results rather than accepting
+every 2xx as complete success. Timeouts and incomplete operations must remain
+contextual I/O failures. Verify the behavior with controlled delayed-response
+fixtures and repeat all nine WebDAV cases on both platforms before accepting
+pCloud compatibility. Provider-specific reruns do not require repeating Azure.
 
 Local Release regression verification completed with **1,219 passed, zero
 failed, and six expected Linux-only skips**. The new mirror/ZIP scenarios also
@@ -1288,9 +1344,10 @@ the configured provider into the synchronization API.
 4. R05-R09 are implemented. R08 uses deterministic coordination to verify
    cancellation ownership rather than timing-dependent sleeps.
 5. I01-I03, the I04 implementation, Linux/ext4, and deployed Azure acceptance
-   are complete. Resolve the pCloud authentication rejection and finish WebDAV
-   acceptance, then follow up with the remaining large-tree work described under
-   I04. Reuse the committed runners for later regressions.
+   are complete. Design provider-owned handling of pCloud's delayed visibility
+   and WebDAV multi-status responses, then finish WebDAV acceptance. Follow up
+   with the remaining large-tree work described under I04. Reuse the committed
+   runners for later regressions.
 6. Update each finding's status with the fixing commit and verification
    evidence. Do not mark an item resolved merely because the pre-existing suite
    passes.
