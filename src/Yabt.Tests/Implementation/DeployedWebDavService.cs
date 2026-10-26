@@ -92,18 +92,42 @@ internal static class DeployedWebDavService
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) { return; }
         response.EnsureSuccessStatusCode();
-        using var verification = new HttpRequestMessage(new("PROPFIND"), ownedUri);
-        verification.Headers.Add("Depth", "0");
-        using var verificationResponse = await client.SendAsync
-        (
-            verification,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken
-        );
-        if (verificationResponse.StatusCode != HttpStatusCode.NotFound)
+        if (response.StatusCode == HttpStatusCode.MultiStatus)
         {
-            verificationResponse.EnsureSuccessStatusCode();
-            throw new YabtTestsException("WebDAV fixture cleanup left a readable collection.");
+            throw new YabtTestsException("WebDAV fixture DELETE returned 207 Multi-Status; complete removal was not confirmed.");
+        }
+
+        // This wait applies only to disposal of our isolated test collection.
+        // Production operations and their immediate visibility assertions remain strict.
+        using var verificationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        verificationCancellation.CancelAfter(TimeSpan.FromSeconds(30));
+        var delayMilliseconds = 250;
+        try
+        {
+            while (true)
+            {
+                using var verification = new HttpRequestMessage(new("PROPFIND"), ownedUri);
+                verification.Headers.Add("Depth", "0");
+                using var verificationResponse = await client.SendAsync
+                (
+                    verification,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    verificationCancellation.Token
+                );
+                if (verificationResponse.StatusCode == HttpStatusCode.NotFound) { return; }
+                if (verificationResponse.StatusCode != HttpStatusCode.MultiStatus)
+                {
+                    verificationResponse.EnsureSuccessStatusCode();
+                    throw new YabtTestsException("WebDAV fixture removal verification returned an unexpected successful status.");
+                }
+
+                await Task.Delay(delayMilliseconds, verificationCancellation.Token);
+                delayMilliseconds = Math.Min(delayMilliseconds * 2, 2000);
+            }
+        }
+        catch (Exception exception)
+        {
+            throw new YabtTestsException("WebDAV fixture removal was not confirmed.", exception);
         }
     }
 }
