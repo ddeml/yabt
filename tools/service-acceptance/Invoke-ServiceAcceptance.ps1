@@ -76,8 +76,8 @@ function Invoke-PrivateProcess {
             $process.WaitForExit()
             $issues.Add("Process timed out: $Name")
         }
-        $outputCopy.GetAwaiter().GetResult()
-        $errorCopy.GetAwaiter().GetResult()
+        $null = $outputCopy.GetAwaiter().GetResult()
+        $null = $errorCopy.GetAwaiter().GetResult()
         return $process.ExitCode
     }
     finally { $process.Dispose(); $output.Dispose(); $errors.Dispose() }
