@@ -191,12 +191,11 @@ public sealed class LinuxFileSystemPermissionTests
 
     private static void AssertPermissionDenied(Exception exception)
     {
-        var cause = exception.GetBaseException();
-        Assert.IsTrue
-        (
-            cause is UnauthorizedAccessException || cause is Win32Exception { NativeErrorCode: 13 },
-            "The provider must propagate the actual permission error: " + exception
-        );
+        for (Exception? cause = exception; cause is not null; cause = cause.InnerException)
+        {
+            if (cause is UnauthorizedAccessException or Win32Exception { NativeErrorCode: 13 }) { return; }
+        }
+        Assert.Fail("The provider must propagate the actual permission error: " + exception);
     }
 
     [DllImport("libc", EntryPoint = "geteuid")]

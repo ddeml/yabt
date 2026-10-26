@@ -457,7 +457,10 @@ public sealed class FileSystemArchiveLocationResolverTests
             foreach (var link in _links.AsEnumerable().Reverse())
             {
                 Assert.IsTrue(Path.GetFullPath(link).StartsWith(Root + Path.DirectorySeparatorChar, StringComparison.Ordinal));
-                Directory.Delete(link, recursive: false);
+                // Unix directory symlinks may be cyclic or dangling. Unlink
+                // the entry without requiring a resolvable directory target.
+                if (OperatingSystem.IsWindows()) { Directory.Delete(link, recursive: false); }
+                else { File.Delete(link); }
             }
 
             Directory.Delete(Root, recursive: true);

@@ -951,6 +951,18 @@ behavior cases. Controlled HTTP fixtures exercise the actual Azure SDK and
 WebDAV provider, but do not substitute for deployed-service or native Linux
 acceptance; report those environments separately.
 
+On CodexSandbox01, reuse the dedicated `yabt-linux` Docker Compose environment
+through `tools/linux-acceptance/Invoke-LinuxAcceptance.ps1`. It imports a clean
+committed snapshot and runs the Release solution as an ordinary Linux user.
+Keep its checkout, fixtures, journals, temporary content, and package cache on
+the single `yabt-linux-workspace` volume. Preflight verifies the actual Linux
+filesystem; do not substitute Windows bind mounts or the container's OverlayFS
+layer. Retain and inspect the exported acceptance summary, including required
+case outcomes and individual skip reasons. Report this as Linux/ext4 acceptance
+under Docker Desktop/WSL 2, separately from deployed Azure/WebDAV acceptance and
+performance measurements. Manage only YABT's Compose resources; the Docker
+engine also serves DSA. See `tools/linux-acceptance/README.md` for usage.
+
 ## CLI
 
 Command surface:
