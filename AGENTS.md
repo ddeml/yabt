@@ -914,6 +914,12 @@ remaining file-count-dependent memory explicitly; bounded payloads or indexes do
 not imply bounded total process memory. Preserve cancellation, resource ownership,
 provider path semantics, and recovery ordering when improving algorithms.
 
+Restore final-manifest creation uses folder-local destination listings and
+disk-backed desired-hash, duplicate-detection, and output-entry indexes. Keep
+final stat evidence fresh after commits and cleanup without rebuilding a
+whole-tree in-memory destination dictionary or reopening payloads. Missing files
+and incomplete listings prevent successful logical-state publication.
+
 ## Testing
 
 Use MSTest for unit tests.

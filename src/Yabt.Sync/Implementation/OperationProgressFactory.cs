@@ -30,9 +30,16 @@ internal sealed class OperationProgressFactory
             return null;
         }
 
-        var directory = options.GetEffectiveProgressDirectory();
         var batchSize = options.GetValidatedProgressFlushUnitCount();
         var interval = options.GetValidatedProgressFlushInterval();
+        string directory;
+        try { directory = options.GetEffectiveProgressDirectory(); }
+        catch (Exception ex)
+        {
+            if (options.ProgressDirectory is not null) { throw; }
+            _logger.LogOperationProgressUnavailable(ex);
+            return null;
+        }
         // A configured location inside operation data is an error, not a cache
         // failure. Keep provider-owned overlap validation outside the fallback.
         TemporaryStorageValidation.ValidateDirectory(directory);

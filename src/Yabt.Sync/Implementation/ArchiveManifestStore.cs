@@ -14,8 +14,7 @@ internal sealed class ArchiveManifestStore
     ILogger<ArchiveManifestStore> _logger,
     IChangeManifestSerializer _changeManifestSerializer,
     ILogicalStateManifestSerializer _logicalStateManifestSerializer,
-    ITemporaryContentFactory _temporaryContentFactory,
-    RestoreReconciler _reconciler
+    ITemporaryContentFactory _temporaryContentFactory
 )
 {
     internal static readonly IReadOnlyDictionary<string, string> EmptyMetadata =
@@ -121,38 +120,15 @@ internal sealed class ArchiveManifestStore
     {
         _logger.LogTrace(nameof(CreateLogicalStateManifestAsync));
 
-        var pathComparer = plan.Namespace.PathComparer;
-        var destinationState = await _reconciler.LoadRestoreDestinationStateAsync
+        return await RestoreManifestEvidenceCollector.CreateAsync
         (
             destinationStore,
             destinationLayout,
-            pathComparer,
+            plan,
+            _logicalStateManifestSerializer,
+            _logger,
             cancellationToken
         );
-        return _logicalStateManifestSerializer.Create(EnumerateEntries());
-
-        IEnumerable<ArchiveLogicalStateManifestEntry> EnumerateEntries()
-        {
-            foreach (var file in plan.Files)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var contentHash = file.ContentHash;
-                if (!destinationState.Files.TryGetValue(file.RelativePath, out var destinationFile) ||
-                    !ArchiveChangeFingerprint.TryCreate(
-                        destinationFile.ContentLength,
-                        destinationFile.LastModifiedUtc,
-                        out var statFingerprint) ||
-                    contentHash is null ||
-                    !ArchiveHash.IsValid(contentHash))
-                {
-                    throw new YabtSyncException(
-                        $"Restore destination file '{file.RelativePath}' does not provide complete " +
-                            "logical-state manifest evidence after restore.");
-                }
-
-                yield return new(file.RelativePath, statFingerprint, contentHash);
-            }
-        }
     }
 
     internal async Task UploadLogicalStateManifestAsync

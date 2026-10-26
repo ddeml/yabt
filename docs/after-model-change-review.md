@@ -1066,6 +1066,15 @@ lookup reported an unavailable feed; compilation had no code warnings. Package
 integration and timing validation follow separately. Native Linux and
 deployed-service acceptance from I04 remain pending.
 
+**Restore finalization memory (2026-10-26):** Final logical-state publication now
+collects current destination stat evidence one folder at a time. Desired hashes,
+duplicate detection, and result entries use temporary disk indexes. This removes
+the remaining whole-tree destination dictionary from successful finalization
+without reopening payloads or weakening missing-file/listing-failure checks.
+Four focused cases validate one listing per folder, independent result ownership,
+fresh stat evidence, and failure gates. Other per-folder and per-package state
+can still grow with their unit size; this is not a total process-memory bound.
+
 ## Suggested Codex-Sandbox-01 sequence
 
 1. Check out the handoff commit and read `AGENTS.md` plus this document.
