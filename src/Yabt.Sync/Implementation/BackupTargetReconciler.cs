@@ -24,8 +24,11 @@ internal sealed class BackupTargetReconciler
     {
         _logger.LogTrace(nameof(PlanBackupRepresentationConflictsAsync));
 
-        var desiredFiles = desiredObjects.Select(item => item.RelativePath).
-            ToLookup(ArchivePathRules.GetParentPrefix, StringComparer.Ordinal);
+        var desiredFiles = desiredObjects.ToLookup
+        (
+            item => ArchivePathRules.GetParentPrefix(item.RelativePath),
+            StringComparer.Ordinal
+        );
         var desiredFolders = new HashSet<string>(StringComparer.Ordinal) { string.Empty };
         foreach (var group in desiredFiles)
         {
@@ -44,63 +47,100 @@ internal sealed class BackupTargetReconciler
         foreach (var folderPath in orderedFolders)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var targetFolder = await LoadTargetFolderStateAsync
+            var folderConflicts = await PlanBackupFolderRepresentationConflictsAsync
             (
                 targetStore,
                 targetLayout,
-                targetFolders,
+                targetNamespace,
                 folderPath,
+                desiredFiles[folderPath],
+                desiredChildFolders[folderPath],
+                targetFolders,
+                absentTargetFolders,
                 cancellationToken
             );
+            conflicts.AddRange(folderConflicts);
+        }
 
-            // These indexes exist only during read-only planning. Provider comparison
-            // semantics can change when an existing directory is replaced.
-            var objectPaths = targetFolder.Objects.Keys.ToDictionary
-            (
-                path => path,
-                targetNamespace.PathComparer
-            );
-            var folderPaths = targetFolder.Folders.Keys.ToDictionary
-            (
-                path => path,
-                targetNamespace.PathComparer
-            );
-            foreach (var desiredFolder in desiredChildFolders[folderPath])
+        return conflicts;
+    }
+
+    internal async Task<List<BackupRepresentationConflict>> PlanBackupFolderRepresentationConflictsAsync
+    (
+        IObjectStore targetStore,
+        ArchiveLayout targetLayout,
+        IObjectStoreNamespace targetNamespace,
+        string folderPath,
+        IEnumerable<ArchiveProjectedObject> desiredObjects,
+        IEnumerable<string> desiredChildFolders,
+        Dictionary<string, TargetFolderState> targetFolders,
+        HashSet<string> absentTargetFolders,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(PlanBackupFolderRepresentationConflictsAsync));
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var targetFolder = await LoadTargetFolderStateAsync
+        (
+            targetStore,
+            targetLayout,
+            targetFolders,
+            folderPath,
+            cancellationToken
+        );
+
+        // Inspect only this folder. Earlier units already resolved its ancestors.
+        // Provider comparison semantics can change when a directory is replaced.
+        var objectPaths = targetFolder.Objects.Keys.ToDictionary
+        (
+            path => path,
+            targetNamespace.PathComparer
+        );
+        var folderPaths = targetFolder.Folders.Keys.ToDictionary
+        (
+            path => path,
+            targetNamespace.PathComparer
+        );
+        var conflicts = new List<BackupRepresentationConflict>();
+        foreach (var desiredFolder in desiredChildFolders)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (objectPaths.TryGetValue(desiredFolder, out var blockingObject))
             {
-                if (objectPaths.TryGetValue(desiredFolder, out var blockingObject))
-                {
-                    conflicts.Add(new(blockingObject, IsFolder: false));
-                    targetFolder.Objects.Remove(blockingObject);
-                }
-
-                if (folderPaths.TryGetValue(desiredFolder, out var existingFolder))
-                {
-                    if (string.Equals(existingFolder, desiredFolder, StringComparison.Ordinal)) { continue; }
-
-                    conflicts.Add(new(existingFolder, IsFolder: true));
-                    targetFolder.Folders.Remove(existingFolder);
-                }
-
-                // A missing or historized subtree is empty for both execution and
-                // dry runs. Never probe an obsolete alias or a file as a directory.
-                targetFolders[desiredFolder] = new();
-                absentTargetFolders.Add(desiredFolder);
+                conflicts.Add(new(blockingObject, IsFolder: false));
+                targetFolder.Objects.Remove(blockingObject);
             }
 
-            foreach (var desiredFile in desiredFiles[folderPath])
+            if (folderPaths.TryGetValue(desiredFolder, out var existingFolder))
             {
-                if (folderPaths.TryGetValue(desiredFile, out var blockingFolder))
-                {
-                    conflicts.Add(new(blockingFolder, IsFolder: true));
-                    targetFolder.Folders.Remove(blockingFolder);
-                }
+                if (string.Equals(existingFolder, desiredFolder, StringComparison.Ordinal)) { continue; }
 
-                if (objectPaths.TryGetValue(desiredFile, out var existingFile) &&
-                    !string.Equals(existingFile, desiredFile, StringComparison.Ordinal))
-                {
-                    conflicts.Add(new(existingFile, IsFolder: false));
-                    targetFolder.Objects.Remove(existingFile);
-                }
+                conflicts.Add(new(existingFolder, IsFolder: true));
+                targetFolder.Folders.Remove(existingFolder);
+            }
+
+            // A missing or historized subtree is empty for both execution and
+            // dry runs. Never probe an obsolete alias or a file as a directory.
+            targetFolders[desiredFolder] = new();
+            absentTargetFolders.Add(desiredFolder);
+        }
+
+        foreach (var desiredObject in desiredObjects)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var desiredFile = desiredObject.RelativePath;
+            if (folderPaths.TryGetValue(desiredFile, out var blockingFolder))
+            {
+                conflicts.Add(new(blockingFolder, IsFolder: true));
+                targetFolder.Folders.Remove(blockingFolder);
+            }
+
+            if (objectPaths.TryGetValue(desiredFile, out var existingFile) &&
+                !string.Equals(existingFile, desiredFile, StringComparison.Ordinal))
+            {
+                conflicts.Add(new(existingFile, IsFolder: false));
+                targetFolder.Objects.Remove(existingFile);
             }
         }
 

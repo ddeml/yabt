@@ -21,8 +21,10 @@ internal sealed class ArchiveProjectionObjectStore
     private readonly Dictionary<string, ProjectedScopeDefinition> _projectedScopeDefinitions =
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, ProjectedScope> _projectedScopes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, FolderProjectedScope> _folderProjectedScopes = new(StringComparer.Ordinal);
+    private readonly Dictionary<RestoreProjectionKey, ProjectionArtifactGroup> _projectionArtifactGroups = [];
     private readonly HashSet<string> _openingProjectedObjectKeys = new(StringComparer.Ordinal);
-    private readonly List<string> _projectedSourcePrefixes = [];
+    private readonly HashSet<string> _projectedSourcePrefixes = new(StringComparer.Ordinal);
     private readonly string? _sourceRootPrefix = ArchiveLayout.NormalizeObjectPrefix(sourceRootPrefix);
     private readonly string _logicalRootPath = ArchiveLayout.NormalizeObjectKey(logicalRootPath);
 
@@ -271,6 +273,15 @@ internal sealed class ArchiveProjectionObjectStore
         CancellationToken cancellationToken
     )
     {
+        var definition = await GetProjectedScopeDefinitionAsync(projectedScopePrefix, cancellationToken);
+        if (!definition.FormatHandler.ProjectsBesideSourceFolder &&
+            definition.FormatHandler is IArchiveBackupFolderProjector folderProjector)
+        {
+            return await GetLocalProjectedFolderItemsAsync
+            (
+                projectedScopePrefix, folderPrefix, definition, folderProjector, cancellationToken
+            );
+        }
         var projectedScope = await GetProjectedScopeAsync(
             projectedScopePrefix,
             cancellationToken);
@@ -278,6 +289,126 @@ internal sealed class ArchiveProjectionObjectStore
             projectedScope,
             folderPrefix,
             cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<ArchiveFolderItem>> GetLocalProjectedFolderItemsAsync
+    (
+        string scopePrefix,
+        string? folderPrefix,
+        ProjectedScopeDefinition definition,
+        IArchiveBackupFolderProjector folderProjector,
+        CancellationToken cancellationToken
+    )
+    {
+        FolderProjectedScope scope;
+        lock (_gate)
+        {
+            if (!_folderProjectedScopes.TryGetValue(scopePrefix, out scope!))
+            {
+                var source = new ArchiveProjectionObjectStore
+                (
+                    _inner, CreateSourceDisplayName(scopePrefix), scopePrefix,
+                    _readPolicyAsync, _formatHandlers, definition.LogicalPath
+                );
+                var scopeLifetime = new ArchiveProjectionLifetime();
+                scopeLifetime.Add(source);
+                _lifetime.Add(scopeLifetime);
+                scope = new
+                (
+                    source,
+                    new(source, scopePrefix, definition.Policy, definition.SourceDisplayName, definition.LogicalPath),
+                    scopeLifetime,
+                    new(StringComparer.Ordinal)
+                );
+                _folderProjectedScopes.Add(scopePrefix, scope);
+            }
+        }
+
+        var relativeFolder = ArchiveLayout.RemovePrefix
+        (
+            ArchiveLayout.NormalizeObjectKey(folderPrefix), scopePrefix
+        );
+        if (scope.Folders.TryGetValue(relativeFolder, out var cachedListing))
+        {
+            return CreateLocalProjectedFolderItems(cachedListing);
+        }
+
+        await using var unit = await folderProjector.ProjectBackupFolderAsync
+        (
+            scope.Request, relativeFolder, cancellationToken
+        );
+        if (!string.Equals(unit.RelativePath, relativeFolder, StringComparison.Ordinal))
+        {
+            throw new YabtSyncException($"Folder projection returned the wrong scope '{unit.RelativePath}'.");
+        }
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var objectKeys = new List<string>();
+        var childKeys = new List<string>();
+        foreach (var projectedObject in unit.Objects)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ValidateLocalProjectedPath(projectedObject.RelativePath, relativeFolder, paths);
+            await RegisterProjectedObjectAsync
+            (
+                scopePrefix, scopePrefix, projectsBesideSourceFolder: false, projectedObject, cancellationToken
+            );
+            CopyProjectionArtifactCount(scope.SourceStore, projectedObject.Projection);
+            var key = ArchiveLayout.CombinePrefixAndRelativePath(scopePrefix, projectedObject.RelativePath);
+            objectKeys.Add(key);
+        }
+        foreach (var child in unit.ChildFolderPaths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ValidateLocalProjectedPath(child, relativeFolder, paths);
+            var key = ArchiveLayout.CombinePrefixAndRelativePath(scopePrefix, child);
+            childKeys.Add(key);
+        }
+        var lifetime = unit.DetachLifetime();
+        if (lifetime is not null) { scope.Lifetime.Add(lifetime); }
+        var listing = new FolderProjectionListing(objectKeys, childKeys);
+        scope.Folders.Add(relativeFolder, listing);
+        return CreateLocalProjectedFolderItems(listing);
+    }
+
+    private List<ArchiveFolderItem> CreateLocalProjectedFolderItems(FolderProjectionListing listing)
+    {
+        var items = new List<ArchiveFolderItem>();
+        foreach (var key in listing.ObjectKeys)
+        {
+            var projectedObject = _projectedObjects[key];
+            items.Add(ArchiveFolderItem.CreateObject
+            (
+                ObjectPath.Parse(key).Name,
+                new
+                (
+                    key, projectedObject.ContentLength, projectedObject.LastModifiedUtc,
+                    projectedObject.ContentHash, projectedObject.ChangeFingerprint, projectedObject.Projection
+                )
+            ));
+        }
+        foreach (var key in listing.ChildKeys)
+        {
+            items.Add(ArchiveFolderItem.CreateFolder(ObjectPath.Parse(key).Name, key));
+        }
+        return items;
+    }
+
+    private static void ValidateLocalProjectedPath
+    (
+        string path,
+        string folder,
+        HashSet<string> paths
+    )
+    {
+        var objectPath = ObjectPath.Parse(path);
+        if (objectPath.IsRoot || !string.Equals(objectPath.Parent.Value, folder, StringComparison.Ordinal) ||
+            !paths.Add(path))
+        {
+            throw new YabtSyncException
+            (
+                $"Folder projection '{folder}' produced a duplicate or non-child path '{path}'."
+            );
+        }
     }
 
     private static ArchiveFolderItem[] CreateProjectedFolderItems
@@ -420,8 +551,17 @@ internal sealed class ArchiveProjectionObjectStore
                 formatHandler.ProjectsBesideSourceFolder,
                 projectedObject,
                 cancellationToken);
+            CopyProjectionArtifactCount(projectedSourceStore, projectedObject.Projection);
             projectedObjects.Add(projectedObject);
         }
+
+        // Reject file/prefix collisions before the flat projection is converted
+        // to immediate folder entries, where a duplicate name would hide one side.
+        ObjectStoreNamespace.Ordinal.ValidateTree
+        (
+            projectedObjects.Select(projectedObject => ObjectPath.Parse(projectedObject.RelativePath)),
+            []
+        );
 
         if (formatHandler.ProjectsBesideSourceFolder)
         {
@@ -429,6 +569,14 @@ internal sealed class ArchiveProjectionObjectStore
                 projectedScopePrefix,
                 projectedScopeDefinition,
                 projectedObjects);
+            var projection = projectedObjects[0].Projection!;
+            lock (_gate)
+            {
+                _projectionArtifactGroups[GetProjectionKey(projection)] = new
+                (
+                    projectedObjects.Count, Lifetime: scopeLifetime
+                );
+            }
         }
 
         var projectedScope = new ProjectedScope
@@ -463,8 +611,21 @@ internal sealed class ArchiveProjectionObjectStore
         string? projectionId = null;
         int? formatVersion = null;
         var artifactRoles = new HashSet<string>(StringComparer.Ordinal);
+        var sourceScope = ObjectPath.Parse(projectedScopePrefix);
+        var outputParent = sourceScope.Parent;
         foreach (var projectedObject in projectedObjects)
         {
+            var outputPath = outputParent.Combine(ObjectPath.Parse(projectedObject.RelativePath));
+            if (outputPath.Parent != outputParent && !outputPath.IsUnder(sourceScope))
+            {
+                throw new YabtSyncException
+                (
+                    $"Packaged source folder '{projectedScopePrefix}' produced nested artifact " +
+                        $"'{projectedObject.RelativePath}' outside its registered folder scope. " +
+                        "Package artifacts must be immediate siblings of the source folder " +
+                        "or descendants of that folder."
+                );
+            }
             var projection = projectedObject.Projection ??
                 throw new YabtSyncException(
                     $"Packaged source folder '{projectedScopePrefix}' produced artifact " +
@@ -647,55 +808,27 @@ internal sealed class ArchiveProjectionObjectStore
 
         lock (_gate)
         {
-            if (_projectedSourcePrefixes.Contains(
-                    normalizedSourcePrefix,
-                    StringComparer.Ordinal))
-            {
-                return false;
-            }
-
-            _projectedSourcePrefixes.Add(normalizedSourcePrefix);
-            return true;
+            return _projectedSourcePrefixes.Add(normalizedSourcePrefix);
         }
     }
 
     private string? FindProjectedScopePrefix(string? folderPrefix)
     {
-        var normalizedFolderPrefix = ArchiveLayout.NormalizeObjectKey(folderPrefix);
+        var path = ObjectPath.Parse(folderPrefix);
         lock (_gate)
         {
-            foreach (var projectedSourcePrefix in _projectedSourcePrefixes.OrderByDescending(
-                         prefix => prefix.Length))
+            while (!path.IsRoot)
             {
-                if (ArchiveLayout.IsUnderPrefix(
-                        normalizedFolderPrefix,
-                        projectedSourcePrefix))
-                {
-                    return projectedSourcePrefix;
-                }
+                if (_projectedSourcePrefixes.Contains(path.Value)) { return path.Value; }
+                path = path.Parent;
             }
         }
 
         return null;
     }
 
-    private bool IsUnderProjectedSourcePrefix(string objectKey)
-    {
-        lock (_gate)
-        {
-            foreach (var projectedSourcePrefix in _projectedSourcePrefixes)
-            {
-                if (ArchiveLayout.IsUnderPrefix(
-                        objectKey,
-                        projectedSourcePrefix))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
+    private bool IsUnderProjectedSourcePrefix(string objectKey) =>
+        FindProjectedScopePrefix(objectKey) is not null;
 
     private static string GetParentPrefix(string objectKey) => ObjectPath.Parse(objectKey).Parent.Value;
 
@@ -733,26 +866,72 @@ internal sealed class ArchiveProjectionObjectStore
 
     public ValueTask DisposeAsync() => _lifetime.DisposeAsync();
 
-    public async ValueTask ReleaseProjectionAsync(ArchiveProjectionProvenance projection)
+    internal bool TryGetProjectionArtifactCount(ArchiveProjectionProvenance projection, out int count)
     {
-        foreach (var scope in _projectedScopes.Values)
+        lock (_gate)
         {
-            if (!scope.ProjectsBesideSourceFolder)
+            if (_projectionArtifactGroups.TryGetValue(GetProjectionKey(projection), out var group))
             {
-                await scope.SourceStore.ReleaseProjectionAsync(projection);
-                continue;
-            }
-            var candidate = scope.Objects.FirstOrDefault()?.Projection;
-            if (candidate is not null &&
-                candidate.LogicalPath == projection.LogicalPath &&
-                candidate.Format == projection.Format &&
-                candidate.FormatVersion == projection.FormatVersion &&
-                candidate.ProjectionId == projection.ProjectionId)
-            {
-                await scope.Lifetime.DisposeAsync();
+                count = group.ArtifactCount;
+                return true;
             }
         }
+        count = 0;
+        return false;
     }
+
+    private void CopyProjectionArtifactCount
+    (
+        ArchiveProjectionObjectStore source,
+        ArchiveProjectionProvenance? projection
+    )
+    {
+        if (projection is null || !source.TryGetProjectionArtifactCount(projection, out var count)) { return; }
+        lock (_gate)
+        {
+            _projectionArtifactGroups.TryAdd(GetProjectionKey(projection), new(count, SourceStore: source));
+        }
+    }
+
+    private static RestoreProjectionKey GetProjectionKey(ArchiveProjectionProvenance projection) => new
+    (
+        projection.LogicalPath, projection.Format, projection.FormatVersion, projection.ProjectionId
+    );
+
+    public async ValueTask ReleaseProjectionAsync(ArchiveProjectionProvenance projection)
+    {
+        ProjectionArtifactGroup? group;
+        lock (_gate) { _projectionArtifactGroups.TryGetValue(GetProjectionKey(projection), out group); }
+        if (group?.Lifetime is not null)
+        {
+            await group.Lifetime.DisposeAsync();
+        }
+        else if (group?.SourceStore is not null)
+        {
+            await group.SourceStore.ReleaseProjectionAsync(projection);
+        }
+    }
+
+    private sealed record ProjectionArtifactGroup
+    (
+        int ArtifactCount,
+        ArchiveProjectionLifetime? Lifetime = null,
+        ArchiveProjectionObjectStore? SourceStore = null
+    );
+
+    private sealed record FolderProjectedScope
+    (
+        ArchiveProjectionObjectStore SourceStore,
+        ArchiveProjectionRequest Request,
+        ArchiveProjectionLifetime Lifetime,
+        Dictionary<string, FolderProjectionListing> Folders
+    );
+
+    private sealed record FolderProjectionListing
+    (
+        IReadOnlyList<string> ObjectKeys,
+        IReadOnlyList<string> ChildKeys
+    );
 
     private sealed record ProjectedScope
     (

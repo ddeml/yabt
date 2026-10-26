@@ -294,13 +294,16 @@ comparison must follow actual directory semantics rather than host-wide case
 assumptions. Source location resolution, native overlap checks, restore staging,
 and filesystem commits belong to provider implementations. Mapping failures use
 the existing contextual I/O failure and recovery path; never silently rename or
-omit conflicting desired content. Validate known namespace conflicts before
-live mutation while retaining safe checkpoints after later runtime failures.
+omit conflicting desired content. Validate the complete namespace of each backup
+work unit before its mutations. Later units may fail after earlier safe commits.
+Restore retains complete-plan namespace preflight in the current implementation.
 
 Backup resolves file/directory transitions and provider-equivalent spelling
 changes by historizing confirmed blockers before preparing replacement payloads.
-Validate the complete desired namespace against the prospective layout through
-`IObjectStoreNamespace.AfterRemoving` before moving any blocker. Comparison and
+Validate each complete desired work-unit namespace against the prospective layout
+through `IObjectStoreNamespace.AfterRemoving` before moving its blockers. Folder
+units include immediate files and child-directory names; handlers without folder
+projection support retain complete-projection preflight. Comparison and
 validation of recreated directories remain provider-owned. Historize complete
 blocking folders, including native empty descendants and `.yabt-empty` markers.
 Dry runs and verification model removed subtrees as empty without mutating them.
@@ -811,6 +814,30 @@ staging, projection resources, or the archive lock.
 historization selection. `ArchiveContentTransfer` owns byte comparison and
 validated upload preparation. Native paths, namespace semantics, staging, and
 location checks remain provider responsibilities.
+
+`IArchiveBackupFolderProjector` optionally supplies a complete immediate folder
+namespace as an owned `ArchiveBackupWorkUnit`. Paths are relative to the selected
+source root. Objects and child folders must be immediate children of the unit;
+never start its writes while its listing is incomplete. Mirror implements this
+contract, including folders with explicit mirror policies. Finish each unit's
+file processing before enumerating its ordinary descendants. The disposable
+`BackupFolderTraversal` stores the child-work frontier and desired-folder
+membership in temporary indexes; it does not yet provide durable resume state.
+
+Validate sibling files and directories together before unit mutations. Reuse
+provider-owned prospective namespace semantics for recreated descendants during
+dry runs and verification; mutating traversal uses the resulting live namespace.
+Package groups remain consistency units even when a handler exposes artifacts
+through several folder units: count the complete group before consuming any
+member, and route release to its actual owner by projection identity. Selected
+root packages and handlers without the optional folder contract retain complete
+projection preflight. Keep unrelated cleanup and successful manifest publication
+behind the operation-wide success barrier.
+
+Nested beside-folder projections must emit immediate sibling artifacts or
+descendants inside their registered source-folder scope. Reject deeper outputs
+in unrelated sibling namespaces rather than silently losing them during source
+traversal. Built-in ZIP artifacts are immediate siblings.
 
 Manifest I/O belongs to `ArchiveManifestStore`. `BackupManifestTransaction` and
 `RestoreManifestTransaction` are operation-owned state, never singleton mutable

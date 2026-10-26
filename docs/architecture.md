@@ -283,16 +283,27 @@ logical name if native Unicode equivalence differs.
 Provider-owned root `.yabt-tmp` plumbing retains its existing case-variant
 handling; that exception does not apply to live data names.
 
-Backup snapshots projected path metadata for namespace preflight before live
-reconciliation; payload openers remain lazy. Restore validates its complete
-expanded plan before committing files. Mapping failures use ordinary contextual
-YABT exceptions and the existing failure/recovery path. They do not authorize
-renaming, skipping desired content, or treating it as removed. Later I/O failures
-retain already committed safe checkpoints; operations are not whole-tree
-transactions.
+Backup handlers may expose complete immediate folder work units through
+`IArchiveBackupFolderProjector`. Mirror uses this path: discover one folder's
+files and child-directory names, validate their complete prospective namespace,
+then process its files before descending. An incomplete folder listing permits
+no writes from that unit. Explicit mirror policies preserve this locality.
+The child-work frontier and desired-folder membership use disposable temporary
+indexes; the complete source tree's projected-object list is no longer required
+for this path. Handlers without the optional contract retain complete-projection
+preflight, including a selected root ZIP.
+
+Restore still validates its complete expanded plan before committing files.
+Mapping failures use ordinary contextual YABT exceptions and the existing
+failure/recovery path. They do not authorize renaming, skipping desired content,
+or treating it as removed. A later backup unit may fail after earlier units have
+committed; previous bytes remain in history and unrelated cleanup and successful
+manifest publication remain suppressed. Operations are not whole-tree
+transactions. This first incremental slice does not persist progress across
+processes; reruns still rediscover source state.
 
 Backup plans file/directory transitions and provider-equivalent spelling changes
-before opening replacement payloads. It validates the desired layout through
+before opening replacement payloads. It validates each work unit's layout through
 `IObjectStoreNamespace.AfterRemoving` , then historizes the confirmed blockers.
 The prospective namespace models recreated directories using their surviving
 parent's comparison rules; existing directories retain their own rules. Normal
@@ -393,11 +404,25 @@ manifest cannot embed its own finished package hash without creating a cycle.
 
 `backup` and `restore` enter one direction-selected operation boundary, then use
 typed direction-specific preparation and application pipelines. They share
-bidirectional handlers, desired-object reconciliation, and historization. Backup
-consumes reconciliation results incrementally so at most one replay object is
-staged. Restore completes metadata, path-safety, and reconciliation preflight
-globally, then prepares final files concurrently and commits each validated file
-independently.
+bidirectional handlers, desired-object reconciliation, and historization. Mirror
+backup discovers and applies complete folder work units, retaining at most one
+comparison replay object at a time. Package sibling consistency still spans the
+complete artifact group, including artifacts exposed through separate units;
+release uses an indexed projection-owner lookup. Restore completes metadata,
+path-safety, and reconciliation preflight globally, then prepares final files
+concurrently and commits each validated file independently.
+
+Nested package projections may expose immediate sibling artifacts or descendant
+artifacts within their registered source-folder scope. Deeper outputs under
+unrelated sibling folders are rejected because the projection adapter cannot
+route traversal to them. Built-in ZIP groups use immediate sibling artifacts.
+
+The next incremental stages are batched, crash-surviving progress evidence and
+restore integration. Progress must remain disposable, bind operation identity
+and freshness evidence, and record completed work only after successful commits.
+Ordinary folder boundaries and complete package groups are the initial intended
+checkpoint granularity. Partial ZIP construction, within-folder listing cursors,
+and independently verifiable manifest shards remain separate work.
 
 Projection provenance is carried both in schema-version-3 root change-manifest
 entries and in nested package-manifest entries. Restore reverses these groups

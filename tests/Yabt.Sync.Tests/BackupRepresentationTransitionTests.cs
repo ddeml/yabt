@@ -209,6 +209,31 @@ public sealed class BackupRepresentationTransitionTests
     }
 
     [TestMethod]
+    public async Task VerifyAsyncModelsNestedCaseOnlyDirectoryRenameWithoutMutatingArchive()
+    {
+        using var fixture = new TransitionFixture();
+        await fixture.ConfigureAsync();
+        fixture.RequireCaseInsensitiveArchive();
+        await fixture.WriteSourceAsync("reports/direct.txt", "direct child payload");
+        await fixture.WriteSourceAsync("reports/nested/deep.txt", "grandchild payload");
+        await fixture.BackupSuccessfullyAsync();
+        Directory.Move(fixture.SourcePath("reports"), fixture.SourcePath("temporary"));
+        Directory.Move(fixture.SourcePath("temporary"), fixture.SourcePath("Reports"));
+        var before = fixture.SnapshotArchive();
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.AreEqual(0, result.FailedCount, result.Message);
+        Assert.IsFalse(result.Completed, "Verification must report the pending representation change.");
+        CollectionAssert.AreEqual(before, fixture.SnapshotArchive());
+        fixture.AssertExactArchiveChildName("", "reports");
+
+        await fixture.BackupSuccessfullyAsync();
+        var verification = await fixture.VerifyAsync();
+        Assert.IsTrue(verification.Completed, verification.Message);
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task BackupAsyncRecoversAfterReplacementPayloadCannotBeRead(bool replacesDirectory)
@@ -324,6 +349,9 @@ public sealed class BackupRepresentationTransitionTests
 
         public Task<SyncRunResult> BackupAsync(bool dryRun = false) =>
             _services.GetRequiredService<IArchiveSynchronizer>().BackupAsync(new(_sourceRoot, DryRun: dryRun));
+
+        public Task<SyncRunResult> VerifyAsync() =>
+            _services.GetRequiredService<IArchiveSynchronizer>().VerifyAsync(new(_sourceRoot, ByteForByte: true));
 
         public async Task BackupSuccessfullyAsync()
         {

@@ -655,90 +655,176 @@ internal sealed class ArchiveBackupOperation
                     --completedGroup.RemainingObjects == 0)
                 {
                     await CompleteBackupProjectionGroupAsync(completedGroup);
+                    backupProjectionGroups.Remove(key);
                 }
             }
         }
 
-        ArchiveReconciliationTraversal reconciliationTraversal;
+        void RegisterProjectionGroups(IEnumerable<ArchiveProjectedObject> desiredObjects, bool useKnownCounts)
+        {
+            var groups = desiredObjects.Where(item => item.Projection is not null).GroupBy
+            (
+                item =>
+                {
+                    var projection = item.Projection!;
+                    return new RestoreProjectionKey
+                    (
+                        projection.LogicalPath, projection.Format, projection.FormatVersion, projection.ProjectionId
+                    );
+                }
+            );
+            foreach (var group in groups)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (backupProjectionGroups.ContainsKey(group.Key)) { continue; }
+
+                var projection = group.First().Projection!;
+                var count = group.Count();
+                if (useKnownCounts &&
+                    ((ArchiveProjectionObjectStore)projectionRequest.SourceStore).
+                        TryGetProjectionArtifactCount(projection, out var completeCount))
+                {
+                    if (completeCount < count)
+                    {
+                        throw new YabtSyncException("A backup projection exceeded its complete artifact count.");
+                    }
+                    count = completeCount;
+                }
+
+                backupProjectionGroups.Add
+                (
+                    group.Key,
+                    new()
+                    {
+                        Projection = projection,
+                        RemainingObjects = count,
+                    }
+                );
+            }
+        }
+
+        var folderProjector = context.FormatHandler.ProjectsBesideSourceFolder ? null :
+            context.FormatHandler as IArchiveBackupFolderProjector;
+        using var folderTraversal = folderProjector is null ? null : new BackupFolderTraversal(manifestIndex);
+        IReadOnlySet<string> desiredFolderPaths;
         try
         {
-            // Validate the entire desired namespace before the reconciler may mutate live data.
-            // Content remains lazy; this snapshot contains only projection metadata and openers.
-            var desiredObjects = new List<ArchiveProjectedObject>();
-            await foreach (var projectedObject in projectedObjects.WithCancellation(cancellationToken))
-            {
-                ArchivePathRules.ValidateProjectedLiveObjectPath
-                (
-                    projectedObject.RelativePath,
-                    context.TargetDescriptor.Layout
-                );
-                desiredObjects.Add(projectedObject);
-                if (projectedObject.Projection is not null)
-                {
-                    var projection = projectedObject.Projection;
-                    var key = new RestoreProjectionKey(
-                        projection.LogicalPath, projection.Format, projection.FormatVersion, projection.ProjectionId);
-                    if (!backupProjectionGroups.TryGetValue(key, out var group))
-                    {
-                        group = new() { Projection = projection };
-                        backupProjectionGroups.Add(key, group);
-                    }
-                    group.RemainingObjects++;
-                }
-            }
-
             var targetNamespace = context.TargetStore.Namespace
                 .Scope(ObjectPath.Parse(context.TargetDescriptor.Layout.LivePrefix));
-            var representationConflicts = await _targetReconciler.PlanBackupRepresentationConflictsAsync
-            (
-                context.TargetStore,
-                context.TargetDescriptor.Layout,
-                targetNamespace,
-                desiredObjects,
-                targetFolders,
-                absentTargetFolders,
-                cancellationToken
-            );
-            targetNamespace
-                .AfterRemoving(representationConflicts.Select(conflict => ObjectPath.Parse(conflict.RelativePath)))
-                .ValidateTree
+            if (folderProjector is not null)
+            {
+                while (folderTraversal!.TryTake(out var work))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await using var unit = await folderProjector.ProjectBackupFolderAsync
+                    (
+                        projectionRequest, work.RelativePath, cancellationToken
+                    );
+                    BackupFolderTraversal.ValidateUnit(work, unit);
+                    foreach (var item in unit.Objects)
+                    {
+                        ArchivePathRules.ValidateProjectedLiveObjectPath
+                        (
+                            item.RelativePath, context.TargetDescriptor.Layout
+                        );
+                    }
+                    foreach (var child in unit.ChildFolderPaths)
+                    {
+                        ArchivePathRules.ValidateProjectedLiveFolderPath(child, context.TargetDescriptor.Layout);
+                    }
+
+                    // Dry runs retain the physical blockers. Recreated descendants
+                    // must use their prospective ancestor semantics while planning.
+                    var unitNamespace = writeChanges || work.RemovedAncestorPath is null ? targetNamespace :
+                        targetNamespace.AfterRemoving([ObjectPath.Parse(work.RemovedAncestorPath)]);
+                    var conflicts = await _targetReconciler.PlanBackupFolderRepresentationConflictsAsync
+                    (
+                        context.TargetStore,
+                        context.TargetDescriptor.Layout,
+                        unitNamespace,
+                        unit.RelativePath,
+                        unit.Objects,
+                        unit.ChildFolderPaths,
+                        targetFolders,
+                        absentTargetFolders,
+                        cancellationToken
+                    );
+                    unitNamespace.AfterRemoving(conflicts.Select(conflict => ObjectPath.Parse(conflict.RelativePath))).
+                        ValidateTree
+                        (
+                            unit.Objects.Select(item => ObjectPath.Parse(item.RelativePath)),
+                            unit.ChildFolderPaths.Select(ObjectPath.Parse)
+                        );
+                    RegisterProjectionGroups(unit.Objects, useKnownCounts: true);
+                    await _targetReconciler.ApplyBackupRepresentationConflictsAsync
+                    (
+                        context.TargetStore, historizer, context.TargetDescriptor.Layout,
+                        conflicts, previousManifestEntries, summary, writeChanges, verifyOnly,
+                        EnsureChangeManifestInvalidatedAsync, cancellationToken
+                    );
+                    await ArchiveReconciler.ReconcileAsync
+                    (
+                        unit.Objects,
+                        unit.ChildFolderPaths,
+                        StringComparer.Ordinal,
+                        static _ => { },
+                        TakeExistingBackupObjectAsync,
+                        ConsumeBackupObjectAsync,
+                        cancellationToken
+                    );
+                    folderTraversal.ScheduleChildren(work, unit, conflicts, unitNamespace.PathComparer, cancellationToken);
+                }
+
+                desiredFolderPaths = folderTraversal.DesiredFolderPaths;
+            }
+            else
+            {
+                // Handlers without folder-local ownership retain complete projection
+                // preflight, including a packaged selected root.
+                var desiredObjects = new List<ArchiveProjectedObject>();
+                await foreach (var projectedObject in projectedObjects.WithCancellation(cancellationToken))
+                {
+                    ArchivePathRules.ValidateProjectedLiveObjectPath
+                    (
+                        projectedObject.RelativePath, context.TargetDescriptor.Layout
+                    );
+                    desiredObjects.Add(projectedObject);
+                }
+
+                RegisterProjectionGroups(desiredObjects, useKnownCounts: false);
+                var representationConflicts = await _targetReconciler.PlanBackupRepresentationConflictsAsync
                 (
-                    desiredObjects.Select(item => ObjectPath.Parse(item.RelativePath)),
-                    []
+                    context.TargetStore, context.TargetDescriptor.Layout, targetNamespace,
+                    desiredObjects, targetFolders, absentTargetFolders, cancellationToken
                 );
-            await _targetReconciler.ApplyBackupRepresentationConflictsAsync
-            (
-                context.TargetStore,
-                historizer,
-                context.TargetDescriptor.Layout,
-                representationConflicts,
-                previousManifestEntries,
-                summary,
-                writeChanges,
-                verifyOnly,
-                EnsureChangeManifestInvalidatedAsync,
-                cancellationToken
-            );
-            reconciliationTraversal = await ArchiveReconciler.ReconcileAsync
-            (
-                desiredObjects,
-                explicitDirectories: null,
-                StringComparer.Ordinal,
-                relativePath => ArchivePathRules.ValidateProjectedLiveObjectPath(
-                    relativePath,
-                    context.TargetDescriptor.Layout),
-                TakeExistingBackupObjectAsync,
-                ConsumeBackupObjectAsync,
-                cancellationToken
-            );
+                targetNamespace.AfterRemoving
+                (
+                    representationConflicts.Select(conflict => ObjectPath.Parse(conflict.RelativePath))
+                ).ValidateTree(desiredObjects.Select(item => ObjectPath.Parse(item.RelativePath)), []);
+                await _targetReconciler.ApplyBackupRepresentationConflictsAsync
+                (
+                    context.TargetStore, historizer, context.TargetDescriptor.Layout,
+                    representationConflicts, previousManifestEntries, summary, writeChanges, verifyOnly,
+                    EnsureChangeManifestInvalidatedAsync, cancellationToken
+                );
+                var reconciliationTraversal = await ArchiveReconciler.ReconcileAsync
+                (
+                    desiredObjects,
+                    explicitDirectories: null,
+                    StringComparer.Ordinal,
+                    static _ => { },
+                    TakeExistingBackupObjectAsync,
+                    ConsumeBackupObjectAsync,
+                    cancellationToken
+                );
+                desiredFolderPaths = reconciliationTraversal.DesiredFolderPaths;
+            }
         }
         catch (Exception ex) when (SourceObjectReadException.FindAll(ex).Count != 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
             CaptureSourceReadFailures(ex);
-            reconciliationTraversal = new(
-                new HashSet<string>(StringComparer.Ordinal),
-                new HashSet<string>(StringComparer.Ordinal));
+            desiredFolderPaths = new HashSet<string>(StringComparer.Ordinal);
         }
 
         if (context.FormatHandler.ProjectsBesideSourceFolder &&
@@ -753,11 +839,15 @@ internal sealed class ArchiveBackupOperation
 
         if (sourceReadFailures.Count == 0)
         {
+            if (backupProjectionGroups.Count != 0)
+            {
+                throw new YabtSyncException("Backup traversal did not complete every projection artifact group.");
+            }
             await _targetReconciler.ReconcileDesiredTargetStateAsync(
                 context.TargetStore,
                 context.TargetDescriptor.Layout,
                 targetFolders,
-                reconciliationTraversal.DesiredFolderPaths,
+                desiredFolderPaths,
                 cancellationToken);
 
             await _targetReconciler.MoveRemainingTargetObjectsToHistoryAsync(
@@ -765,7 +855,7 @@ internal sealed class ArchiveBackupOperation
                 historizer,
                 context.TargetDescriptor.Layout,
                 targetFolders,
-                reconciliationTraversal.DesiredFolderPaths,
+                desiredFolderPaths,
                 previousManifestEntries,
                 summary,
                 writeChanges,

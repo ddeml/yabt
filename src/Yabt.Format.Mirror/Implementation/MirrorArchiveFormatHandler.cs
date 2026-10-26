@@ -9,7 +9,7 @@ namespace Yabt.Format.Mirror.Implementation;
 internal sealed class MirrorArchiveFormatHandler
 (
     ILogger<MirrorArchiveFormatHandler> _logger
-) : IArchiveFormatHandler
+) : IArchiveFormatHandler, IArchiveBackupFolderProjector
 {
     public string FormatName => MirrorArchiveFormatName.Value;
 
@@ -51,6 +51,66 @@ internal sealed class MirrorArchiveFormatHandler
     {
         _logger.LogTrace(nameof(ProjectBackupAsync));
         return new(ProjectBackupObjectsAsync(request, cancellationToken));
+    }
+
+    public async Task<ArchiveBackupWorkUnit> ProjectBackupFolderAsync
+    (
+        ArchiveProjectionRequest request,
+        string relativeFolderPath,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(ProjectBackupFolderAsync));
+        ArgumentNullException.ThrowIfNull(request);
+
+        var relativeFolder = ObjectPath.Parse(relativeFolderPath);
+        var sourceRoot = ObjectPath.Parse(request.SourcePrefix);
+        var sourceFolder = sourceRoot.Combine(relativeFolder);
+        if (relativeFolder.IsRoot)
+        {
+            ValidateBackupPolicy
+            (
+                request.Policy ?? FolderPolicy.Default,
+                sourceRoot.Combine(ObjectPath.Parse(".yabt-policy.json")).Value
+            );
+            await request.SourceStore.EnsureReadyAsync(cancellationToken);
+        }
+
+        var objects = new List<ArchiveProjectedObject>();
+        var children = new List<string>();
+        var sourceItems = request.SourceStore.GetFolderItemsAsync
+        (
+            sourceFolder.Value, recursive: false, cancellationToken
+        );
+        await foreach (var sourceItem in sourceItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sourcePath = ObjectPath.Parse(sourceItem.Key);
+            if (sourcePath.IsRoot || sourcePath.Parent != sourceFolder)
+            {
+                throw new YabtFormatMirrorException
+                (
+                    $"Folder '{sourceFolder}' returned non-child item '{sourcePath}'."
+                );
+            }
+            var relativePath = ArchiveLayout.RemovePrefix(sourcePath.Value, sourceRoot.Value);
+            if (sourceItem.IsFolder)
+            {
+                children.Add(relativePath);
+                continue;
+            }
+            objects.Add(CreateProjectedObject
+            (
+                request.SourceStore, sourceItem.Object!, sourcePath.Value, relativePath
+            ));
+            _logger.LogMirrorProjectedObject(sourcePath.Value, relativePath);
+        }
+
+        if (objects.Count == 0 && children.Count == 0)
+        {
+            objects.Add(CreateEmptyFolderMarker(sourceRoot.Value, sourceFolder.Value));
+        }
+        return new(relativeFolder.Value, objects, children);
     }
 
     private async IAsyncEnumerable<ArchiveProjectedObject> ProjectBackupObjectsAsync

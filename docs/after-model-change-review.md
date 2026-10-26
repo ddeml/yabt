@@ -998,17 +998,48 @@ restore timings do not exhibit quadratic growth in these measured cases;
 phase-specific backup ownership, provider-call counts, and actual scratch I/O
 volume were not measured here.
 
-**Recommended next step:** Establish stable path/row identities and move restore
-reconciliation bookkeeping into operation-owned `TemporaryIndex` storage as
-isolated groundwork. Then replace the retained plan's opener/dependency graph
-with replayable metadata and explicit content-source ownership. Never serialize
-delegates or hide an unbounded per-file delegate registry behind a disk index.
-Preserve format/provider ownership, comparison semantics, deferred cleanup, and
-started-worker lifetime guarantees, with deterministic work-count and recovery
-tests. Re-measure before attributing an improvement to any specific collection.
-Native Linux and deployed-service acceptance from I04 remain outstanding. The
-current changes do not claim a total process-memory bound or complete large-tree
-performance coverage.
+**Incremental backup, first slice (2026-10-26):** Mirror backup now discovers and
+validates one complete immediate folder namespace, applies its files, and then
+visits pending child folders. This includes explicit mirror-policy scopes.
+`IArchiveBackupFolderProjector` and the owned `ArchiveBackupWorkUnit` make the
+boundary explicit; handlers without that contract retain complete-projection
+preflight. A selected root ZIP remains one complete projection.
+
+Sibling files and child-directory names are validated together before the unit
+moves blockers or writes content. A later unit can fail after earlier safe
+commits. Unrelated cleanup and successful manifest publication remain deferred
+until the whole traversal succeeds. Prospective ancestor rules remain active
+for dry runs and verification; mutating traversal uses the actual resulting
+namespace. Package artifact counts and release routing preserve complete group
+ownership, and policy-scope lookup now probes ancestors rather than scanning all
+earlier scopes.
+
+The pending-folder frontier and desired-folder membership use disposable
+temporary indexes. This removes the full projected-object snapshot for ordinary
+mirror traversal, but target caches, policy projection state, and individual wide
+folders can still retain substantial memory. Existing root-manifest work also
+remains. This slice establishes earlier useful writes; it does not yet persist
+checkpoints or claim measured timing or total-memory improvements.
+
+Validation: the Release solution suite passed 1,144 tests with three existing
+Linux-only skips. After the final projection guards and regressions, the Sync
+suite passed 416 tests with the same three skips, bringing distinct passing
+coverage to 1,149 tests. Final builds had no warnings. Regression coverage proves
+commits before descendant enumeration, incomplete-listing isolation, late-error
+and cancellation recovery, read-only traversal, nested case transitions, package
+ownership across folder units, and rejection of hidden projection collisions.
+Independent review and UTF-8, CRLF, Markdown-wrap, and diff checks passed.
+
+**Recommended next step:** Add batched, crash-surviving, disposable progress
+evidence for completed folders and pending work, followed by incremental restore
+integration. Bind reused state to operation identity and freshness evidence;
+prioritize unfinished work while revalidating completed units before success.
+Scheduling children after a collected payload failure must never be mistaken for
+a successful folder checkpoint. Use complete package groups initially, without
+resuming partial ZIP construction or individual folder-listing cursors. Preserve
+provider comparison, deferred cleanup, and started-worker lifetimes. Measure time
+to first verified commit and restart-to-next-new-commit alongside ordinary run
+overhead. Native Linux and deployed-service acceptance from I04 remain pending.
 
 ## Suggested Codex-Sandbox-01 sequence
 

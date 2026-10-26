@@ -125,6 +125,18 @@ internal static class ArchivePathRules
         }
     }
 
+    internal static void ValidateProjectedLiveFolderPath(string relativePath, ArchiveLayout layout)
+    {
+        var liveFolderKey = layout.ToLiveObjectKey(relativePath);
+        if (IsInternalObjectPrefix(liveFolderKey, CreateInternalObjectPrefixes(layout)))
+        {
+            throw new YabtSyncException
+            (
+                $"Projected live folder '{relativePath}' conflicts with archive history or provider plumbing."
+            );
+        }
+    }
+
     internal static bool IsStrictPrefixAncestor(string objectKey, string prefix)
     {
         var normalizedObjectKey = ArchiveLayout.NormalizeObjectKey(objectKey);
