@@ -13,9 +13,10 @@ change, for follow-up work in **Codex-Sandbox-01**.
   configuration. The handoff commit carries those pending changes alongside this
   document.
 - Status: **R01-R09 and I01-I03 are implemented for their documented scopes;
-  I04 implementation and local contracts are complete, with external-service
-  acceptance pending**. Recording the baseline did not implement the fixes. R09
-  was added during the follow-up discussion on 2026-09-21.
+  I04 implementation, local contracts, and Linux/ext4 acceptance are complete,
+  with deployed-service acceptance pending**. Recording the baseline did not
+  implement the fixes. R09 was added during the follow-up discussion on
+  2026-09-21.
 - Scope: correctness, archive safety, recovery, and scalability. This was a code
   review with focused experiments, not an exhaustive audit or an Azure service
   integration test.
@@ -65,7 +66,7 @@ were not claimed as completed runtime reproductions in the review.
 | I01 | Improvement | ZIP buffers accumulate across a backup | Generated large-stream and projection-lifetime regression tests | Implemented |
 | I02 | Improvement | ZIP restore repeatedly parses the central directory | Entry-read instrumentation and large-manifest round-trip tests | Implemented |
 | I03 | Improvement | Current-live restore traverses history unnecessarily | Traversal-count and unreadable-subtree regression tests | Implemented |
-| I04 | Improvement | Synchronizer responsibilities and provider test coverage | Component extraction, provider contracts, recovery fault tests | Implemented locally; external acceptance pending |
+| I04 | Improvement | Synchronizer responsibilities and provider test coverage | Component extraction, provider contracts, recovery fault tests, Linux/ext4 acceptance | Implemented; deployed-service acceptance pending |
 
 P1 means address before relying on the affected archival operation. P2 means a
 concrete correctness or usability defect. Investigate means the execution path
@@ -900,9 +901,9 @@ preservation of a replacement lock owner's document during release.
 
 These fixtures exercise protocol behavior, not deployed-server compatibility.
 They do not establish periodic renewal or cancellation of an active operation
-after renewal failure. Azurite was unavailable on this host; no live Azure
-account or deployed WebDAV server was used. Native Linux and real-service
-acceptance remain explicit follow-up work.
+after renewal failure. The initial provider-contract run used neither Azurite,
+a live Azure account, nor a deployed WebDAV server. Linux/ext4 acceptance under
+Docker Desktop is recorded below; deployed-service acceptance remains pending.
 
 Fifteen focused manifest cases inject failures at publication boundaries and
 verify that old evidence or invalidation markers survive, invalid evidence is
@@ -1168,6 +1169,55 @@ checks pass. Compilation reported no code warnings; NuGet's advisory-feed lookup
 remains unavailable. Other projects were unchanged and were not rerun for this
 test-only slice.
 
+**Linux/ext4 acceptance (2026-10-26):** The dedicated `yabt-linux` Docker Compose
+environment runs the real Release solution suite on Docker Desktop's Linux
+backend in CodexSandbox01. Its persistent `yabt-linux-workspace` volume is
+mounted once at `/work` and was verified as ext4. The checkout, test fixtures,
+temporary content, progress journals, SDK state, and NuGet cache use that mount.
+The container runs as UID 10001 with two CPUs and a 3 GiB memory limit. DSA's
+containers and configuration are separate. See the
+[runner instructions](../tools/linux-acceptance/README.md).
+
+The pinned SDK image provides Ubuntu 24.04.5, .NET SDK 10.0.403, and runtime
+10.0.14 on the WSL 2 Linux kernel `6.18.33.2-microsoft-standard-WSL2`. Preflight
+rejects root execution and unsupported fixture storage; explicit negative
+checks confirmed rejection of root and OverlayFS temporary storage. Actual
+provider tests exercise native file identity, directory links, hard links,
+namespace rules, and mutation behavior.
+
+The first run exposed three test portability failures. Two permission assertions
+examined only the deepest exception and missed the surrounding
+`UnauthorizedAccessException`. A cyclic symlink fixture used directory removal
+where Unix needs to unlink the symlink entry. Fixing those test helpers required
+no production changes. All 29 focused Linux cases then passed; the corresponding
+Windows run passed 26 cases and skipped the three Linux permission tests. The
+Windows rerun used ordinary host execution after the restricted sandbox's test
+launcher could not connect to its worker.
+
+**Final full-suite result:** **1,199 passed, 0 failed, 26 expected platform
+skips**, across all ten test projects. Every skip concerns Windows or
+case-insensitive filesystem behavior and is individually recorded. All 13
+mandatory acceptance rows passed: three Unix literal-backslash cases, three
+native permission-denial cases, and all seven abrupt-process recovery cases.
+The build reported no warnings. The permission tests verify failures during
+readiness, later folder enumeration, and payload reads without modifying source
+content or silently reporting an empty tree.
+
+The accepted source revision is `12c5f10c06e4ed1500283f196b14fad772bcc87b`.
+Environment setup is commit `92ddfa5`; fixture corrections and durable runner
+guidance are commit `12c5f10`. Logs, ten TRX files, the container metadata, and
+`acceptance-summary.json` are retained under `artifacts/linux-acceptance/`, in
+run `12c5f10c06e4-20261026T124729Z-290e5a5a`. The Linux logs and TRX files also
+remain in the persistent volume.
+The host summary confirms complete project coverage, required passing rows,
+successful runner/result export, and no validation issues.
+
+This completes the current Linux/ext4 correctness acceptance, including fresh
+process recovery under WSL 2. It does not establish hardware power-loss
+durability, other filesystem or mount configurations, deployed Azure/WebDAV
+compatibility, or performance equivalence with Windows. Deployed-service
+acceptance remains the next I04 validation step.
+
 ## Suggested Codex-Sandbox-01 sequence
 
 1. Check out the handoff commit and read `AGENTS.md` plus this document.
@@ -1180,9 +1230,9 @@ test-only slice.
    reproductions.
 4. R05-R09 are implemented. R08 uses deterministic coordination to verify
    cancellation ownership rather than timing-dependent sleeps.
-5. I01-I03 and the local I04 implementation are complete. Follow up with
-   native Linux/deployed-service acceptance and the measured large-tree work
-   described under I04.
+5. I01-I03, the I04 implementation, and Linux/ext4 acceptance are complete.
+   Follow up with deployed-service acceptance and the remaining large-tree work
+   described under I04. Reuse the committed Linux runner for later regressions.
 6. Update each finding's status with the fixing commit and verification
    evidence. Do not mark an item resolved merely because the pre-existing suite
    passes.
