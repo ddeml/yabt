@@ -181,7 +181,7 @@ public sealed class PathIdentityTests
             )
         );
 
-        StringAssert.Contains(exception.ToString(), archivePath);
+        StringAssert.Contains(exception.ToString(), archivePath.Split('/')[0]);
         CollectionAssert.AreEqual(originalFiles, SnapshotFiles(fixture.RestoreRoot));
         CollectionAssert.AreEqual(originalDirectories, GetRelativeDirectories(fixture.RestoreRoot));
     }

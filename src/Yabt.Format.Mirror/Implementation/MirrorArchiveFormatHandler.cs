@@ -9,7 +9,7 @@ namespace Yabt.Format.Mirror.Implementation;
 internal sealed class MirrorArchiveFormatHandler
 (
     ILogger<MirrorArchiveFormatHandler> _logger
-) : IArchiveFormatHandler, IArchiveBackupFolderProjector
+) : IArchiveFormatHandler, IArchiveBackupFolderProjector, IArchiveRestoreFolderProjector
 {
     public string FormatName => MirrorArchiveFormatName.Value;
 
@@ -181,6 +181,38 @@ internal sealed class MirrorArchiveFormatHandler
 
         return Task.FromResult(new ArchiveRestoreProjection(
             objects: [artifact with { RelativePath = relativePath }]));
+    }
+
+    public Task<ArchiveRestoreProjection> ProjectRestoreFolderAsync
+    (
+        IReadOnlyList<ArchiveProjectedObject> artifacts,
+        string relativeFolderPath,
+        CancellationToken cancellationToken = default
+    )
+    {
+        _logger.LogTrace(nameof(ProjectRestoreFolderAsync));
+        var folder = ObjectPath.Parse(relativeFolderPath);
+        var files = new List<ArchiveProjectedObject>();
+        var directories = new List<string>();
+        foreach (var artifact in artifacts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = ObjectPath.Parse(artifact.RelativePath);
+            if (path.IsRoot || path.Parent != folder || artifact.Projection is not null)
+            {
+                throw new YabtFormatMirrorException(
+                    $"Artifact '{path}' is not a plain immediate member of folder '{folder}'.");
+            }
+            if (IsEmptyFolderMarker(path.Value))
+            {
+                if (!folder.IsRoot) { directories.Add(folder.Value); }
+            }
+            else
+            {
+                files.Add(artifact);
+            }
+        }
+        return Task.FromResult(new ArchiveRestoreProjection(files, directories));
     }
 
     private async IAsyncEnumerable<ArchiveProjectedObject> ProjectFolderAsync

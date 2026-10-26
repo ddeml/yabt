@@ -190,83 +190,9 @@ internal sealed class RestoreExecutor
         _logger.LogTrace(nameof(ApplyRestorePlanAsync));
 
         var failures = new List<SyncItemFailure>(reconciliation.Failures);
-        var liveStateChanged = reconciliation.NewCount != 0 ||
-            reconciliation.ChangedCount != 0 ||
-            reconciliation.ExtraCount != 0;
-        var manifestTransaction = new RestoreManifestTransaction
-        (
-            _manifests,
-            destinationStore,
-            logicalStateManifestLoad,
-            _logger
-        );
-        ArchiveHistorizer? historizer = null;
-        var mutationStarted = false;
-
-        async Task EnsureMutationStartedAsync(CancellationToken currentCancellationToken)
-        {
-            if (mutationStarted) { return; }
-
-            await manifestTransaction.BeginAsync
-            (
-                liveStateChanged,
-                rootDescriptorRestore.NeedsWrite,
-                currentCancellationToken
-            );
-
-            historizer = new ArchiveHistorizer(
-                destinationStore,
-                destinationLayout,
-                _timeProvider.GetUtcNow(),
-                _logger);
-            await historizer.InspectRecoveryStateAsync(currentCancellationToken);
-            mutationStarted = true;
-        }
-
-        async Task MoveHistoryItemAsync
-        (
-            RestoreHistoryMove historyMove,
-            CancellationToken currentCancellationToken
-        )
-        {
-            var activeHistorizer = historizer ??
-                throw new YabtSyncException(
-                    "Restore historization was requested before mutation initialization.");
-            if (historyMove.IsFolder)
-            {
-                await activeHistorizer.MoveFolderAsync(
-                    historyMove.RelativePath,
-                    "Restore",
-                    currentCancellationToken);
-            }
-            else
-            {
-                await activeHistorizer.MoveObjectAsync(
-                    historyMove.RelativePath,
-                    "Restore",
-                    currentCancellationToken);
-            }
-
-            _logger.ReportRestoreItemHistorized(historyMove);
-        }
-
-        async Task BeforeRestoreFileCommitAsync
-        (
-            ArchiveProjectedObject file,
-            CancellationToken currentCancellationToken
-        )
-        {
-            await EnsureMutationStartedAsync(currentCancellationToken);
-            var blockers = reconciliation.HistoryMoves.GetBlockers(
-                file.RelativePath,
-                currentCancellationToken);
-            foreach (var historyMove in blockers)
-            {
-                await MoveHistoryItemAsync(historyMove, currentCancellationToken);
-                reconciliation.HistoryMoves.MarkCompleted(historyMove);
-            }
-        }
-
+        var session = CreateSession(
+            destinationStore, destinationLayout, restoreTarget, logicalStateManifestLoad,
+            rootDescriptorRestore, archiveRootDocument);
         failures.AddRange(await ApplyRestoreFilesAsync(
             plan,
             reconciliation,
@@ -274,7 +200,7 @@ internal sealed class RestoreExecutor
             restoreTarget,
             byteForByte,
             restoreMaximumConcurrency,
-            BeforeRestoreFileCommitAsync,
+            (file, token) => session.BeforeFileCommitAsync(reconciliation, file, token),
             cancellationToken));
 
         if (failures.Count != 0)
@@ -282,83 +208,8 @@ internal sealed class RestoreExecutor
             return failures;
         }
 
-        await EnsureMutationStartedAsync(cancellationToken);
-        foreach (var historyMove in reconciliation.HistoryMoves.EnumeratePending(cancellationToken))
-        {
-            await MoveHistoryItemAsync(historyMove, cancellationToken);
-            reconciliation.HistoryMoves.MarkCompleted(historyMove);
-        }
-
-        await restoreTarget.CreateDirectoryAsync(
-            destinationLayout.ToLiveObjectKey(string.Empty),
-            cancellationToken);
-        if (restoreRootNeedsCreation)
-        {
-            _logger.ReportRestoreItemWritten("new", "directory", ".");
-        }
-        foreach (var directoryPath in plan.EmptyDirectories)
-        {
-            await restoreTarget.CreateDirectoryAsync(
-                destinationLayout.ToLiveObjectKey(directoryPath),
-                cancellationToken);
-            if (reconciliation.NewDesiredPaths.Contains(directoryPath) ||
-                reconciliation.ChangedDesiredPaths.Contains(directoryPath))
-            {
-                _logger.ReportRestoreItemWritten(
-                    ArchiveOperationLogging.GetRestoreChangeKind(reconciliation, directoryPath),
-                    "directory",
-                    directoryPath);
-            }
-        }
-
-        var changedDirectories = reconciliation.ChangedDesiredPaths
-            .Where(path => plan.IsDirectory(path) && !plan.IsEmptyDirectory(path));
-        foreach (var directoryPath in changedDirectories)
-        {
-            _logger.ReportRestoreItemWritten("changed", "directory", directoryPath);
-        }
-
-        if (rootDescriptorRestore.NeedsWrite)
-        {
-            if (archiveRootDocument is null)
-            {
-                throw new YabtSyncException(
-                    "Restore planned a root descriptor write without preserved archive bytes.");
-            }
-
-            if (rootDescriptorRestore.MoveExistingToHistory)
-            {
-                await (historizer ??
-                    throw new YabtSyncException(
-                        "Restore root descriptor historization was not initialized."))
-                    .MoveRootObjectAsync(
-                    BackupRootFileNames.Primary,
-                    "Restore",
-                    cancellationToken);
-                _logger.LogControlMetadataOperation(
-                    "Moved to restore history",
-                    BackupRootFileNames.Primary);
-            }
-
-            await _rootDocuments.UploadRootDocumentAsync(
-                destinationStore,
-                archiveRootDocument,
-                cancellationToken);
-        }
-
-        await (historizer ??
-            throw new YabtSyncException(
-                "Restore mutation did not initialize historization."))
-            .CompleteAsync(cancellationToken);
-
-        using var nextLogicalStateManifest = await _manifests.CreateLogicalStateManifestAsync
-        (
-            destinationStore,
-            destinationLayout,
-            plan,
-            cancellationToken
-        );
-        await manifestTransaction.PublishAsync(nextLogicalStateManifest, cancellationToken);
+        await session.CompleteAsync(
+            plan, reconciliation, restoreRootNeedsCreation, cancellationToken);
 
         if (_logger.IsEnabled(LogLevel.Debug))
         {
@@ -373,7 +224,23 @@ internal sealed class RestoreExecutor
         return failures;
     }
 
-    private async Task<IReadOnlyList<SyncItemFailure>> ApplyRestoreFilesAsync
+    internal RestoreMutationSession CreateSession
+    (
+        IArchiveMutableObjectStore destinationStore,
+        ArchiveLayout destinationLayout,
+        IRestoreDestination restoreTarget,
+        LogicalStateManifestLoad logicalStateManifestLoad,
+        RootDescriptorRestore rootDescriptorRestore,
+        BackupRootDocument? archiveRootDocument
+    )
+    {
+        _logger.LogTrace(nameof(CreateSession));
+        return new(destinationStore, destinationLayout, restoreTarget, logicalStateManifestLoad,
+            rootDescriptorRestore, archiveRootDocument, _manifests, _rootDocuments,
+            _timeProvider, _logger);
+    }
+
+    internal async Task<IReadOnlyList<SyncItemFailure>> ApplyRestoreFilesAsync
     (
         RestorePlan plan,
         RestoreReconciliation reconciliation,

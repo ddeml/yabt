@@ -1049,8 +1049,22 @@ every artifact consistency check succeeds; partial ZIP construction is never
 persisted. Generic artifact groups spanning folders conservatively leave their
 earlier units pending.
 
-Incremental restore and timing validation follow in separate commits. Native
-Linux and deployed-service acceptance from I04 remain pending.
+**Incremental mirror restore (2026-10-26):** Current-schema plain mirror restore
+now applies complete immediate folder units after root-manifest validation and
+destination safety checks. Its manifest folder index and frontier are disk-backed;
+projected files, reconciliation state, and dependencies are retained per unit.
+The existing bounded worker pipeline and one operation-wide mutation session
+preserve file validation, history allocation, invalidation, and deferred cleanup.
+Manifest-bound local progress prioritizes unfinished branches before revalidating
+completed folders. Packaged and legacy archives retain complete-plan fallback.
+
+Regression tests cover writes before descendant enumeration, late listing and
+payload failures, cancellation, dry runs, empty-folder reporting, and restart
+priority. Combined validation covers 1,192 passing tests and three existing
+Linux-only skips after correcting a test-only shared-file read. NuGet advisory
+lookup reported an unavailable feed; compilation had no code warnings. Package
+integration and timing validation follow separately. Native Linux and
+deployed-service acceptance from I04 remain pending.
 
 ## Suggested Codex-Sandbox-01 sequence
 

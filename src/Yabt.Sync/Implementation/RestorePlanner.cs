@@ -21,6 +21,94 @@ internal sealed class RestorePlanner
         StringComparer.Ordinal
     );
 
+    internal IArchiveRestoreFolderProjector? ResolveFolderProjector(ArchiveChangeManifest manifest)
+    {
+        _logger.LogTrace(nameof(ResolveFolderProjector));
+        if (manifest.SchemaVersion != ArchiveChangeManifest.ExpectedSchemaVersion ||
+            manifest.RootFormat is null ||
+            !_formatHandlers.TryGetValue(manifest.RootFormat, out var handler) ||
+            handler.ProjectsBesideSourceFolder ||
+            manifest.Entries.Any(entry => entry.Projection is not null))
+        {
+            return null;
+        }
+        return handler as IArchiveRestoreFolderProjector;
+    }
+
+    internal async Task<RestorePlan> CreateRestoreFolderPlanAsync
+    (
+        IArchiveRestoreFolderProjector projector,
+        IReadOnlyList<ArchiveProjectedObject> artifacts,
+        string relativeFolderPath,
+        IReadOnlyCollection<string> childDirectories,
+        IObjectStoreNamespace destinationNamespace,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(CreateRestoreFolderPlanAsync));
+        var projection = await projector.ProjectRestoreFolderAsync(
+            artifacts, relativeFolderPath, cancellationToken);
+        try
+        {
+            using var index = TemporaryIndex.Create();
+            using var filePaths = index.CreateSet();
+            using var directoryPaths = index.CreateSet();
+            using var nonemptyDirectories = index.CreateSet();
+            var folderPath = ObjectPath.Parse(relativeFolderPath);
+            var files = projection.Objects.ToArray();
+            foreach (var file in files)
+            {
+                var path = ObjectPath.Parse(file.RelativePath);
+                if (path.IsRoot || path.Parent != folderPath || file.Projection is not null ||
+                    !ArchiveHash.IsValid(file.ContentHash))
+                {
+                    throw new YabtSyncException(
+                        $"Folder restore produced unsupported output '{file.RelativePath}'.");
+                }
+                AddRestoreFilePath(file.RelativePath, destinationNamespace, filePaths, directoryPaths);
+                for (var parent = path.Parent; !parent.IsRoot; parent = parent.Parent)
+                {
+                    nonemptyDirectories.Add(parent.Value);
+                }
+            }
+            foreach (var directory in projection.Directories)
+            {
+                if (ObjectPath.Parse(directory) != folderPath)
+                {
+                    throw new YabtSyncException(
+                        $"Folder restore produced nonlocal directory '{directory}'.");
+                }
+                AddRestoreDirectory(directory, destinationNamespace, filePaths, directoryPaths);
+                for (var parent = folderPath.Parent; !parent.IsRoot; parent = parent.Parent)
+                {
+                    nonemptyDirectories.Add(parent.Value);
+                }
+            }
+            foreach (var child in childDirectories)
+            {
+                AddRestoreDirectory(child, destinationNamespace, filePaths, directoryPaths);
+                for (var parent = ObjectPath.Parse(child); !parent.IsRoot; parent = parent.Parent)
+                {
+                    // A child is classified for counting when its own unit is processed.
+                    nonemptyDirectories.Add(parent.Value);
+                }
+            }
+            destinationNamespace.ValidateTree(files.Select(file => ObjectPath.Parse(file.RelativePath)),
+                directoryPaths.Select(ObjectPath.Parse));
+            var directories = RestoreDirectoryIndex.Create(directoryPaths, nonemptyDirectories,
+                destinationNamespace.PathComparer, cancellationToken);
+            return new(files, directories, [projection],
+                files.ToDictionary(file => file.RelativePath,
+                    _ => (IReadOnlyList<ArchiveRestoreProjection>)[projection], StringComparer.Ordinal),
+                destinationNamespace);
+        }
+        catch (Exception)
+        {
+            await projection.DisposeAsync();
+            throw;
+        }
+    }
+
     internal IArchiveFormatHandler ResolveRestoreRootFormatHandler
     (
         ArchiveChangeManifest changeManifest,

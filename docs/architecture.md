@@ -293,10 +293,16 @@ indexes; the complete source tree's projected-object list is no longer required
 for this path. Handlers without the optional contract retain complete-projection
 preflight, including a selected root ZIP.
 
-Restore still validates its complete expanded plan before committing files.
+Current-schema plain mirror restore uses `IArchiveRestoreFolderProjector` to
+reverse one complete immediate folder at a time. Manifest entries and folder
+frontiers use disposable disk indexes. Root-wide manifest integrity validation
+and destination safety traversal still precede writes; archive payload discovery
+and reconciliation are local to each unit. One operation-owned mutation session
+keeps history allocation and manifest invalidation consistent across units.
+Legacy and packaged archives retain complete expanded-plan preflight.
 Mapping failures use ordinary contextual YABT exceptions and the existing
 failure/recovery path. They do not authorize renaming, skipping desired content,
-or treating it as removed. A later backup unit may fail after earlier units have
+or treating it as removed. A later work unit may fail after earlier units have
 committed; previous bytes remain in history and unrelated cleanup and successful
 manifest publication remain suppressed. Operations are not whole-tree
 transactions. Reruns rediscover current source state, using disposable local

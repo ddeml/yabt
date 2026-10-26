@@ -31,6 +31,7 @@ public static class YabtSyncServiceCollectionExtensions
         services.AddYabtTemporaryContent();
         services.AddSingleton<ArchiveBackupOperation>();
         services.AddSingleton<ArchiveRestoreOperation>();
+        services.AddSingleton<IncrementalRestoreOperation>();
         services.AddSingleton<ArchiveOperationContextFactory>();
         services.AddSingleton<ArchiveRootDocuments>();
         services.AddSingleton<RestorePlanner>();

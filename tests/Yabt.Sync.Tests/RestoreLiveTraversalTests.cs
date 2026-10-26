@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Yabt.Core.Abstractions;
 using Yabt.Core.Models;
 using Yabt.FileSystem;
@@ -78,7 +79,7 @@ public sealed class RestoreLiveTraversalTests
     }
 
     [TestMethod]
-    public async Task RestorePropagatesLiveFolderListingFailureBeforeDestinationMutation()
+    public async Task RestorePropagatesLaterListingFailureAfterEarlierSafeCommit()
     {
         using var fixture = await RestoreTraversalFixture.CreateAsync(ArchiveLayout.Default);
         fixture.Archive.UnreadablePrefix = "folder";
@@ -87,7 +88,8 @@ public sealed class RestoreLiveTraversalTests
 
         StringAssert.Contains(exception.Message, "Cannot list 'folder'");
         Assert.IsTrue(fixture.Archive.FolderVisits.Contains("folder"));
-        Assert.IsFalse(Directory.Exists(fixture.DestinationRoot));
+        Assert.AreEqual("root.txt", await File.ReadAllTextAsync(Path.Combine(fixture.DestinationRoot, "root.txt")));
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.DestinationRoot, ArchiveLogicalStateManifest.FileName)));
     }
 
     [TestMethod]
@@ -102,6 +104,103 @@ public sealed class RestoreLiveTraversalTests
 
         StringAssert.Contains(exception.Message, untrackedKey);
         StringAssert.Contains(exception.Message, "not covered by the change manifest");
+        Assert.AreEqual("root.txt", await File.ReadAllTextAsync(Path.Combine(fixture.DestinationRoot, "root.txt")));
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.DestinationRoot, ArchiveLogicalStateManifest.FileName)));
+    }
+
+    [TestMethod]
+    public async Task RestoreCommitsRootBeforeDiscoveringDescendants()
+    {
+        using var fixture = await RestoreTraversalFixture.CreateAsync(ArchiveLayout.Default);
+        fixture.Archive.BeforeListing = folder =>
+        {
+            if (folder.Length == 0) { return; }
+            Assert.AreEqual("root.txt", File.ReadAllText(Path.Combine(fixture.DestinationRoot, "root.txt")));
+        };
+
+        var result = await fixture.RestoreAsync();
+
+        Assert.IsTrue(result.Completed, result.Message);
+        await fixture.AssertLivePayloadsAsync();
+    }
+
+    [TestMethod]
+    public async Task IncompleteFolderNeverWritesItsPartiallyListedPayloads()
+    {
+        using var fixture = await RestoreTraversalFixture.CreateAsync(ArchiveLayout.Default);
+        fixture.Archive.AfterListedItem = folder =>
+        {
+            if (folder == "folder") { throw new IOException("Incomplete folder listing."); }
+        };
+
+        await Assert.ThrowsAsync<IOException>(() => fixture.RestoreAsync());
+
+        Assert.IsTrue(File.Exists(Path.Combine(fixture.DestinationRoot, "root.txt")));
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.DestinationRoot, "folder", "important.txt")));
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.DestinationRoot, ArchiveLogicalStateManifest.FileName)));
+    }
+
+    [TestMethod]
+    public async Task FailedLaterPayloadPreservesCheckpointAndDefersExtrasUntilRerun()
+    {
+        using var fixture = await RestoreTraversalFixture.CreateAsync(ArchiveLayout.Default);
+        Directory.CreateDirectory(fixture.DestinationRoot);
+        var extra = Path.Combine(fixture.DestinationRoot, "extra.txt");
+        await File.WriteAllTextAsync(extra, "preserved extra");
+        fixture.Archive.BeforeRead = key =>
+        {
+            if (key == "folder/important.txt") { throw new IOException("Temporarily unreadable."); }
+        };
+
+        var failed = await fixture.RestoreAsync();
+
+        Assert.IsFalse(failed.Completed);
+        Assert.AreEqual("preserved extra", await File.ReadAllTextAsync(extra));
+        var rootPath = Path.Combine(fixture.DestinationRoot, "root.txt");
+        var checkpointTime = File.GetLastWriteTimeUtc(rootPath);
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.DestinationRoot, ArchiveLogicalStateManifest.FileName)));
+        fixture.Archive.BeforeRead = null;
+        fixture.Archive.ResetVisits();
+        fixture.Archive.BeforeListing = folder =>
+        {
+            if (folder.StartsWith(".yabt-", StringComparison.Ordinal))
+            {
+                Assert.IsTrue(File.Exists(Path.Combine(fixture.DestinationRoot, "folder", "important.txt")),
+                    "Restart should finish the previously failed branch before rechecking completed siblings.");
+            }
+        };
+        var resumed = await fixture.RestoreAsync();
+        Assert.IsTrue(resumed.Completed, resumed.Message);
+        Assert.AreEqual(checkpointTime, File.GetLastWriteTimeUtc(rootPath));
+        Assert.IsFalse(File.Exists(extra));
+        Assert.IsFalse(Directory.EnumerateFiles(Path.Combine(fixture.RootPath, "progress"), "*.sqlite").Any());
+        await fixture.AssertLivePayloadsAsync();
+    }
+
+    [TestMethod]
+    public async Task CancellationBeforeChildKeepsEarlierCommitAndSuppressesFinalization()
+    {
+        using var fixture = await RestoreTraversalFixture.CreateAsync(ArchiveLayout.Default);
+        using var cancellation = new CancellationTokenSource();
+        fixture.Archive.BeforeListing = folder =>
+        {
+            if (folder == "folder") { cancellation.Cancel(); }
+        };
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => fixture.RestoreAsync(cancellationToken: cancellation.Token));
+
+        Assert.IsTrue(File.Exists(Path.Combine(fixture.DestinationRoot, "root.txt")));
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.DestinationRoot, ArchiveLogicalStateManifest.FileName)));
+    }
+
+    [TestMethod]
+    public async Task IncrementalRestoreDryRunDoesNotCreateDestination()
+    {
+        using var fixture = await RestoreTraversalFixture.CreateAsync(ArchiveLayout.Default);
+
+        var result = await fixture.RestoreAsync(dryRun: true);
+
+        Assert.IsTrue(result.Completed, result.Message);
         Assert.IsFalse(Directory.Exists(fixture.DestinationRoot));
     }
 
@@ -124,6 +223,7 @@ public sealed class RestoreLiveTraversalTests
             _resolver = new(_archiveStore);
             _livePaths =
             [
+                "root.txt",
                 "folder/important.txt",
                 $"{layout.HistPrefix}-ordinary/keep.txt",
                 ".yabt-tmp-ordinary/keep.txt",
@@ -138,6 +238,11 @@ public sealed class RestoreLiveTraversalTests
             services.AddYabtMetadata();
             services.AddSingleton<IBackupRootStoreResolver>(_resolver);
             services.AddYabtSync();
+            services.AddSingleton<IOptionsMonitor<YabtSyncOptions>>(new RestoreOptionsMonitor(new()
+            {
+                ProgressDirectory = Path.Combine(RootPath, "progress"),
+                ProgressFlushUnitCount = 1,
+            }));
             _services = services.BuildServiceProvider();
         }
 
@@ -188,8 +293,9 @@ public sealed class RestoreLiveTraversalTests
             }
         }
 
-        public Task<SyncRunResult> RestoreAsync() => _services.GetRequiredService<IArchiveSynchronizer>()
-            .RestoreAsync(new(SourceRoot, DestinationRoot: DestinationRoot));
+        public Task<SyncRunResult> RestoreAsync(bool dryRun = false, CancellationToken cancellationToken = default) =>
+            _services.GetRequiredService<IArchiveSynchronizer>().RestoreAsync(
+                new(SourceRoot, DryRun: dryRun, DestinationRoot: DestinationRoot), cancellationToken);
 
         public async Task AddArchiveObjectAsync(string key)
         {
@@ -231,11 +337,26 @@ public sealed class RestoreLiveTraversalTests
         public IObjectStore ResolveStore(BackupRootStore store, string descriptorRootPath) => Store;
     }
 
-    private sealed class ListingProbeObjectStore(IObjectStore _inner) : IObjectStore
+    private sealed class RestoreOptionsMonitor(YabtSyncOptions value) : IOptionsMonitor<YabtSyncOptions>
+    {
+        public YabtSyncOptions CurrentValue => value;
+        public YabtSyncOptions Get(string? name) => value;
+        public IDisposable? OnChange(Action<YabtSyncOptions, string?> listener) => null;
+    }
+
+    private sealed class ListingProbeObjectStore(IObjectStore _inner) : IObjectStore, IObjectStoreOperationIdentity
     {
         public List<string> FolderVisits { get; } = [];
 
+        public string OperationIdentity { get; } = "restore-traversal:" + Guid.NewGuid().ToString("N");
+
         public string? UnreadablePrefix { get; set; }
+
+        public Action<string>? BeforeListing { get; set; }
+
+        public Action<string>? AfterListedItem { get; set; }
+
+        public Action<string>? BeforeRead { get; set; }
 
         public int ListedObjectCount { get; private set; }
 
@@ -260,6 +381,7 @@ public sealed class RestoreLiveTraversalTests
             cancellationToken.ThrowIfCancellationRequested();
             var prefix = ArchiveLayout.NormalizeObjectKey(folderPrefix);
             FolderVisits.Add(prefix);
+            BeforeListing?.Invoke(prefix);
             if (recursive) { RecursiveRequestCount++; }
             if (string.Equals(prefix, UnreadablePrefix, StringComparison.Ordinal))
             {
@@ -271,6 +393,7 @@ public sealed class RestoreLiveTraversalTests
             {
                 if (item.IsObject) { ListedObjectCount++; }
                 yield return item;
+                AfterListedItem?.Invoke(prefix);
                 if (recursive && item.IsFolder)
                 {
                     var descendants = GetFolderItemsAsync(item.Key, recursive: true, cancellationToken);
@@ -288,8 +411,11 @@ public sealed class RestoreLiveTraversalTests
         public Task InitializeAsync(CancellationToken cancellationToken = default) =>
             _inner.InitializeAsync(cancellationToken);
 
-        public Task<ArchiveObjectContent> OpenReadAsync(string key, CancellationToken cancellationToken = default) =>
-            _inner.OpenReadAsync(key, cancellationToken);
+        public Task<ArchiveObjectContent> OpenReadAsync(string key, CancellationToken cancellationToken = default)
+        {
+            BeforeRead?.Invoke(key);
+            return _inner.OpenReadAsync(key, cancellationToken);
+        }
 
         public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) =>
             _inner.ExistsAsync(key, cancellationToken);

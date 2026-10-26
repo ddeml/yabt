@@ -296,7 +296,8 @@ and filesystem commits belong to provider implementations. Mapping failures use
 the existing contextual I/O failure and recovery path; never silently rename or
 omit conflicting desired content. Validate the complete namespace of each backup
 work unit before its mutations. Later units may fail after earlier safe commits.
-Restore retains complete-plan namespace preflight in the current implementation.
+Current-schema plain mirror restore validates complete immediate work units;
+packaged and legacy restore paths retain complete-plan namespace preflight.
 
 Backup resolves file/directory transitions and provider-equivalent spelling
 changes by historizing confirmed blockers before preparing replacement payloads.
@@ -822,7 +823,8 @@ never start its writes while its listing is incomplete. Mirror implements this
 contract, including folders with explicit mirror policies. Finish each unit's
 file processing before enumerating its ordinary descendants. The disposable
 `BackupFolderTraversal` stores the child-work frontier and desired-folder
-membership in temporary indexes; it does not yet provide durable resume state.
+membership in temporary indexes and uses disposable durable progress only to
+prioritize freshly discovered work.
 
 Validate sibling files and directories together before unit mutations. Reuse
 provider-owned prospective namespace semantics for recreated descendants during
@@ -838,6 +840,16 @@ Nested beside-folder projections must emit immediate sibling artifacts or
 descendants inside their registered source-folder scope. Reject deeper outputs
 in unrelated sibling namespaces rather than silently losing them during source
 traversal. Built-in ZIP artifacts are immediate siblings.
+
+`IArchiveRestoreFolderProjector` supplies folder-local plain restore projection.
+Current-schema mirror restore validates the root manifest and destination safety,
+indexes manifest entries by folder on disk, and applies complete immediate units
+through the bounded file pipeline. One `RestoreMutationSession` owns history and
+invalidation for the operation. A successful folder completes local progress only
+after its files and directory effects succeed. Later errors preserve earlier
+commits and suppress unrelated cleanup and final publication. Bind restore
+progress to the current archive manifest hash. Packaged and legacy formats still
+use complete-plan fallback until their work-unit support is available.
 
 Manifest I/O belongs to `ArchiveManifestStore`. `BackupManifestTransaction` and
 `RestoreManifestTransaction` are operation-owned state, never singleton mutable
@@ -955,9 +967,10 @@ reconcile behavior scaffolded until their semantics are designed.
 boundary and then use direction-specific preparation and application pipelines.
 Both pipelines share format handlers, desired-object reconciliation, and
 historization where their safety requirements permit. Backup retains its
-at-most-one replay object bound. Restore performs a global metadata,
-path-safety, and reconciliation preflight, then uses bounded object-level
-preparation and commits each validated file as a recoverable checkpoint.
+at-most-one replay object bound. Restore performs root-wide manifest validation
+and destination safety traversal, then applies mirror work units through bounded
+object-level preparation. Legacy and packaged projections retain complete-plan
+preflight. Each validated file commit remains a recoverable checkpoint.
 Direction-specific action consumers remain appropriate inside the shared
 reconciliation pipeline.
 

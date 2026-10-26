@@ -33,12 +33,6 @@ internal sealed class RestoreReconciler
             pathComparer,
             cancellationToken
         );
-        var desiredFiles = restorePlan.Files.ToDictionary(
-            file => file.RelativePath,
-            pathComparer);
-        var filesToWrite = restorePlan.Files
-            .Where(file => !blockedRestorePaths.Contains(file.RelativePath))
-            .ToHashSet();
         using var reconciliationIndex = TemporaryIndex.Create();
         using var logicalStateEntries = reconciliationIndex.CreateDictionary<ArchiveLogicalStateManifestEntry>(
             comparer: pathComparer);
@@ -57,6 +51,30 @@ internal sealed class RestoreReconciler
                 }
             }
         }
+        return await CreateRestoreFolderReconciliationAsync(
+            destinationStore, restorePlan, destinationState, logicalStateEntries,
+            byteForByte, blockedRestorePaths, cancellationToken);
+    }
+
+    internal async Task<RestoreReconciliation> CreateRestoreFolderReconciliationAsync
+    (
+        IObjectStore destinationStore,
+        RestorePlan restorePlan,
+        RestoreDestinationState destinationState,
+        IReadOnlyDictionary<string, ArchiveLogicalStateManifestEntry> logicalStateEntries,
+        bool byteForByte,
+        HashSet<string> blockedRestorePaths,
+        CancellationToken cancellationToken
+    )
+    {
+        _logger.LogTrace(nameof(CreateRestoreFolderReconciliationAsync));
+        var pathComparer = restorePlan.Namespace.PathComparer;
+        var desiredFiles = restorePlan.Files.ToDictionary(
+            file => file.RelativePath,
+            pathComparer);
+        var filesToWrite = restorePlan.Files
+            .Where(file => !blockedRestorePaths.Contains(file.RelativePath))
+            .ToHashSet();
         var historyMoves = new RestoreHistoryPlan(pathComparer);
         try
         {

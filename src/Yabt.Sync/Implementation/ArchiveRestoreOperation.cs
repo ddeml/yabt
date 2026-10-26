@@ -19,7 +19,8 @@ internal sealed class ArchiveRestoreOperation
     RestorePlanner _planner,
     RestoreReconciler _reconciler,
     RestoreExecutor _executor,
-    ArchiveManifestStore _manifests
+    ArchiveManifestStore _manifests,
+    IncrementalRestoreOperation _incremental
 )
 {
     internal async Task<SyncRunResult> RunRestoreOperationAsync
@@ -101,6 +102,13 @@ internal sealed class ArchiveRestoreOperation
             destinationLayout.LivePrefix,
             destinationLayout.HistPrefix,
             cancellationToken);
+
+        if (_planner.ResolveFolderProjector(changeManifest) is { } folderProjector)
+        {
+            return await _incremental.RunAsync(request, context, changeManifest, folderProjector,
+                restoreTarget, destinationLayout, rootDescriptorRestore, restoreRootNeedsCreation,
+                restoreMaximumConcurrency, cancellationToken);
+        }
 
         using var restoreObjects = await _planner.LoadRestoreObjectsAsync(
             context,
