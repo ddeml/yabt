@@ -9,6 +9,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$Platform = @{ windows = 'Windows'; linux = 'Linux' }[$Platform]
+$Provider = @{ all = 'All'; azureblob = 'AzureBlob'; webdav = 'WebDav' }[$Provider]
 if (-not $IsWindows) { throw 'Run this orchestration script from the Windows VM.' }
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $settingsFile = Get-Item -LiteralPath $SettingsPath
