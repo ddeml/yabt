@@ -964,7 +964,8 @@ performance measurements. Manage only YABT's Compose resources; the Docker
 engine also serves DSA. See `tools/linux-acceptance/README.md` for usage.
 
 Deployed-service acceptance credentials belong outside the repository in
-`%LOCALAPPDATA%\Yabt\service-acceptance\providers.local.json` on this VM. See
+`%USERPROFILE%\.yabt\service-acceptance\providers.local.json` on this VM. Keep
+this location outside AppData to avoid MSIX app-data redirection. See
 `tools/service-acceptance/README.md` for initialization and provider fields.
 Load secrets programmatically without printing their values, and keep raw
 remote-service diagnostics private until redacted. The ordinary Linux test

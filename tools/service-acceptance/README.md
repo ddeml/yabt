@@ -10,8 +10,14 @@ Windows VM, run:
 The initializer copies `providers.example.json` to:
 
 ```text
-%LOCALAPPDATA%\Yabt\service-acceptance\providers.local.json
+%USERPROFILE%\.yabt\service-acceptance\providers.local.json
 ```
+
+This location is outside AppData because Windows redirected the earlier
+AppData path into Codex's private MSIX package storage. Commands launched by
+Codex could see that file while ordinary Notepad and Explorer could not. The
+user-profile path gives both processes the same file location. The initializer
+does not migrate or overwrite a file from the earlier location automatically.
 
 When creating a new file, it restricts the directory to the current Windows
 user and SYSTEM. It refuses linked settings locations and leaves an existing

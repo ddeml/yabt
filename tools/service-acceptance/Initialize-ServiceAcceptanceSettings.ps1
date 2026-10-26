@@ -6,14 +6,15 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $IsWindows) { throw 'This initializer prepares the Windows VM credential file.' }
 
-$localData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-if ([string]::IsNullOrWhiteSpace($localData)) { throw 'The local application-data directory is unavailable.' }
-$settingsDirectory = Join-Path $localData 'Yabt/service-acceptance'
+$settingsUserProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+if ([string]::IsNullOrWhiteSpace($settingsUserProfile)) { throw 'The user-profile directory is unavailable.' }
+# AppData writes from an MSIX-hosted process can be redirected into its package.
+$settingsDirectory = Join-Path $settingsUserProfile '.yabt/service-acceptance'
 $settingsPath = Join-Path $settingsDirectory 'providers.local.json'
 $templatePath = Join-Path $PSScriptRoot 'providers.example.json'
 
 # Inspect path metadata only. Never read or replace an existing credential file.
-foreach ($candidate in @((Join-Path $localData 'Yabt'), $settingsDirectory, $settingsPath)) {
+foreach ($candidate in @((Join-Path $settingsUserProfile '.yabt'), $settingsDirectory, $settingsPath)) {
     if (Test-Path -LiteralPath $candidate) {
         $item = Get-Item -LiteralPath $candidate -Force
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
