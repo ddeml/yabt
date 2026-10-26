@@ -970,6 +970,15 @@ this location outside AppData to avoid MSIX app-data redirection. See
 Load secrets programmatically without printing their values, and keep raw
 remote-service diagnostics private until redacted. The ordinary Linux test
 runner does not consume these credentials or contact deployed services.
+Use `tools/service-acceptance/Invoke-ServiceAcceptance.ps1` for explicitly
+requested deployed Azure/WebDAV acceptance. It runs isolated provider and
+synchronization cases on Windows or a temporary companion Linux container.
+Retain raw output only in the private results directory; export only the
+allowlisted acceptance summary to repository artifacts. A successful run must
+include every required case and successful cleanup of each owned remote
+subtree. Failed fixtures remain for diagnosis; never delete the configured
+container/base folder or unrelated data. These cases do not substitute for CLI
+provider-resolution, cloud crash-recovery, or performance acceptance.
 
 ## CLI
 

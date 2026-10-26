@@ -108,6 +108,8 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "service-acceptance", "service-acceptance", "{13C95C81-DAE0-4B6F-AD69-36FC1F4777A6}"
 	ProjectSection(SolutionItems) = preProject
 		tools\service-acceptance\Initialize-ServiceAcceptanceSettings.ps1 = tools\service-acceptance\Initialize-ServiceAcceptanceSettings.ps1
+		tools\service-acceptance\Invoke-ServiceAcceptance.ps1 = tools\service-acceptance\Invoke-ServiceAcceptance.ps1
+		tools\service-acceptance\run-service-acceptance.sh = tools\service-acceptance\run-service-acceptance.sh
 		tools\service-acceptance\providers.example.json = tools\service-acceptance\providers.example.json
 		tools\service-acceptance\README.md = tools\service-acceptance\README.md
 	EndProjectSection
