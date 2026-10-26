@@ -13,8 +13,9 @@ change, for follow-up work in **Codex-Sandbox-01**.
   configuration. The handoff commit carries those pending changes alongside this
   document.
 - Status: **R01-R09 and I01-I03 are implemented for their documented scopes;
-  I04 implementation, local contracts, and Linux/ext4 acceptance are complete,
-  with deployed-service acceptance pending**. Recording the baseline did not
+  I04 implementation, local contracts, Linux/ext4 acceptance, and deployed Azure
+  acceptance are complete; pCloud WebDAV acceptance awaits authentication**.
+  Recording the baseline did not
   implement the fixes. R09 was added during the follow-up discussion on
   2026-09-21.
 - Scope: correctness, archive safety, recovery, and scalability. This was a code
@@ -66,7 +67,7 @@ were not claimed as completed runtime reproductions in the review.
 | I01 | Improvement | ZIP buffers accumulate across a backup | Generated large-stream and projection-lifetime regression tests | Implemented |
 | I02 | Improvement | ZIP restore repeatedly parses the central directory | Entry-read instrumentation and large-manifest round-trip tests | Implemented |
 | I03 | Improvement | Current-live restore traverses history unnecessarily | Traversal-count and unreadable-subtree regression tests | Implemented |
-| I04 | Improvement | Synchronizer responsibilities and provider test coverage | Component extraction, provider contracts, recovery fault tests, Linux/ext4 acceptance | Implemented; deployed-service acceptance pending |
+| I04 | Improvement | Synchronizer responsibilities and provider test coverage | Component extraction, provider contracts, recovery fault tests, Linux/ext4 and deployed Azure acceptance | Implemented; pCloud WebDAV authentication blocks remaining acceptance |
 
 P1 means address before relying on the affected archival operation. P2 means a
 concrete correctness or usability defect. Investigate means the execution path
@@ -1218,6 +1219,62 @@ durability, other filesystem or mount configurations, deployed Azure/WebDAV
 compatibility, or performance equivalence with Windows. Deployed-service
 acceptance remains the next I04 validation step.
 
+**Deployed-service acceptance (2026-10-26):** The opt-in
+[service runner](../tools/service-acceptance/README.md) now exercises the real
+providers and synchronization API. Ordinary tests do not contact deployed
+services. Each live case owns a fresh random subtree beneath the configured
+test location; passing cases remove only that subtree and verify cleanup.
+Failed cases retain any created fixture for diagnosis. Credentials and raw
+diagnostics remain outside Git, while public summaries contain only revision,
+platform, selected provider, case names, and outcomes.
+
+Azure Blob Storage passed **all nine cases on Windows and all nine on
+Linux/ext4** at source revision
+`db51fbb0ac10` (full revision is recorded in each summary). These include:
+
+- Exact immediate names and traversal, create-if-absent, conditional
+  replacement/deletion, whole-folder moves, interrupted source-stream upload,
+  archive-lock contention/reacquisition, and exact-object/same-prefix behavior.
+- Mirror and ZIP backup/restore, unchanged reruns, replaced/deleted/added files,
+  preserved archive and destination history, byte-for-byte archive verification,
+  exact restored content and timestamps, and empty folders.
+
+The accepted public summaries are under `artifacts/service-acceptance/`:
+
+- `db51fbb0ac10-windows-azureblob-20261026T184929Z-cede1f99`
+- `db51fbb0ac10-linux-azureblob-20261026T184930Z-4fe72fb5`
+
+Both summaries report nine expected passing rows and no validation issues.
+Private TRX files and process output remain under the private settings
+directory's `runs` folder. The Linux run uses a temporary unprivileged companion
+container, the existing Linux workspace volume, a read-only credentials mount,
+and private tmpfs diagnostics exported before container removal. The first
+runner attempts exposed two harness defects: PowerShell stream-copy return
+values contaminated exit-code checks, and Docker's archive endpoint missed the
+tmpfs report contents. Both were fixed and the accepted runs repeated with
+verified report export. No production provider change was needed for Azure.
+
+pCloud WebDAV returned **HTTP 401 during isolation preflight**, before any
+fixture creation. All nine Windows WebDAV cases were therefore unsuccessful;
+Linux observed the same authentication rejection. This is not accepted service
+compatibility evidence, and no WebDAV test data was written. Resume with
+`-Provider WebDav` after the configured account can authenticate, on both
+platforms. Do not repeat Azure cases solely to retry WebDAV authentication.
+
+Local Release regression verification completed with **1,219 passed, zero
+failed, and six expected Linux-only skips**. The new mirror/ZIP scenarios also
+passed a local memory-store smoke check, and explicit opt-out skipped the two
+selected Azure synchronization rows without remote calls. NuGet vulnerability
+metadata retrieval produced an availability warning during the Windows build;
+it did not prevent compilation or tests.
+
+This closes deployed Azure correctness acceptance for the documented cases. It
+does not establish pCloud compatibility, production CLI WebDAV store selection,
+long-duration remote lock renewal, abrupt-process cloud recovery, large-data
+performance, or storage-provider durability guarantees. The WebDAV CLI resolver
+remains separate unfinished integration work; these tests intentionally inject
+the configured provider into the synchronization API.
+
 ## Suggested Codex-Sandbox-01 sequence
 
 1. Check out the handoff commit and read `AGENTS.md` plus this document.
@@ -1230,9 +1287,10 @@ acceptance remains the next I04 validation step.
    reproductions.
 4. R05-R09 are implemented. R08 uses deterministic coordination to verify
    cancellation ownership rather than timing-dependent sleeps.
-5. I01-I03, the I04 implementation, and Linux/ext4 acceptance are complete.
-   Follow up with deployed-service acceptance and the remaining large-tree work
-   described under I04. Reuse the committed Linux runner for later regressions.
+5. I01-I03, the I04 implementation, Linux/ext4, and deployed Azure acceptance
+   are complete. Resolve the pCloud authentication rejection and finish WebDAV
+   acceptance, then follow up with the remaining large-tree work described under
+   I04. Reuse the committed runners for later regressions.
 6. Update each finding's status with the fixing commit and verification
    evidence. Do not mark an item resolved merely because the pre-existing suite
    passes.
