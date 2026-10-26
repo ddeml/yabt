@@ -142,8 +142,15 @@ else {
         if ($exitCode -ne 0) { $issues.Add("Linux tests exited with code $exitCode.") }
         $linuxResults = Join-Path $privateRoot 'linux'
         [IO.Directory]::CreateDirectory($linuxResults) | Out-Null
-        if ((Invoke-PrivateDocker @('cp', "${containerName}:/private-results/.", $linuxResults) 'results-copy') -ne 0) {
+        # Docker's archive endpoint does not reliably include tmpfs contents.
+        # Stream the archive from inside the running container into a private file.
+        if ((Invoke-PrivateDocker @('exec', $containerName, 'tar', '-C', '/private-results', '-cf', '-', '.') 'results-export') -ne 0) {
             $issues.Add('Private Linux results could not be exported.')
+        }
+        else {
+            [System.Formats.Tar.TarFile]::ExtractToDirectory(
+                (Join-Path $privateRoot 'results-export.stdout.log'), $linuxResults, $false
+            )
         }
         $testResults = Join-Path $linuxResults 'tests'
         if (-not (Test-Path -LiteralPath (Join-Path $linuxResults 'run-status.txt'))) {
