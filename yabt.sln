@@ -94,6 +94,17 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.WebDav.Tests", "tests\
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{07C2787E-EAC7-C090-1BA3-A61EC2A24D84}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "linux-acceptance", "linux-acceptance", "{0F7172C8-7884-482D-AD22-9D7C60361D2A}"
+	ProjectSection(SolutionItems) = preProject
+		tools\linux-acceptance\Dockerfile = tools\linux-acceptance\Dockerfile
+		tools\linux-acceptance\compose.yaml = tools\linux-acceptance\compose.yaml
+		tools\linux-acceptance\init-workspace.sh = tools\linux-acceptance\init-workspace.sh
+		tools\linux-acceptance\preflight.sh = tools\linux-acceptance\preflight.sh
+		tools\linux-acceptance\run-acceptance.sh = tools\linux-acceptance\run-acceptance.sh
+		tools\linux-acceptance\Invoke-LinuxAcceptance.ps1 = tools\linux-acceptance\Invoke-LinuxAcceptance.ps1
+		tools\linux-acceptance\README.md = tools\linux-acceptance\README.md
+	EndProjectSection
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Profiling", "tools\Yabt.Profiling\Yabt.Profiling.csproj", "{E8D66188-2579-4A63-A781-EF51CB7A5CB9}"
 EndProject
 Global
@@ -203,6 +214,7 @@ Global
 		{862545BA-EE39-4945-8A60-FB40BC48F501} = {C92C132C-6018-4E38-B71B-4F9C64E3D9D7}
 		{6DB32EB6-A817-4B7A-A373-00E8E4D2BE39} = {C92C132C-6018-4E38-B71B-4F9C64E3D9D7}
 		{E8D66188-2579-4A63-A781-EF51CB7A5CB9} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
+		{0F7172C8-7884-482D-AD22-9D7C60361D2A} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {C808C5B7-4B46-4DA9-8F76-080585294DFF}

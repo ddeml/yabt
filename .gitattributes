@@ -9,6 +9,9 @@
 .editorconfig text eol=crlf
 .gitattributes text eol=crlf
 .gitignore text eol=crlf
+tools/linux-acceptance/*.sh text eol=lf
+tools/linux-acceptance/Dockerfile text eol=lf
+tools/linux-acceptance/*.ps1 text eol=crlf
 
 *.png filter=lfs diff=lfs merge=lfs -text
 *.jpg filter=lfs diff=lfs merge=lfs -text

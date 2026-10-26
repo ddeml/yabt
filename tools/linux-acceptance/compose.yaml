@@ -1,0 +1,37 @@
+name: yabt-linux
+
+services:
+  init-workspace:
+    image: yabt-linux-acceptance:local
+    pull_policy: never
+    user: "0:0"
+    command: ["/usr/local/bin/yabt-init-workspace"]
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.5
+    mem_limit: 128m
+    volumes:
+      - workspace:/work
+
+  acceptance:
+    image: yabt-linux-acceptance:local
+    build:
+      context: .
+    depends_on:
+      init-workspace:
+        condition: service_completed_successfully
+    init: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 2
+    mem_limit: 3g
+    pids_limit: 512
+    volumes:
+      - workspace:/work
+
+volumes:
+  workspace:
+    name: yabt-linux-workspace
