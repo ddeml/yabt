@@ -1092,13 +1092,42 @@ Cleanup preserves the structural ancestors of nested destination history and
 historizes only ordinary obsolete siblings. New regression coverage includes
 partial ZIP/manifest pairs, changed completed packages, sibling priority,
 nested-package restart, scope escapes, directory-only integrity, and history
-ancestor protection. Timing and normal-execution overhead measurements follow
-in the dedicated results report.
+ancestor protection. Timing and normal-execution overhead measurements are
+recorded in the dedicated results report below.
 
 The complete Release suite passes **1,212 tests**, with three existing Linux-only
 skips. The final linear priority partition and package safety checks also pass a
 27-case targeted rerun. No compiler/analyzer warnings were reported; NuGet's
 advisory lookup remains unavailable in this environment.
+
+**Incremental resume measurements (2026-10-26):** All 28 filesystem scenarios
+passed, covering 44 fresh worker processes. See
+[incremental-resume-measurements.md](incremental-resume-measurements.md) and the
+[numerical results](incremental-resume-results.json). With 3,000 mirror files,
+progress reduced restart-to-next-new-write from 11.25 s to 0.89 s for backup and
+from 11.44 s to 3.07 s for restore. Total completion time stayed similar because
+completed units still undergo current validation. Whole-root ZIP restore showed
+no useful acceleration, consistent with its complete-package boundary.
+
+Three uninterrupted 1,000-file mirror samples per setting show about 1.9% higher
+median backup time with progress enabled. Restore medians remain within observed
+variation, including a slower third enabled sample. These are local tiny-file
+measurements, not universal overhead bounds. Restart comparisons have one sample
+per setting and use cooperative cancellation, which flushes safe progress;
+abrupt process failure can lose the latest batch. The separate crash regression
+checks rollback of unflushed progress. Sampled process peaks do not replace the
+earlier retained-heap investigation or establish a total-memory bound.
+
+The final diagnostic runner also validates fixture ownership before worker
+execution. Four small smoke scenarios and seven invalid-setup rejections pass;
+these checks are separate from the timed matrix. Regenerating the numerical
+summary reproduces the saved report exactly.
+
+The agreed folder/package slices are implemented. Root-wide manifest work,
+within-unit memory, native Linux acceptance, and deployed-service acceptance
+remain explicit follow-up areas. No partial ZIP state or within-folder cursor is
+persisted. Implementation commits are `05cf375`, `7bf362b`, `90bf46c`, and
+`b96aaf3`, following the initial folder-backup slice `e84d84e`.
 
 ## Suggested Codex-Sandbox-01 sequence
 

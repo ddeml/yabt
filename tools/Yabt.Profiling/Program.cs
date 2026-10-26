@@ -30,6 +30,11 @@ internal static class Program
                 Console.WriteLine("destination <fixture> <empty|unchanged|mixed> <new-name>");
                 Console.WriteLine
                 (
+                    "resume <new-fixture> <file-count> <mirror|child-zip|root-zip> " +
+                        "<backup|restore> <progress-on|progress-off> <abort-after-commits|0> <new-report.json>"
+                );
+                Console.WriteLine
+                (
                     "run <fixture> <destination-name> <plan|restore|backup> " +
                         "<normal|retained> <new-report.json> [warmup-fixture] [pause-phase]"
                 );
@@ -75,6 +80,14 @@ internal static class Program
                 }
                 case "run" when args.Length is >= 6 and <= 8:
                     return await RunAsync(args, maximumSeconds, cancellation);
+                case "resume" when args.Length == 8:
+                    return await ResumeProfiling.RunAsync
+                    (
+                        args, maximumSeconds, ReadPositiveSetting("YABT_PROFILE_MAX_PRIVATE_MIB", 2048) * 1024L * 1024,
+                        cancellation.Token
+                    );
+                case "resume-worker" when args.Length == 6:
+                    return await ResumeProfiling.RunWorkerAsync(args, cancellation.Token);
                 default:
                     throw new ArgumentException("Invalid profiling arguments. Run without arguments for usage.");
             }
@@ -307,7 +320,7 @@ internal static class Program
         return value > 0 ? value : throw new ArgumentOutOfRangeException(name);
     }
 
-    private static void RequireExternalNewReport(string reportPath, string fixtureRoot)
+    internal static void RequireExternalNewReport(string reportPath, string fixtureRoot)
     {
         var relative = Path.GetRelativePath(fixtureRoot, reportPath);
         if

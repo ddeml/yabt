@@ -1,9 +1,13 @@
-# YABT memory profiling
+# YABT synchronization profiling
 
 This diagnostic runner measures real filesystem fixtures without retaining a
 second in-memory copy of the source tree. It uses production backup, restore,
 planning, and reconciliation components. It is intended for local investigation;
 elapsed-time and memory measurements are not unit-test pass/fail thresholds.
+
+The resume scenarios also measure startup and restart latency. Their observer
+retains bounded fixture path sets to distinguish newly committed content from
+repeated writes. This instrumentation is included in the reported allocations.
 
 Build once in Release before collecting measurements. Run the compiled DLL in a
 fresh process for every sample, with no debugger attached. Keep concurrent builds,
@@ -203,6 +207,98 @@ native memory are reflected in process metrics, not managed allocations alone.
 An elevated post-release working set does not by itself establish a managed leak.
 Restoring tiny files isolates metadata scaling but does not cover large payloads,
 deeply nested packages, other providers, or every possible directory shape.
+
+## Measure incremental startup and restart
+
+The resume command prepares a new, isolated fixture, then launches each attempt
+in its own process. Fixture preparation is outside each measured operation.
+Arguments are shown on two lines for readability:
+
+```text
+resume <new-fixture> <file-count> <mirror|child-zip|root-zip>
+       <backup|restore> <progress-on|progress-off> <abort-after-commits|0>
+       <new-report.json>
+```
+
+For example:
+
+```powershell
+dotnet $runner resume artifacts/profiling-fixtures/resume-mirror-1000 `
+  1000 mirror restore progress-on 250 `
+  artifacts/profiling-reports/resume-mirror-1000.json
+```
+
+A positive interruption count cooperatively cancels immediately after that many
+verified payload writes. The second process reopens the same source, destination,
+and progress directory. Zero selects one uninterrupted attempt, for comparison
+of ordinary execution with progress enabled and disabled. Use separate, otherwise
+identical fixtures for those comparisons. Do not run samples in parallel.
+
+Cooperative cancellation flushes safe pending progress on disposal. These timings
+therefore describe a graceful interruption, not a power failure. The separate
+process-crash regression verifies rollback of an unflushed batch; an abrupt
+failure can require more replay than this measurement, up to the last durable
+batch boundary.
+
+The fixture uses groups of 100 tiny files and accepts at most 100,000 files.
+`mirror` keeps ordinary folders, `child-zip` packages every immediate source
+child, and `root-zip` packages the selected root. Package files count as one
+backup payload commit; policies, manifests, and empty-directory markers do not.
+A root-ZIP backup therefore has only one user-data commit. Interrupting it can
+exercise sidecar recovery without producing a next new payload commit; that
+latency is correctly reported as null. Child ZIPs sharing one parent also share
+that parent's naming-discovery cost. After the complete parent namespace is
+validated, complete immediate ZIP groups can be prioritized separately on
+restart. Generic artifact groups spread across folders remain conservative.
+Neither fixture claims within-package resumption.
+
+Each worker records:
+
+- Time from operation start to the first verified payload commit.
+- Time to the first path not committed by the previous attempt, including
+  provider-call counters at that point.
+- Total duration, cumulative allocation delta, CPU delta, and sampled memory
+  peaks, using the same sampler as the other commands.
+- Filesystem object-read and folder-list invocation counts, read locations,
+  ZIP entry/source read counts, committed paths, and repeated payload writes.
+- Completion or expected interruption, progress-cache warnings, and remaining
+  progress databases after the attempt.
+
+The counts measure instrumented method invocations, including control metadata
+and failed calls. They are not byte counts, network round trips, or every native
+filesystem call. Observer logging and commit JSONL output add overhead; compare
+only equally instrumented runs. Timing starts after service construction and a
+baseline GC, without warmup, so first-use JIT is included but process startup is
+excluded. OS file caches are not flushed. The complete live-manifest validation
+barrier remains included in restore startup.
+
+The command writes the main report, a `.scenario.json` description, independent
+`.first.json` and `.resume.json` worker reports, and commit-path JSONL sidecars.
+The resume sidecars are absent for uninterrupted runs. Every path must be new;
+none is overwritten or deleted. The raw fixture remains for inspection. A
+direct worker invocation revalidates fixture ownership, preparation state,
+ordinary directories, and scenario settings before opening operation state. A
+progress-cache failure rejects the sample rather than silently measuring a
+fallback with the wrong settings. `summarize-resume.py` validates and aggregates
+these reports separately from the older plan-memory measurements:
+
+```powershell
+python tools/Yabt.Profiling/summarize-resume.py
+```
+
+Its defaults read `artifacts/incremental-resume/results` and replace
+`docs/incremental-resume-results.json`. Optional `--input` and `--output` select
+other locations. It verifies expected distinct commit counts, no rewrites of
+previously committed paths on resume, interruption and cleanup outcomes, consistent
+builds/settings, and optional
+matching `<report-name>.watchdog.json` records. Each group records
+`[median, minimum, maximum]` metrics and hashes of its source reports. A single
+sample has identical values in all three positions; it is not repeat evidence.
+
+The existing external watchdog can wrap the `resume` command. Its timeout
+terminates the driver's process tree. Its memory samples cover the driver;
+each worker separately samples its own configured private-memory threshold.
+Request a quiet window before collecting comparisons and retain repeat samples.
 
 ## Safety budgets
 

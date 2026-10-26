@@ -14,7 +14,7 @@ internal static class ProfilingFixtures
     private const string ManifestFileName = ".yabt-profiling-fixture.json";
     private const string DocumentType = "yabt.profilingFixture";
     private const int ManifestMaximumBytes = 4096;
-    private const int GroupSize = 100;
+    internal const int GroupSize = 100;
     private const int PayloadLength = 32;
     private static readonly DateTime TimestampUtc = new(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -320,6 +320,26 @@ internal static class ProfilingFixtures
         }
 
         return manifest;
+    }
+
+    internal static async Task ValidateResumeFixtureAsync
+    (
+        ResumeProfilingScenario scenario,
+        CancellationToken cancellationToken
+    )
+    {
+        var fixture = scenario.Fixture;
+        await ValidateOwnedFixtureAsync
+        (
+            fixture, scenario.Operation == "restore" ? "ready" : "source-ready", cancellationToken
+        );
+        RequireOrdinaryDirectory(scenario.ProgressDirectory);
+        RequireOrdinaryDirectory(scenario.DestinationRoot);
+        RequireOrdinaryFile(Path.Combine(fixture.SourceRoot, BackupRootFileNames.Primary));
+        if (scenario.Operation == "restore")
+        {
+            RequireOrdinaryFile(Path.Combine(fixture.ArchiveRoot, BackupRootFileNames.Primary));
+        }
     }
 
     private static async Task ValidateOwnedFixtureAsync

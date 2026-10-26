@@ -1,0 +1,2438 @@
+{
+  "schemaVersion": 1,
+  "metricOrder": [
+    "median",
+    "minimum",
+    "maximum"
+  ],
+  "environment": {
+    "machine": "CODEXSANDBOX01",
+    "runtime": ".NET 10.0.13",
+    "os": "Microsoft Windows 10.0.26300",
+    "architecture": "X64",
+    "processors": 8,
+    "serverGc": false,
+    "build": "1.0.0+b96aaf3ee0330bb150d544edd26d0fa6e329c1f8",
+    "warmup": false,
+    "baselineCollection": true,
+    "sampleIntervalMilliseconds": 250,
+    "restoreMaximumConcurrency": 5,
+    "progressFlushUnitCount": 32,
+    "progressFlushIntervalSeconds": 5,
+    "payloadMemoryThresholdBytes": 8388608,
+    "payloadTotalMemoryBudgetBytes": 67108864
+  },
+  "measurementWindowUtc": {
+    "first": "2026-10-26T10:00:51.863237+00:00",
+    "last": "2026-10-26T10:13:21.879598+00:00"
+  },
+  "acceptedRuns": 28,
+  "acceptedWorkerAttempts": 44,
+  "watchdogReports": 28,
+  "method": {
+    "interruption": "Cooperative cancellation after distinct verified payload commits; safe progress flushes on disposal.",
+    "isolation": "Fresh process per attempt; source creation and restore archive setup are outside measured attempts.",
+    "cache": "Filesystem caches are not flushed; initial JIT is measured, process startup is excluded.",
+    "counters": "Structured provider invocation events, including control metadata and failed calls; not bytes or all native IO.",
+    "memory": "Sampled process peaks and cumulative allocations; observer path sets/logs included; no total-memory bound claim."
+  },
+  "groups": [
+    {
+      "format": "child-zip",
+      "fileCount": 1000,
+      "operation": "backup",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 6,
+      "progressEnabled": false,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [2389.4341, 2389.4341, 2389.4341],
+        "firstPayloadCommitMilliseconds": [1339.3381, 1339.3381, 1339.3381],
+        "firstNewPayloadCommitMilliseconds": [1339.3381, 1339.3381, 1339.3381],
+        "payloadCommitCount": [6, 6, 6],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [48114008, 48114008, 48114008],
+        "processCpuMilliseconds": [2968.75, 2968.75, 2968.75],
+        "sampledPeakManagedBytes": [18003680, 18003680, 18003680],
+        "sampledPeakPrivateBytes": [35962880, 35962880, 35962880],
+        "sampledPeakWorkingSetBytes": [75051008, 75051008, 75051008],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [606, 606, 606],
+          "providerFolderListCalls": [44, 44, 44],
+          "sourceObjectReadCalls": [606, 606, 606],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [606, 606, 606],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [101, 101, 101],
+          "providerFolderListCalls": [44, 44, 44],
+          "sourceObjectReadCalls": [101, 101, 101],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [101, 101, 101],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [3267.4004, 3267.4004, 3267.4004],
+        "firstPayloadCommitMilliseconds": [2557.5283, 2557.5283, 2557.5283],
+        "firstNewPayloadCommitMilliseconds": [2557.5283, 2557.5283, 2557.5283],
+        "payloadCommitCount": [4, 4, 4],
+        "previouslyCommittedCount": [6, 6, 6],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [70222952, 70222952, 70222952],
+        "processCpuMilliseconds": [4250, 4250, 4250],
+        "sampledPeakManagedBytes": [17716400, 17716400, 17716400],
+        "sampledPeakPrivateBytes": [37847040, 37847040, 37847040],
+        "sampledPeakWorkingSetBytes": [79204352, 79204352, 79204352],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1023, 1023, 1023],
+          "providerFolderListCalls": [44, 44, 44],
+          "sourceObjectReadCalls": [1011, 1011, 1011],
+          "archiveObjectReadCalls": [12, 12, 12],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [1010, 1010, 1010],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [719, 719, 719],
+          "providerFolderListCalls": [44, 44, 44],
+          "sourceObjectReadCalls": [707, 707, 707],
+          "archiveObjectReadCalls": [12, 12, 12],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [707, 707, 707],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "child-zip-1000-backup-off-resume-1.json",
+          "sha256": "eb50d1dfa6ce645cb9841f8e64a19399689465d203c39b7fd92601425bdf52ec",
+          "watchdog": {
+            "name": "child-zip-1000-backup-off-resume-1.watchdog.json",
+            "sha256": "9e7af016b83864bf9c2107451f2a3f6ee03c8fc0a5f1ed40fff26dbbe1814cba",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 0.328125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.203125
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "child-zip",
+      "fileCount": 1000,
+      "operation": "backup",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 6,
+      "progressEnabled": true,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [2465.0248, 2465.0248, 2465.0248],
+        "firstPayloadCommitMilliseconds": [1362.0008, 1362.0008, 1362.0008],
+        "firstNewPayloadCommitMilliseconds": [1362.0008, 1362.0008, 1362.0008],
+        "payloadCommitCount": [6, 6, 6],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [48366592, 48366592, 48366592],
+        "processCpuMilliseconds": [3062.5, 3062.5, 3062.5],
+        "sampledPeakManagedBytes": [18324552, 18324552, 18324552],
+        "sampledPeakPrivateBytes": [36368384, 36368384, 36368384],
+        "sampledPeakWorkingSetBytes": [76492800, 76492800, 76492800],
+        "remainingProgressDatabases": [1, 1, 1],
+        "calls": {
+          "providerObjectReadCalls": [606, 606, 606],
+          "providerFolderListCalls": [44, 44, 44],
+          "sourceObjectReadCalls": [606, 606, 606],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [606, 606, 606],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [101, 101, 101],
+          "providerFolderListCalls": [44, 44, 44],
+          "sourceObjectReadCalls": [101, 101, 101],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [101, 101, 101],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [3322.0279, 3322.0279, 3322.0279],
+        "firstPayloadCommitMilliseconds": [1599.8594, 1599.8594, 1599.8594],
+        "firstNewPayloadCommitMilliseconds": [1599.8594, 1599.8594, 1599.8594],
+        "payloadCommitCount": [4, 4, 4],
+        "previouslyCommittedCount": [6, 6, 6],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [70299712, 70299712, 70299712],
+        "processCpuMilliseconds": [4046.875, 4046.875, 4046.875],
+        "sampledPeakManagedBytes": [17860152, 17860152, 17860152],
+        "sampledPeakPrivateBytes": [40837120, 40837120, 40837120],
+        "sampledPeakWorkingSetBytes": [80982016, 80982016, 80982016],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1023, 1023, 1023],
+          "providerFolderListCalls": [44, 44, 44],
+          "sourceObjectReadCalls": [1011, 1011, 1011],
+          "archiveObjectReadCalls": [12, 12, 12],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [1010, 1010, 1010],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [204, 204, 204],
+          "providerFolderListCalls": [44, 44, 44],
+          "sourceObjectReadCalls": [202, 202, 202],
+          "archiveObjectReadCalls": [2, 2, 2],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [202, 202, 202],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "child-zip-1000-backup-on-resume-1.json",
+          "sha256": "020d5061ec1c643cf66e26963185248a572bae1fd46de14d4c7db6d3879d8d58",
+          "watchdog": {
+            "name": "child-zip-1000-backup-on-resume-1.watchdog.json",
+            "sha256": "4e4dbc10d5ec8e78b460ccdcf67beca11b779f4989692894c5b8528a348a7cd8",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 0.34375
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.28125
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "child-zip",
+      "fileCount": 1000,
+      "operation": "restore",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 550,
+      "progressEnabled": false,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [5246.0264, 5246.0264, 5246.0264],
+        "firstPayloadCommitMilliseconds": [908.8473, 908.8473, 908.8473],
+        "firstNewPayloadCommitMilliseconds": [908.8473, 908.8473, 908.8473],
+        "payloadCommitCount": [550, 550, 550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [185041624, 185041624, 185041624],
+        "processCpuMilliseconds": [6859.375, 6859.375, 6859.375],
+        "sampledPeakManagedBytes": [19544720, 19544720, 19544720],
+        "sampledPeakPrivateBytes": [35291136, 35291136, 35291136],
+        "sampledPeakWorkingSetBytes": [77475840, 77475840, 77475840],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [15, 15, 15],
+          "providerFolderListCalls": [2, 2, 2],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [15, 15, 15],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [566, 566, 566],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [5, 5, 5],
+          "providerFolderListCalls": [2, 2, 2],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [5, 5, 5],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [7, 7, 7],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [9323.4018, 9323.4018, 9323.4018],
+        "firstPayloadCommitMilliseconds": [4432.5051, 4432.5051, 4432.5051],
+        "firstNewPayloadCommitMilliseconds": [4432.5051, 4432.5051, 4432.5051],
+        "payloadCommitCount": [450, 450, 450],
+        "previouslyCommittedCount": [550, 550, 550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [279832720, 279832720, 279832720],
+        "processCpuMilliseconds": [12578.125, 12578.125, 12578.125],
+        "sampledPeakManagedBytes": [19779640, 19779640, 19779640],
+        "sampledPeakPrivateBytes": [44212224, 44212224, 44212224],
+        "sampledPeakWorkingSetBytes": [89178112, 89178112, 89178112],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [574, 574, 574],
+          "providerFolderListCalls": [19, 19, 19],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [17, 17, 17],
+          "destinationObjectReadCalls": [557, 557, 557],
+          "zipEntryReadCalls": [459, 459, 459],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [566, 566, 566],
+          "providerFolderListCalls": [8, 8, 8],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [9, 9, 9],
+          "destinationObjectReadCalls": [557, 557, 557],
+          "zipEntryReadCalls": [6, 6, 6],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "child-zip-1000-restore-off-resume-1.json",
+          "sha256": "d293222e04b4a1aaf68584d1e053d397eb996725a70b6a391d61c702327579c8",
+          "watchdog": {
+            "name": "child-zip-1000-restore-off-resume-1.watchdog.json",
+            "sha256": "0a199d527d555d9be7c272c3d2ee9b900c997011345be5121ae788c9767ffcd3",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.09375
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.5
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.234375
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "child-zip",
+      "fileCount": 1000,
+      "operation": "restore",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 550,
+      "progressEnabled": true,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [5214.3642, 5214.3642, 5214.3642],
+        "firstPayloadCommitMilliseconds": [908.3487, 908.3487, 908.3487],
+        "firstNewPayloadCommitMilliseconds": [908.3487, 908.3487, 908.3487],
+        "payloadCommitCount": [550, 550, 550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [184782280, 184782280, 184782280],
+        "processCpuMilliseconds": [6859.375, 6859.375, 6859.375],
+        "sampledPeakManagedBytes": [18792296, 18792296, 18792296],
+        "sampledPeakPrivateBytes": [40730624, 40730624, 40730624],
+        "sampledPeakWorkingSetBytes": [84004864, 84004864, 84004864],
+        "remainingProgressDatabases": [1, 1, 1],
+        "calls": {
+          "providerObjectReadCalls": [15, 15, 15],
+          "providerFolderListCalls": [2, 2, 2],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [15, 15, 15],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [566, 566, 566],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [5, 5, 5],
+          "providerFolderListCalls": [2, 2, 2],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [5, 5, 5],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [7, 7, 7],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [9446.59, 9446.59, 9446.59],
+        "firstPayloadCommitMilliseconds": [1616.0307, 1616.0307, 1616.0307],
+        "firstNewPayloadCommitMilliseconds": [1616.0307, 1616.0307, 1616.0307],
+        "payloadCommitCount": [450, 450, 450],
+        "previouslyCommittedCount": [550, 550, 550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [280192720, 280192720, 280192720],
+        "processCpuMilliseconds": [12812.5, 12812.5, 12812.5],
+        "sampledPeakManagedBytes": [18259200, 18259200, 18259200],
+        "sampledPeakPrivateBytes": [42471424, 42471424, 42471424],
+        "sampledPeakWorkingSetBytes": [89153536, 89153536, 89153536],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [574, 574, 574],
+          "providerFolderListCalls": [19, 19, 19],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [17, 17, 17],
+          "destinationObjectReadCalls": [557, 557, 557],
+          "zipEntryReadCalls": [459, 459, 459],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [56, 56, 56],
+          "providerFolderListCalls": [3, 3, 3],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [4, 4, 4],
+          "destinationObjectReadCalls": [52, 52, 52],
+          "zipEntryReadCalls": [6, 6, 6],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "child-zip-1000-restore-on-resume-1.json",
+          "sha256": "0d22e8dea297e7181a03ab65e44b8e04a3d7faee83d28cffbd615ce7e2446ee8",
+          "watchdog": {
+            "name": "child-zip-1000-restore-on-resume-1.watchdog.json",
+            "sha256": "64da75b9ecba5efcc3fe9bc327f7d9e8c48da6d4cdd367f582963a6ebc736d8f",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.296875
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.671875
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.25
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.171875
+              },
+              {
+                "id": 15420,
+                "name": "pCloud",
+                "cpuSeconds": 0.109375
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 1000,
+      "operation": "backup",
+      "mode": "normal",
+      "abortAfterPayloadCommits": 0,
+      "progressEnabled": false,
+      "samples": 3,
+      "first": {
+        "elapsedMilliseconds": [11592.6041, 11575.1778, 11621.7302],
+        "firstPayloadCommitMilliseconds": [538.5963, 537.4468, 540.2966],
+        "firstNewPayloadCommitMilliseconds": [538.5963, 537.4468, 540.2966],
+        "payloadCommitCount": [1000, 1000, 1000],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [297540496, 297412512, 297704464],
+        "processCpuMilliseconds": [14421.875, 14156.25, 14500],
+        "sampledPeakManagedBytes": [18299552, 18204960, 18561992],
+        "sampledPeakPrivateBytes": [37785600, 37359616, 37949440],
+        "sampledPeakWorkingSetBytes": [78352384, 78024704, 80007168],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1001, 1001, 1001],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [1001, 1001, 1001],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [2, 2, 2],
+          "providerFolderListCalls": [5, 5, 5],
+          "sourceObjectReadCalls": [2, 2, 2],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": null,
+      "sources": [
+        {
+          "name": "mirror-1000-backup-off-normal-1.json",
+          "sha256": "0290c71b0f4483222d87e3f47cca06961cd0f69d176a2531f724d06b87d057d9",
+          "watchdog": {
+            "name": "mirror-1000-backup-off-normal-1.watchdog.json",
+            "sha256": "6f80dba6091b4ed85a6c8fa867de088ea39e979deae8290dbcb25b9e3e370b9c",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 0.953125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.5
+              },
+              {
+                "id": 18716,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.234375
+              }
+            ]
+          }
+        },
+        {
+          "name": "mirror-1000-backup-off-normal-2.json",
+          "sha256": "17db8eee8946a51a296b0f0c2dab240cc3fa2fee3466ae4612d9c94427638602",
+          "watchdog": {
+            "name": "mirror-1000-backup-off-normal-2.watchdog.json",
+            "sha256": "7e1858e794cbf4271bf2e2888dce3239e34e122dcb79c30c441de1c8d1e4aa9b",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 0.96875
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.53125
+              }
+            ]
+          }
+        },
+        {
+          "name": "mirror-1000-backup-off-normal-3.json",
+          "sha256": "564ab094374c4e205e8ecbea4df3a19750513e1161d467e94f526ffa0fb36d20",
+          "watchdog": {
+            "name": "mirror-1000-backup-off-normal-3.watchdog.json",
+            "sha256": "cd62a04c0adabd68e8eca16448155e141d9e2c40252bcbcbd0b7295537220da2",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 0.84375
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.40625
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.359375
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.140625
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 1000,
+      "operation": "backup",
+      "mode": "normal",
+      "abortAfterPayloadCommits": 0,
+      "progressEnabled": true,
+      "samples": 3,
+      "first": {
+        "elapsedMilliseconds": [11813.9734, 11785.9513, 11998.5687],
+        "firstPayloadCommitMilliseconds": [574.4547, 570.177, 579.8422],
+        "firstNewPayloadCommitMilliseconds": [574.4547, 570.177, 579.8422],
+        "payloadCommitCount": [1000, 1000, 1000],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [297390200, 297328576, 297484072],
+        "processCpuMilliseconds": [14656.25, 14640.625, 14796.875],
+        "sampledPeakManagedBytes": [18377368, 18308024, 18541520],
+        "sampledPeakPrivateBytes": [38043648, 37945344, 41533440],
+        "sampledPeakWorkingSetBytes": [79319040, 78852096, 82833408],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1001, 1001, 1001],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [1001, 1001, 1001],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [2, 2, 2],
+          "providerFolderListCalls": [5, 5, 5],
+          "sourceObjectReadCalls": [2, 2, 2],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": null,
+      "sources": [
+        {
+          "name": "mirror-1000-backup-on-normal-1.json",
+          "sha256": "22cea334561ab453c5cf24e722ad4287276b483b69b83f411aa1b228cc892657",
+          "watchdog": {
+            "name": "mirror-1000-backup-on-normal-1.watchdog.json",
+            "sha256": "0fb91aea29503096f80d0d63b9af1f3d72a9443df17060b6ceb0f214acccea2e",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.0
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.59375
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.21875
+              }
+            ]
+          }
+        },
+        {
+          "name": "mirror-1000-backup-on-normal-2.json",
+          "sha256": "6677ca2ff6572338be336e8f43c56c4dbaa33a25b37504e8997b93050f3caea4",
+          "watchdog": {
+            "name": "mirror-1000-backup-on-normal-2.watchdog.json",
+            "sha256": "2e2eb18e49b2d63626b4d517359ea8bf9626c11f4d353ec6ab5dc72eae688c0e",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.046875
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.59375
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.203125
+              }
+            ]
+          }
+        },
+        {
+          "name": "mirror-1000-backup-on-normal-3.json",
+          "sha256": "9c01ddb9dce66bca85fc185f490e7ab90f3f371c788f87255c2d1ffeb01dd060",
+          "watchdog": {
+            "name": "mirror-1000-backup-on-normal-3.watchdog.json",
+            "sha256": "0d4a7056051fc06b6e4de12a664f38bd2362be3bd0ada5e912cad329084cc6f8",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.078125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.484375
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.34375
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.21875
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.1875
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 1000,
+      "operation": "backup",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 550,
+      "progressEnabled": false,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [6816.3434, 6816.3434, 6816.3434],
+        "firstPayloadCommitMilliseconds": [544.0394, 544.0394, 544.0394],
+        "firstNewPayloadCommitMilliseconds": [544.0394, 544.0394, 544.0394],
+        "payloadCommitCount": [550, 550, 550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [150823144, 150823144, 150823144],
+        "processCpuMilliseconds": [9343.75, 9343.75, 9343.75],
+        "sampledPeakManagedBytes": [17844936, 17844936, 17844936],
+        "sampledPeakPrivateBytes": [37732352, 37732352, 37732352],
+        "sampledPeakWorkingSetBytes": [78962688, 78962688, 78962688],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [551, 551, 551],
+          "providerFolderListCalls": [10, 10, 10],
+          "sourceObjectReadCalls": [551, 551, 551],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [2, 2, 2],
+          "providerFolderListCalls": [5, 5, 5],
+          "sourceObjectReadCalls": [2, 2, 2],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [9350.0976, 9350.0976, 9350.0976],
+        "firstPayloadCommitMilliseconds": [4375.3311, 4375.3311, 4375.3311],
+        "firstNewPayloadCommitMilliseconds": [4375.3311, 4375.3311, 4375.3311],
+        "payloadCommitCount": [450, 450, 450],
+        "previouslyCommittedCount": [550, 550, 550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [327022896, 327022896, 327022896],
+        "processCpuMilliseconds": [12109.375, 12109.375, 12109.375],
+        "sampledPeakManagedBytes": [19106192, 19106192, 19106192],
+        "sampledPeakPrivateBytes": [42233856, 42233856, 42233856],
+        "sampledPeakWorkingSetBytes": [82980864, 82980864, 82980864],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1552, 1552, 1552],
+          "providerFolderListCalls": [20, 20, 20],
+          "sourceObjectReadCalls": [1001, 1001, 1001],
+          "archiveObjectReadCalls": [551, 551, 551],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [1103, 1103, 1103],
+          "providerFolderListCalls": [16, 16, 16],
+          "sourceObjectReadCalls": [552, 552, 552],
+          "archiveObjectReadCalls": [551, 551, 551],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "mirror-1000-backup-off-resume-1.json",
+          "sha256": "d1812b30299da5645025c81acef13947c1b9e92216d5cdd95a7c1486ced22413",
+          "watchdog": {
+            "name": "mirror-1000-backup-off-resume-1.watchdog.json",
+            "sha256": "b99f15f2b4eb0f0b623346b656b0633c51b46a8115218db585786b59dff7e9e9",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.046875
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.609375
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.34375
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.234375
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.203125
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.140625
+              },
+              {
+                "id": 15420,
+                "name": "pCloud",
+                "cpuSeconds": 0.109375
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 1000,
+      "operation": "backup",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 550,
+      "progressEnabled": true,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [6744.6081, 6744.6081, 6744.6081],
+        "firstPayloadCommitMilliseconds": [576.9962, 576.9962, 576.9962],
+        "firstNewPayloadCommitMilliseconds": [576.9962, 576.9962, 576.9962],
+        "payloadCommitCount": [550, 550, 550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [149899696, 149899696, 149899696],
+        "processCpuMilliseconds": [8906.25, 8906.25, 8906.25],
+        "sampledPeakManagedBytes": [17692216, 17692216, 17692216],
+        "sampledPeakPrivateBytes": [37490688, 37490688, 37490688],
+        "sampledPeakWorkingSetBytes": [78495744, 78495744, 78495744],
+        "remainingProgressDatabases": [1, 1, 1],
+        "calls": {
+          "providerObjectReadCalls": [551, 551, 551],
+          "providerFolderListCalls": [10, 10, 10],
+          "sourceObjectReadCalls": [551, 551, 551],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [2, 2, 2],
+          "providerFolderListCalls": [5, 5, 5],
+          "sourceObjectReadCalls": [2, 2, 2],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [9416.4095, 9416.4095, 9416.4095],
+        "firstPayloadCommitMilliseconds": [862.2912, 862.2912, 862.2912],
+        "firstNewPayloadCommitMilliseconds": [862.2912, 862.2912, 862.2912],
+        "payloadCommitCount": [450, 450, 450],
+        "previouslyCommittedCount": [550, 550, 550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [327538080, 327538080, 327538080],
+        "processCpuMilliseconds": [11968.75, 11968.75, 11968.75],
+        "sampledPeakManagedBytes": [18168968, 18168968, 18168968],
+        "sampledPeakPrivateBytes": [41103360, 41103360, 41103360],
+        "sampledPeakWorkingSetBytes": [82571264, 82571264, 82571264],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1552, 1552, 1552],
+          "providerFolderListCalls": [20, 20, 20],
+          "sourceObjectReadCalls": [1001, 1001, 1001],
+          "archiveObjectReadCalls": [551, 551, 551],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [103, 103, 103],
+          "providerFolderListCalls": [6, 6, 6],
+          "sourceObjectReadCalls": [52, 52, 52],
+          "archiveObjectReadCalls": [51, 51, 51],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "mirror-1000-backup-on-resume-1.json",
+          "sha256": "23f3a0434ac552ee9d35a46e553efd54f3426d82171ea03f905594fea9a8deb8",
+          "watchdog": {
+            "name": "mirror-1000-backup-on-resume-1.watchdog.json",
+            "sha256": "8b6e160edb32e0613d73a2fce028af199c7251ba7a9f33c242a506cf7f46daef",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.015625
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.625
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.171875
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.140625
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 1000,
+      "operation": "restore",
+      "mode": "normal",
+      "abortAfterPayloadCommits": 0,
+      "progressEnabled": false,
+      "samples": 3,
+      "first": {
+        "elapsedMilliseconds": [10841.5154, 10782.5085, 10920.1481],
+        "firstPayloadCommitMilliseconds": [1092.0604, 1071.8871, 1115.641],
+        "firstNewPayloadCommitMilliseconds": [1092.0604, 1071.8871, 1115.641],
+        "payloadCommitCount": [1000, 1000, 1000],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [397403080, 396913592, 397456696],
+        "processCpuMilliseconds": [16078.125, 16000, 16203.125],
+        "sampledPeakManagedBytes": [18470192, 18130728, 18497160],
+        "sampledPeakPrivateBytes": [45219840, 43827200, 45645824],
+        "sampledPeakWorkingSetBytes": [88010752, 87556096, 88322048],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1003, 1003, 1003],
+          "providerFolderListCalls": [33, 33, 33],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [1003, 1003, 1003],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [8, 8, 8],
+          "providerFolderListCalls": [4, 4, 4],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [8, 8, 8],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": null,
+      "sources": [
+        {
+          "name": "mirror-1000-restore-off-normal-1.json",
+          "sha256": "e28606b475bececa45f0cb18432501e73dce7b3ab44aca9d3b76c022e53f5e22",
+          "watchdog": {
+            "name": "mirror-1000-restore-off-normal-1.watchdog.json",
+            "sha256": "e8afee21aacaa56d8ef019d9dcc90cb1e387ff251a4e6d997eb0b29fdd5492e5",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.9375
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.890625
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.796875
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.140625
+              },
+              {
+                "id": 13220,
+                "name": "Docker Desktop",
+                "cpuSeconds": 0.125
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.109375
+              }
+            ]
+          }
+        },
+        {
+          "name": "mirror-1000-restore-off-normal-2.json",
+          "sha256": "0854f93aef32bfb382d53f8782b0ad3ef42a2e42f066b5171fe94a511f6f4cc3",
+          "watchdog": {
+            "name": "mirror-1000-restore-off-normal-2.watchdog.json",
+            "sha256": "5c4e99ca2e0f507aca060a6ac2c2b4aba0740d5ee592dc90162ac69c8085b1c6",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.5
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.84375
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.265625
+              },
+              {
+                "id": 13220,
+                "name": "Docker Desktop",
+                "cpuSeconds": 0.109375
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.109375
+              }
+            ]
+          }
+        },
+        {
+          "name": "mirror-1000-restore-off-normal-3.json",
+          "sha256": "780ad50cd8140f492a295369628862138afb5076139a127595ced46d212af267",
+          "watchdog": {
+            "name": "mirror-1000-restore-off-normal-3.watchdog.json",
+            "sha256": "777eab34b3ea99b75fea5ac098199c10c469b24d9b97a110ffdb98dc1a94186b",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.53125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.65625
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.171875
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.125
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.109375
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 1000,
+      "operation": "restore",
+      "mode": "normal",
+      "abortAfterPayloadCommits": 0,
+      "progressEnabled": true,
+      "samples": 3,
+      "first": {
+        "elapsedMilliseconds": [10804.3462, 10760.4978, 11704.2552],
+        "firstPayloadCommitMilliseconds": [1129.1305, 1097.8318, 1142.9938],
+        "firstNewPayloadCommitMilliseconds": [1129.1305, 1097.8318, 1142.9938],
+        "payloadCommitCount": [1000, 1000, 1000],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [397317840, 397265288, 397457320],
+        "processCpuMilliseconds": [15906.25, 15718.75, 16406.25],
+        "sampledPeakManagedBytes": [17999408, 17879624, 18802792],
+        "sampledPeakPrivateBytes": [46067712, 45940736, 46116864],
+        "sampledPeakWorkingSetBytes": [89354240, 89153536, 89575424],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1003, 1003, 1003],
+          "providerFolderListCalls": [33, 33, 33],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [1003, 1003, 1003],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [8, 8, 8],
+          "providerFolderListCalls": [4, 4, 4],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [8, 8, 8],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": null,
+      "sources": [
+        {
+          "name": "mirror-1000-restore-on-normal-1.json",
+          "sha256": "4c42ead1843397e537e56aa417628083bec4bd9ba966556a537e52d4af36ec62",
+          "watchdog": {
+            "name": "mirror-1000-restore-on-normal-1.watchdog.json",
+            "sha256": "2373d91145b5553d2675ae05f1c2f5be7572edf36a196cc9dacd444e632ebd03",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.703125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.875
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.265625
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.15625
+              },
+              {
+                "id": 15420,
+                "name": "pCloud",
+                "cpuSeconds": 0.140625
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.125
+              }
+            ]
+          }
+        },
+        {
+          "name": "mirror-1000-restore-on-normal-2.json",
+          "sha256": "5633d85926c212e6e6b43d925a1654c1878c0700e18f58671794d38f14dd3310",
+          "watchdog": {
+            "name": "mirror-1000-restore-on-normal-2.watchdog.json",
+            "sha256": "5647ba201d2b98646b019927e77bf80e1abdebdb2b2946be17d4d113d0dcfb69",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.578125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.921875
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.359375
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.3125
+              }
+            ]
+          }
+        },
+        {
+          "name": "mirror-1000-restore-on-normal-3.json",
+          "sha256": "9811f1f88efe17acd9ff6f11316d68ed17e53cc52dd923d33bf4cad1211b5b9c",
+          "watchdog": {
+            "name": "mirror-1000-restore-on-normal-3.watchdog.json",
+            "sha256": "97659b810903b59e165b6e53eca4e6805f046ab4dabf963fbc3bc2cb858ee494",
+            "otherObservedProcessCpu": [
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 1.671875
+              },
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.59375
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 1.28125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 1.0625
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.46875
+              },
+              {
+                "id": 13220,
+                "name": "Docker Desktop",
+                "cpuSeconds": 0.109375
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.109375
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 1000,
+      "operation": "restore",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 550,
+      "progressEnabled": false,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [5704.9426, 5704.9426, 5704.9426],
+        "firstPayloadCommitMilliseconds": [1074.4044, 1074.4044, 1074.4044],
+        "firstNewPayloadCommitMilliseconds": [1074.4044, 1074.4044, 1074.4044],
+        "payloadCommitCount": [550, 550, 550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [202649272, 202649272, 202649272],
+        "processCpuMilliseconds": [8906.25, 8906.25, 8906.25],
+        "sampledPeakManagedBytes": [17120928, 17120928, 17120928],
+        "sampledPeakPrivateBytes": [44371968, 44371968, 44371968],
+        "sampledPeakWorkingSetBytes": [86409216, 86409216, 86409216],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [557, 557, 557],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [557, 557, 557],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [8, 8, 8],
+          "providerFolderListCalls": [4, 4, 4],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [8, 8, 8],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [9612.0583, 9612.0583, 9612.0583],
+        "firstPayloadCommitMilliseconds": [4515.0562, 4515.0562, 4515.0562],
+        "firstNewPayloadCommitMilliseconds": [4515.0562, 4515.0562, 4515.0562],
+        "payloadCommitCount": [450, 450, 450],
+        "previouslyCommittedCount": [550, 550, 550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [292187408, 292187408, 292187408],
+        "processCpuMilliseconds": [13812.5, 13812.5, 13812.5],
+        "sampledPeakManagedBytes": [18285824, 18285824, 18285824],
+        "sampledPeakPrivateBytes": [46252032, 46252032, 46252032],
+        "sampledPeakWorkingSetBytes": [90578944, 90578944, 90578944],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1003, 1003, 1003],
+          "providerFolderListCalls": [33, 33, 33],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [452, 452, 452],
+          "destinationObjectReadCalls": [551, 551, 551],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [558, 558, 558],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [7, 7, 7],
+          "destinationObjectReadCalls": [551, 551, 551],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "mirror-1000-restore-off-resume-1.json",
+          "sha256": "61630f49180b1425d0fa190fdd6d97bf0b422eb9b510505863b23b600254df22",
+          "watchdog": {
+            "name": "mirror-1000-restore-off-resume-1.watchdog.json",
+            "sha256": "91a8697f9e9b5fadae218630def7a657e532c2044e342567bb3079671740368b",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.8125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.796875
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.171875
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.15625
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 1000,
+      "operation": "restore",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 550,
+      "progressEnabled": true,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [5701.4841, 5701.4841, 5701.4841],
+        "firstPayloadCommitMilliseconds": [1106.6543, 1106.6543, 1106.6543],
+        "firstNewPayloadCommitMilliseconds": [1106.6543, 1106.6543, 1106.6543],
+        "payloadCommitCount": [550, 550, 550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [202342200, 202342200, 202342200],
+        "processCpuMilliseconds": [9171.875, 9171.875, 9171.875],
+        "sampledPeakManagedBytes": [17293248, 17293248, 17293248],
+        "sampledPeakPrivateBytes": [44863488, 44863488, 44863488],
+        "sampledPeakWorkingSetBytes": [87744512, 87744512, 87744512],
+        "remainingProgressDatabases": [1, 1, 1],
+        "calls": {
+          "providerObjectReadCalls": [557, 557, 557],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [557, 557, 557],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [8, 8, 8],
+          "providerFolderListCalls": [4, 4, 4],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [8, 8, 8],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [9593.3445, 9593.3445, 9593.3445],
+        "firstPayloadCommitMilliseconds": [1647.3473, 1647.3473, 1647.3473],
+        "firstNewPayloadCommitMilliseconds": [1647.3473, 1647.3473, 1647.3473],
+        "payloadCommitCount": [450, 450, 450],
+        "previouslyCommittedCount": [550, 550, 550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [292695352, 292695352, 292695352],
+        "processCpuMilliseconds": [13765.625, 13765.625, 13765.625],
+        "sampledPeakManagedBytes": [17251336, 17251336, 17251336],
+        "sampledPeakPrivateBytes": [46342144, 46342144, 46342144],
+        "sampledPeakWorkingSetBytes": [90947584, 90947584, 90947584],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1003, 1003, 1003],
+          "providerFolderListCalls": [33, 33, 33],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [452, 452, 452],
+          "destinationObjectReadCalls": [551, 551, 551],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [58, 58, 58],
+          "providerFolderListCalls": [4, 4, 4],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [7, 7, 7],
+          "destinationObjectReadCalls": [51, 51, 51],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "mirror-1000-restore-on-resume-1.json",
+          "sha256": "ee20511bd84d5be2a7ca5932f2dc8ba8d698c6ec12e6226bd7b70dfafc34231e",
+          "watchdog": {
+            "name": "mirror-1000-restore-on-resume-1.watchdog.json",
+            "sha256": "ad896029f794cd88c2fabf5157be6ce35c33131068affcd7f6b05d4f8ab1bac4",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.65625
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.921875
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.765625
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.640625
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.515625
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.140625
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 3000,
+      "operation": "backup",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 1550,
+      "progressEnabled": false,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [17804.8255, 17804.8255, 17804.8255],
+        "firstPayloadCommitMilliseconds": [570.2634, 570.2634, 570.2634],
+        "firstNewPayloadCommitMilliseconds": [570.2634, 570.2634, 570.2634],
+        "payloadCommitCount": [1550, 1550, 1550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [415506888, 415506888, 415506888],
+        "processCpuMilliseconds": [21187.5, 21187.5, 21187.5],
+        "sampledPeakManagedBytes": [18938608, 18938608, 18938608],
+        "sampledPeakPrivateBytes": [37543936, 37543936, 37543936],
+        "sampledPeakWorkingSetBytes": [78389248, 78389248, 78389248],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1551, 1551, 1551],
+          "providerFolderListCalls": [20, 20, 20],
+          "sourceObjectReadCalls": [1551, 1551, 1551],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [2, 2, 2],
+          "providerFolderListCalls": [5, 5, 5],
+          "sourceObjectReadCalls": [2, 2, 2],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [27349.3008, 27349.3008, 27349.3008],
+        "firstPayloadCommitMilliseconds": [11248.8461, 11248.8461, 11248.8461],
+        "firstNewPayloadCommitMilliseconds": [11248.8461, 11248.8461, 11248.8461],
+        "payloadCommitCount": [1450, 1450, 1450],
+        "previouslyCommittedCount": [1550, 1550, 1550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [982652888, 982652888, 982652888],
+        "processCpuMilliseconds": [32421.875, 32421.875, 32421.875],
+        "sampledPeakManagedBytes": [19587520, 19587520, 19587520],
+        "sampledPeakPrivateBytes": [54284288, 54284288, 54284288],
+        "sampledPeakWorkingSetBytes": [94752768, 94752768, 94752768],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [4552, 4552, 4552],
+          "providerFolderListCalls": [50, 50, 50],
+          "sourceObjectReadCalls": [3001, 3001, 3001],
+          "archiveObjectReadCalls": [1551, 1551, 1551],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [3103, 3103, 3103],
+          "providerFolderListCalls": [36, 36, 36],
+          "sourceObjectReadCalls": [1552, 1552, 1552],
+          "archiveObjectReadCalls": [1551, 1551, 1551],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "mirror-3000-backup-off-resume-1.json",
+          "sha256": "dd9ee9bfd2506df0ac58175c01e104b2383fd489d9d3d99793729c98a0aeac4b",
+          "watchdog": {
+            "name": "mirror-3000-backup-off-resume-1.watchdog.json",
+            "sha256": "8f105a075cc32aecb9f847fa1f8ad21ba2eb02e1fbd620c15e4b3fa6a62d3b1c",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 2.53125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 1.828125
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 1.0625
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.953125
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.34375
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.25
+              },
+              {
+                "id": 15420,
+                "name": "pCloud",
+                "cpuSeconds": 0.21875
+              },
+              {
+                "id": 13220,
+                "name": "Docker Desktop",
+                "cpuSeconds": 0.125
+              },
+              {
+                "id": 27036,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.125
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 3000,
+      "operation": "backup",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 1550,
+      "progressEnabled": true,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [17621.3136, 17621.3136, 17621.3136],
+        "firstPayloadCommitMilliseconds": [593.3334, 593.3334, 593.3334],
+        "firstNewPayloadCommitMilliseconds": [593.3334, 593.3334, 593.3334],
+        "payloadCommitCount": [1550, 1550, 1550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [415571640, 415571640, 415571640],
+        "processCpuMilliseconds": [21250, 21250, 21250],
+        "sampledPeakManagedBytes": [18454840, 18454840, 18454840],
+        "sampledPeakPrivateBytes": [41340928, 41340928, 41340928],
+        "sampledPeakWorkingSetBytes": [83066880, 83066880, 83066880],
+        "remainingProgressDatabases": [1, 1, 1],
+        "calls": {
+          "providerObjectReadCalls": [1551, 1551, 1551],
+          "providerFolderListCalls": [20, 20, 20],
+          "sourceObjectReadCalls": [1551, 1551, 1551],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [2, 2, 2],
+          "providerFolderListCalls": [5, 5, 5],
+          "sourceObjectReadCalls": [2, 2, 2],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [27504.1542, 27504.1542, 27504.1542],
+        "firstPayloadCommitMilliseconds": [890.1472, 890.1472, 890.1472],
+        "firstNewPayloadCommitMilliseconds": [890.1472, 890.1472, 890.1472],
+        "payloadCommitCount": [1450, 1450, 1450],
+        "previouslyCommittedCount": [1550, 1550, 1550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [983276344, 983276344, 983276344],
+        "processCpuMilliseconds": [32484.375, 32484.375, 32484.375],
+        "sampledPeakManagedBytes": [20017864, 20017864, 20017864],
+        "sampledPeakPrivateBytes": [54947840, 54947840, 54947840],
+        "sampledPeakWorkingSetBytes": [97095680, 97095680, 97095680],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [4552, 4552, 4552],
+          "providerFolderListCalls": [50, 50, 50],
+          "sourceObjectReadCalls": [3001, 3001, 3001],
+          "archiveObjectReadCalls": [1551, 1551, 1551],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [103, 103, 103],
+          "providerFolderListCalls": [6, 6, 6],
+          "sourceObjectReadCalls": [52, 52, 52],
+          "archiveObjectReadCalls": [51, 51, 51],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "mirror-3000-backup-on-resume-1.json",
+          "sha256": "31b842b9cece9f51efbc0710a7f1d3e6dde7909fd51ca482e30949aeea4e81cd",
+          "watchdog": {
+            "name": "mirror-3000-backup-on-resume-1.watchdog.json",
+            "sha256": "1d7de8c60c620546ee8d24551545238865dd6894d46219175c8ddb9fdf80bba7",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 2.671875
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 1.890625
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.453125
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.265625
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.171875
+              },
+              {
+                "id": 13512,
+                "name": "chrome",
+                "cpuSeconds": 0.125
+              },
+              {
+                "id": 15420,
+                "name": "pCloud",
+                "cpuSeconds": 0.109375
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 3000,
+      "operation": "restore",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 1550,
+      "progressEnabled": false,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [14877.3728, 14877.3728, 14877.3728],
+        "firstPayloadCommitMilliseconds": [1675.6879, 1675.6879, 1675.6879],
+        "firstNewPayloadCommitMilliseconds": [1675.6879, 1675.6879, 1675.6879],
+        "payloadCommitCount": [1550, 1550, 1550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [582382528, 582382528, 582382528],
+        "processCpuMilliseconds": [21390.625, 21390.625, 21390.625],
+        "sampledPeakManagedBytes": [18120200, 18120200, 18120200],
+        "sampledPeakPrivateBytes": [45830144, 45830144, 45830144],
+        "sampledPeakWorkingSetBytes": [88743936, 88743936, 88743936],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1557, 1557, 1557],
+          "providerFolderListCalls": [34, 34, 34],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [1557, 1557, 1557],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [8, 8, 8],
+          "providerFolderListCalls": [4, 4, 4],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [8, 8, 8],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [27800.5994, 27800.5994, 27800.5994],
+        "firstPayloadCommitMilliseconds": [11438.0418, 11438.0418, 11438.0418],
+        "firstNewPayloadCommitMilliseconds": [11438.0418, 11438.0418, 11438.0418],
+        "payloadCommitCount": [1450, 1450, 1450],
+        "previouslyCommittedCount": [1550, 1550, 1550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [920364216, 920364216, 920364216],
+        "processCpuMilliseconds": [36140.625, 36140.625, 36140.625],
+        "sampledPeakManagedBytes": [19248208, 19248208, 19248208],
+        "sampledPeakPrivateBytes": [56266752, 56266752, 56266752],
+        "sampledPeakWorkingSetBytes": [100610048, 100610048, 100610048],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [3003, 3003, 3003],
+          "providerFolderListCalls": [93, 93, 93],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [1452, 1452, 1452],
+          "destinationObjectReadCalls": [1551, 1551, 1551],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [1558, 1558, 1558],
+          "providerFolderListCalls": [34, 34, 34],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [7, 7, 7],
+          "destinationObjectReadCalls": [1551, 1551, 1551],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "mirror-3000-restore-off-resume-1.json",
+          "sha256": "8455d72abb7b22f9e351dbdb563812043b2bc753d4154d05ca58c86f7532eeb7",
+          "watchdog": {
+            "name": "mirror-3000-restore-off-resume-1.watchdog.json",
+            "sha256": "6d81b8d1722208901cae875cfbc01ec3b2e80d7a3a18df1d7015702402a46021",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 4.921875
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 2.703125
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.890625
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.515625
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.359375
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.359375
+              },
+              {
+                "id": 13220,
+                "name": "Docker Desktop",
+                "cpuSeconds": 0.3125
+              },
+              {
+                "id": 15420,
+                "name": "pCloud",
+                "cpuSeconds": 0.296875
+              },
+              {
+                "id": 27036,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.203125
+              },
+              {
+                "id": 29008,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.140625
+              },
+              {
+                "id": 13512,
+                "name": "chrome",
+                "cpuSeconds": 0.125
+              },
+              {
+                "id": 16436,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.109375
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "mirror",
+      "fileCount": 3000,
+      "operation": "restore",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 1550,
+      "progressEnabled": true,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [14826.5966, 14826.5966, 14826.5966],
+        "firstPayloadCommitMilliseconds": [1677.6059, 1677.6059, 1677.6059],
+        "firstNewPayloadCommitMilliseconds": [1677.6059, 1677.6059, 1677.6059],
+        "payloadCommitCount": [1550, 1550, 1550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [582153320, 582153320, 582153320],
+        "processCpuMilliseconds": [21734.375, 21734.375, 21734.375],
+        "sampledPeakManagedBytes": [17913296, 17913296, 17913296],
+        "sampledPeakPrivateBytes": [44457984, 44457984, 44457984],
+        "sampledPeakWorkingSetBytes": [88539136, 88539136, 88539136],
+        "remainingProgressDatabases": [1, 1, 1],
+        "calls": {
+          "providerObjectReadCalls": [1557, 1557, 1557],
+          "providerFolderListCalls": [34, 34, 34],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [1557, 1557, 1557],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [8, 8, 8],
+          "providerFolderListCalls": [4, 4, 4],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [8, 8, 8],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [27806.5898, 27806.5898, 27806.5898],
+        "firstPayloadCommitMilliseconds": [3068.1992, 3068.1992, 3068.1992],
+        "firstNewPayloadCommitMilliseconds": [3068.1992, 3068.1992, 3068.1992],
+        "payloadCommitCount": [1450, 1450, 1450],
+        "previouslyCommittedCount": [1550, 1550, 1550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [920336248, 920336248, 920336248],
+        "processCpuMilliseconds": [35765.625, 35765.625, 35765.625],
+        "sampledPeakManagedBytes": [19418680, 19418680, 19418680],
+        "sampledPeakPrivateBytes": [56901632, 56901632, 56901632],
+        "sampledPeakWorkingSetBytes": [101818368, 101818368, 101818368],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [3003, 3003, 3003],
+          "providerFolderListCalls": [93, 93, 93],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [1452, 1452, 1452],
+          "destinationObjectReadCalls": [1551, 1551, 1551],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [58, 58, 58],
+          "providerFolderListCalls": [4, 4, 4],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [7, 7, 7],
+          "destinationObjectReadCalls": [51, 51, 51],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "mirror-3000-restore-on-resume-1.json",
+          "sha256": "dc7c6749c5aa63246ecd0151b22c14f530ea95f2ad02e1ec82fa8728dba8890a",
+          "watchdog": {
+            "name": "mirror-3000-restore-on-resume-1.watchdog.json",
+            "sha256": "94c62abe3ead962ddae52a68a24de6bd9e3457d5c2c480b24e27906fabf3a5bd",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 4.515625
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 2.484375
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.609375
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.359375
+              },
+              {
+                "id": 13220,
+                "name": "Docker Desktop",
+                "cpuSeconds": 0.296875
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.296875
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.234375
+              },
+              {
+                "id": 15420,
+                "name": "pCloud",
+                "cpuSeconds": 0.1875
+              },
+              {
+                "id": 13512,
+                "name": "chrome",
+                "cpuSeconds": 0.171875
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "root-zip",
+      "fileCount": 1000,
+      "operation": "backup",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 1,
+      "progressEnabled": false,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [2894.8869, 2894.8869, 2894.8869],
+        "firstPayloadCommitMilliseconds": [2881.664, 2881.664, 2881.664],
+        "firstNewPayloadCommitMilliseconds": [2881.664, 2881.664, 2881.664],
+        "payloadCommitCount": [1, 1, 1],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [73301120, 73301120, 73301120],
+        "processCpuMilliseconds": [3859.375, 3859.375, 3859.375],
+        "sampledPeakManagedBytes": [14726224, 14726224, 14726224],
+        "sampledPeakPrivateBytes": [40894464, 40894464, 40894464],
+        "sampledPeakWorkingSetBytes": [80560128, 80560128, 80560128],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1001, 1001, 1001],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [1001, 1001, 1001],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [1001, 1001, 1001],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [1001, 1001, 1001],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [1001, 1001, 1001],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [1001, 1001, 1001],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [2940.6766, 2940.6766, 2940.6766],
+        "firstPayloadCommitMilliseconds": null,
+        "firstNewPayloadCommitMilliseconds": null,
+        "payloadCommitCount": [0, 0, 0],
+        "previouslyCommittedCount": [1, 1, 1],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [74577368, 74577368, 74577368],
+        "processCpuMilliseconds": [3656.25, 3656.25, 3656.25],
+        "sampledPeakManagedBytes": [14955080, 14955080, 14955080],
+        "sampledPeakPrivateBytes": [41013248, 41013248, 41013248],
+        "sampledPeakWorkingSetBytes": [79990784, 79990784, 79990784],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1003, 1003, 1003],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [1001, 1001, 1001],
+          "archiveObjectReadCalls": [2, 2, 2],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [1001, 1001, 1001],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": null
+      },
+      "sources": [
+        {
+          "name": "root-zip-1000-backup-off-resume-1.json",
+          "sha256": "7deddba9649fb707c04d65b9136596e4b3b6fd505ad420205f7d411e910f28f2",
+          "watchdog": {
+            "name": "root-zip-1000-backup-off-resume-1.watchdog.json",
+            "sha256": "45960f410fe2e0a79da24353e3ec86826650bb57eafc2e625b2e1d6ce62b6f20",
+            "otherObservedProcessCpu": [
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.796875
+              },
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 0.28125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.15625
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "root-zip",
+      "fileCount": 1000,
+      "operation": "backup",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 1,
+      "progressEnabled": true,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [2878.1205, 2878.1205, 2878.1205],
+        "firstPayloadCommitMilliseconds": [2854.6704, 2854.6704, 2854.6704],
+        "firstNewPayloadCommitMilliseconds": [2854.6704, 2854.6704, 2854.6704],
+        "payloadCommitCount": [1, 1, 1],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [73070664, 73070664, 73070664],
+        "processCpuMilliseconds": [3734.375, 3734.375, 3734.375],
+        "sampledPeakManagedBytes": [15054272, 15054272, 15054272],
+        "sampledPeakPrivateBytes": [41390080, 41390080, 41390080],
+        "sampledPeakWorkingSetBytes": [81039360, 81039360, 81039360],
+        "remainingProgressDatabases": [1, 1, 1],
+        "calls": {
+          "providerObjectReadCalls": [1001, 1001, 1001],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [1001, 1001, 1001],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [1001, 1001, 1001],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [1001, 1001, 1001],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [1001, 1001, 1001],
+          "archiveObjectReadCalls": [0, 0, 0],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [1001, 1001, 1001],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [2927.5274, 2927.5274, 2927.5274],
+        "firstPayloadCommitMilliseconds": null,
+        "firstNewPayloadCommitMilliseconds": null,
+        "payloadCommitCount": [0, 0, 0],
+        "previouslyCommittedCount": [1, 1, 1],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [74787104, 74787104, 74787104],
+        "processCpuMilliseconds": [3859.375, 3859.375, 3859.375],
+        "sampledPeakManagedBytes": [15318464, 15318464, 15318464],
+        "sampledPeakPrivateBytes": [41443328, 41443328, 41443328],
+        "sampledPeakWorkingSetBytes": [82006016, 82006016, 82006016],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [1003, 1003, 1003],
+          "providerFolderListCalls": [14, 14, 14],
+          "sourceObjectReadCalls": [1001, 1001, 1001],
+          "archiveObjectReadCalls": [2, 2, 2],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [0, 0, 0],
+          "zipSourceReadCalls": [1001, 1001, 1001],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": null
+      },
+      "sources": [
+        {
+          "name": "root-zip-1000-backup-on-resume-1.json",
+          "sha256": "185f3f8be085c1ba6f3477fa88c63e18cfb0a0fefc871e6d59427e90b05a8766",
+          "watchdog": {
+            "name": "root-zip-1000-backup-on-resume-1.watchdog.json",
+            "sha256": "c74d43c7dd194f0e4fd7984ce13a6a847b12f42b35589ae897eb7a95c9dbd1ac",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 0.3125
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.171875
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "root-zip",
+      "fileCount": 1000,
+      "operation": "restore",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 550,
+      "progressEnabled": false,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [7460.5804, 7460.5804, 7460.5804],
+        "firstPayloadCommitMilliseconds": [4716.3341, 4716.3341, 4716.3341],
+        "firstNewPayloadCommitMilliseconds": [4716.3341, 4716.3341, 4716.3341],
+        "payloadCommitCount": [550, 550, 550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [234583608, 234583608, 234583608],
+        "processCpuMilliseconds": [9265.625, 9265.625, 9265.625],
+        "sampledPeakManagedBytes": [19990312, 19990312, 19990312],
+        "sampledPeakPrivateBytes": [39579648, 39579648, 39579648],
+        "sampledPeakWorkingSetBytes": [82395136, 82395136, 82395136],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [4, 4, 4],
+          "providerFolderListCalls": [2, 2, 2],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [4, 4, 4],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [556, 556, 556],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [4, 4, 4],
+          "providerFolderListCalls": [2, 2, 2],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [4, 4, 4],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [7, 7, 7],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [9400.5024, 9400.5024, 9400.5024],
+        "firstPayloadCommitMilliseconds": [5563.8982, 5563.8982, 5563.8982],
+        "firstNewPayloadCommitMilliseconds": [5563.8982, 5563.8982, 5563.8982],
+        "payloadCommitCount": [450, 450, 450],
+        "previouslyCommittedCount": [550, 550, 550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [298532072, 298532072, 298532072],
+        "processCpuMilliseconds": [12593.75, 12593.75, 12593.75],
+        "sampledPeakManagedBytes": [19401224, 19401224, 19401224],
+        "sampledPeakPrivateBytes": [43651072, 43651072, 43651072],
+        "sampledPeakWorkingSetBytes": [89255936, 89255936, 89255936],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [555, 555, 555],
+          "providerFolderListCalls": [19, 19, 19],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [4, 4, 4],
+          "destinationObjectReadCalls": [551, 551, 551],
+          "zipEntryReadCalls": [451, 451, 451],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [555, 555, 555],
+          "providerFolderListCalls": [8, 8, 8],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [4, 4, 4],
+          "destinationObjectReadCalls": [551, 551, 551],
+          "zipEntryReadCalls": [6, 6, 6],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "root-zip-1000-restore-off-resume-1.json",
+          "sha256": "11c049afcc0e08a5fcdd7ebdf44988c691b8b57b552004e308eead0742a0dd53",
+          "watchdog": {
+            "name": "root-zip-1000-restore-off-resume-1.watchdog.json",
+            "sha256": "99ea4e29e056c89589f8fcbe8fbca6b956842687b31d8d1ae002c52e8fc21187",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.046875
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.6875
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.25
+              },
+              {
+                "id": 14320,
+                "name": "com.docker.backend",
+                "cpuSeconds": 0.21875
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "format": "root-zip",
+      "fileCount": 1000,
+      "operation": "restore",
+      "mode": "resume",
+      "abortAfterPayloadCommits": 550,
+      "progressEnabled": true,
+      "samples": 1,
+      "first": {
+        "elapsedMilliseconds": [7665.1675, 7665.1675, 7665.1675],
+        "firstPayloadCommitMilliseconds": [4836.5059, 4836.5059, 4836.5059],
+        "firstNewPayloadCommitMilliseconds": [4836.5059, 4836.5059, 4836.5059],
+        "payloadCommitCount": [550, 550, 550],
+        "previouslyCommittedCount": [0, 0, 0],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [234467544, 234467544, 234467544],
+        "processCpuMilliseconds": [9421.875, 9421.875, 9421.875],
+        "sampledPeakManagedBytes": [19990840, 19990840, 19990840],
+        "sampledPeakPrivateBytes": [39858176, 39858176, 39858176],
+        "sampledPeakWorkingSetBytes": [83320832, 83320832, 83320832],
+        "remainingProgressDatabases": [1, 1, 1],
+        "calls": {
+          "providerObjectReadCalls": [4, 4, 4],
+          "providerFolderListCalls": [2, 2, 2],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [4, 4, 4],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [556, 556, 556],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [4, 4, 4],
+          "providerFolderListCalls": [2, 2, 2],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [4, 4, 4],
+          "destinationObjectReadCalls": [0, 0, 0],
+          "zipEntryReadCalls": [7, 7, 7],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "resumed": {
+        "elapsedMilliseconds": [9476.3063, 9476.3063, 9476.3063],
+        "firstPayloadCommitMilliseconds": [5661.3863, 5661.3863, 5661.3863],
+        "firstNewPayloadCommitMilliseconds": [5661.3863, 5661.3863, 5661.3863],
+        "payloadCommitCount": [450, 450, 450],
+        "previouslyCommittedCount": [550, 550, 550],
+        "recommittedPayloadCount": [0, 0, 0],
+        "allocatedBytes": [298410584, 298410584, 298410584],
+        "processCpuMilliseconds": [12609.375, 12609.375, 12609.375],
+        "sampledPeakManagedBytes": [19634944, 19634944, 19634944],
+        "sampledPeakPrivateBytes": [44040192, 44040192, 44040192],
+        "sampledPeakWorkingSetBytes": [90206208, 90206208, 90206208],
+        "remainingProgressDatabases": [0, 0, 0],
+        "calls": {
+          "providerObjectReadCalls": [555, 555, 555],
+          "providerFolderListCalls": [19, 19, 19],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [4, 4, 4],
+          "destinationObjectReadCalls": [551, 551, 551],
+          "zipEntryReadCalls": [451, 451, 451],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        },
+        "callsBeforeFirstNewCommit": {
+          "providerObjectReadCalls": [555, 555, 555],
+          "providerFolderListCalls": [8, 8, 8],
+          "sourceObjectReadCalls": [0, 0, 0],
+          "archiveObjectReadCalls": [4, 4, 4],
+          "destinationObjectReadCalls": [551, 551, 551],
+          "zipEntryReadCalls": [6, 6, 6],
+          "zipSourceReadCalls": [0, 0, 0],
+          "progressUnavailableWarnings": [0, 0, 0]
+        }
+      },
+      "sources": [
+        {
+          "name": "root-zip-1000-restore-on-resume-1.json",
+          "sha256": "b7dac556e64579217dbf48cf3149a3b87a95e86d6030efab24d376f9f4108ded",
+          "watchdog": {
+            "name": "root-zip-1000-restore-on-resume-1.watchdog.json",
+            "sha256": "a7c109b1af0531b01aca567e6bc3205b2c0fb69848256ba434843be8d83a2b31",
+            "otherObservedProcessCpu": [
+              {
+                "id": 36224,
+                "name": "devenv",
+                "cpuSeconds": 1.015625
+              },
+              {
+                "id": 26344,
+                "name": "OneDrive.Sync.Service",
+                "cpuSeconds": 0.515625
+              },
+              {
+                "id": 12400,
+                "name": "codex",
+                "cpuSeconds": 0.1875
+              },
+              {
+                "id": 21476,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.15625
+              },
+              {
+                "id": 8536,
+                "name": "ChatGPT",
+                "cpuSeconds": 0.125
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "generator": "tools/Yabt.Profiling/summarize-resume.py",
+  "generatorSha256": "fdd98dec99cc33cc3fa5b6ab565f182a098d7c4588ad077acae437172d89bc1b"
+}
