@@ -1129,6 +1129,45 @@ remain explicit follow-up areas. No partial ZIP state or within-folder cursor is
 persisted. Implementation commits are `05cf375`, `7bf362b`, `90bf46c`, and
 `b96aaf3`, following the initial folder-backup slice `e84d84e`.
 
+**Abrupt-process recovery acceptance (2026-10-26):** Seven real-filesystem
+scenarios now terminate the complete worker process tree at deterministic
+mutation boundaries and resume in a fresh process. See
+[the acceptance tests](../tests/Yabt.Sync.Tests/ProcessCrashRecoveryTests.cs).
+The test gate blocks inside existing structured log callbacks; production code
+has no new fault-injection hooks. The parent confirms that managed cleanup did
+not run and waits for both the test launcher and actual worker to exit before
+inspecting the files or starting recovery.
+
+Mirror backup and restore stop after historizing an old file but before
+installing its replacement, after committing a replacement, and after writing
+the final manifest while its invalidation marker remains. Backup additionally
+stops after uploading a new ZIP while its adjacent manifest is still absent.
+The restore commit case expands an outer ZIP containing another ZIP. One backup
+case changes the source again during downtime and preserves both older content
+versions while recovering to the current source bytes.
+
+Every recovered operation must reopen its surviving progress journal without
+fallback, acquire its locks, and complete. Checks cover exact payload and
+descriptor bytes, preserved history, deferred obsolete-item cleanup, valid
+manifests, byte-identical embedded/adjacent package manifests, empty folders,
+marker cleanup, and journal removal. The journal flush threshold is deliberately
+larger than each fixture, so termination bypasses the normal disposal flush.
+The parent does not open SQLite before the fresh recovery worker.
+
+These are correctness checks with bounded process watchdogs, not timing
+benchmarks. They establish abrupt-process recovery on the tested Windows
+filesystem; they do not establish durability through power loss, remote lease
+failure, or native Linux behavior. No production recovery changes were needed.
+Native Linux and deployed Azure/WebDAV acceptance remain the next validation
+steps under I04.
+
+Validation: all seven focused cases pass. The complete synchronization test
+project passes **478 tests**, with three existing Linux-only skips. Independent
+review checked crash boundaries and process ownership; UTF-8, CRLF, and diff
+checks pass. Compilation reported no code warnings; NuGet's advisory-feed lookup
+remains unavailable. Other projects were unchanged and were not rerun for this
+test-only slice.
+
 ## Suggested Codex-Sandbox-01 sequence
 
 1. Check out the handoff commit and read `AGENTS.md` plus this document.
