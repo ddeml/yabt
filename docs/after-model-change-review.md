@@ -1359,10 +1359,11 @@ Read-only DSM inspection on 2026-10-27 established this deployment baseline:
 - Volume 1 uses Btrfs on RAID 5, with 34 TB used of 48.9 TB shown by DSM.
 - Snapshot Replication is offered for installation, not currently installed.
 
-No NAS configuration was changed and no workload was deployed. The UI inspection
-did not establish the kernel version, file count, largest file, selected shares,
-or sustained upload bandwidth. Do not assume that the development VM's modern
-kernel and Docker behavior apply to this NAS. Containers share the host kernel.
+At the initial UI inspection, no NAS configuration was changed and no workload
+was deployed. It did not establish the kernel version, file count, largest
+file, selected shares, or sustained upload bandwidth. Do not assume that the
+development VM's modern kernel and Docker behavior apply to this NAS.
+Containers share the host kernel.
 
 The first compatibility check must exercise the actual CLI/runtime image,
 persistent progress, and a tiny filesystem restore on real Btrfs bind mounts.
@@ -1391,6 +1392,71 @@ Estimate Azure capacity, history growth, request costs, verification reads, and
 restore transfer/retrieval costs using the intended region, redundancy, and
 tier before the full run. Include source consistency and snapshot lifetime in
 the plan for a potentially long initial backup.
+
+#### Native Synology filesystem acceptance (2026-10-27)
+
+Richard subsequently authorized isolated tests on the existing NAS and supplied
+the `codex` SSH account. Authentication initially succeeded while DSM rejected
+shell commands; Richard added administrator membership for container setup.
+Passwords were consumed from the supplied environment variable, never copied
+into the repository, container environment, image, or test payload.
+
+Actual execution confirmed Linux 3.10.108, Docker 20.10.3, and Btrfs bind mounts.
+The pinned official .NET SDK image from the VM runner starts successfully on
+this host: Ubuntu 24.04.5, SDK 10.0.403, runtime 10.0.14, x64. Application and
+test binaries came from committed revision
+`f3e1b87ad9c1ad0eb161e23d4b70d77a59a762ac`; no application-code changes were
+needed for these checks.
+
+| Check | Actual NAS result |
+| --- | --- |
+| Published CLI mirror/incremental/ZIP round trips | 20 checks passed |
+| Filesystem contracts, hard links, staging and permissions | 19 passed |
+| Windows-specific temporary-root case variant | 1 expected skip |
+| Fresh-process recovery after forced termination | All 7 scenarios passed |
+
+The CLI checks cover unchanged live-file identity and timestamps, changed and
+deleted files preserved in history, full byte comparison, Unicode and
+punctuation names, empty folders, exact restored timestamps, forced disk spill,
+and successful progress/recovery-marker cleanup. The native tests confirm
+opened-file identity and link counts, hard-link protections for mutation
+controls and restore staging, all six provider contracts, and all three Linux
+permission-denial cases. Recovery covers four backup and three restore crash
+boundaries, including package and manifest finalization, with persistent
+journals and new worker processes. These are process-crash tests, not hardware
+power-loss or network-interruption acceptance.
+
+Container setup required three adjustments:
+
+- Use one-CPU affinity and a 2 GiB memory limit. The host supports those
+  controls but rejects CPU quota limits and reports no PID-limit support.
+- SDK test runs under the numeric non-root UID need a private, user-owned
+  `XDG_RUNTIME_DIR`. Without it, SDK startup failed at `NuGet-Migrations`;
+  the CLI application itself had already passed its smoke checks.
+- Use Docker `--init` for process reaping. Without it, the crash-test harness
+  waited for a killed descendant and timed out before recovery could run.
+  With init, all seven scenarios passed. Child test runners also need a
+  disposable writable copy of their assemblies for adjacent `TestResults`;
+  the CLI payload and container root remain read-only.
+
+The tests ran as UID 1032/GID 100 with dropped capabilities, no new privileges,
+no network, and only the dedicated synthetic workspace mounted writable.
+No live shares, existing containers, backup schedules, or Azure objects were
+modified. Six stopped test containers were removed after collecting evidence;
+the SDK image and `/volume1/docker/yabt-acceptance-20261027` workspace remain
+for inspection and reuse. Local evidence is under
+`artifacts/synology-acceptance/nas-20261027/`, including the smoke case list,
+environment record, native TRX, and successful recovery TRX from `recovery-003`.
+Earlier failed harness attempts remain distinct from the accepted results.
+
+The reusable [smoke runner](../tools/synology-acceptance/README.md) also passed
+its explicit ext4 developer mode on the VM. Boundary checks confirmed that it
+refuses root, existing fixtures without altering them, and ext4 without opt-in.
+Native Btrfs acceptance is separate from that VM validation. These results do
+not establish full 34 TB performance, approved directory-link compatibility,
+live-data consistency, a complete DSM migration, or the future new-primary to
+off-site-backup VPN/mount topology. Inventory and a bounded representative data
+pilot remain necessary before the full backup.
 
 #### Pilot destination and cost constraints
 
@@ -1822,9 +1888,11 @@ data and required recovery behavior.
    cancellation ownership rather than timing-dependent sleeps.
 5. I01-I03, the I04 implementation, Linux/ext4, and deployed Azure acceptance
    are complete for their documented scopes. WebDAV and pCloud are backlogged.
-   Prioritize the NAS-to-Azure delivery slices above; revisit further large-tree
-   optimization when representative measurements justify it. Reuse the
-   committed runners for later regressions.
+   Native Synology/Btrfs CLI, filesystem and process-recovery checks also passed
+   for the synthetic scope documented above. Prioritize the current new-primary
+   and existing off-site NAS plan; Azure remains an optional pilot. Revisit
+   further large-tree optimization when representative measurements justify it.
+   Reuse the committed runners for later regressions.
 6. Update each finding's status with the fixing commit and verification
    evidence. Do not mark an item resolved merely because the pre-existing suite
    passes.

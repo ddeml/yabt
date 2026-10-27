@@ -114,6 +114,12 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "service-acceptance", "servi
 		tools\service-acceptance\README.md = tools\service-acceptance\README.md
 	EndProjectSection
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "synology-acceptance", "synology-acceptance", "{AE242A70-F542-4DDC-A49F-03CF4D545A60}"
+	ProjectSection(SolutionItems) = preProject
+		tools\synology-acceptance\run-smoke.sh = tools\synology-acceptance\run-smoke.sh
+		tools\synology-acceptance\README.md = tools\synology-acceptance\README.md
+	EndProjectSection
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yabt.Profiling", "tools\Yabt.Profiling\Yabt.Profiling.csproj", "{E8D66188-2579-4A63-A781-EF51CB7A5CB9}"
 EndProject
 Global
@@ -225,6 +231,7 @@ Global
 		{E8D66188-2579-4A63-A781-EF51CB7A5CB9} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 		{0F7172C8-7884-482D-AD22-9D7C60361D2A} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 		{13C95C81-DAE0-4B6F-AD69-36FC1F4777A6} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
+		{AE242A70-F542-4DDC-A49F-03CF4D545A60} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {C808C5B7-4B46-4DA9-8F76-080585294DFF}

@@ -1009,6 +1009,18 @@ under Docker Desktop/WSL 2, separately from deployed Azure/WebDAV acceptance and
 performance measurements. Manage only YABT's Compose resources; the Docker
 engine also serves DSA. See `tools/linux-acceptance/README.md` for usage.
 
+Use `tools/synology-acceptance/run-smoke.sh` for isolated native NAS CLI checks.
+It requires a fresh synthetic fixture directory on actual Btrfs and ordinary
+user execution. Its explicit ext4 development mode does not establish Synology
+acceptance. Keep payloads read-only and scratch, progress, restored files and
+test results inside the dedicated test workspace. Do not mount live shares
+writable or reuse unrelated containers. The inspected DS1817+ runs Linux
+3.10.108 and Docker 20.10.3: CPU affinity and memory limits work, while CPU quota
+and PID limits are unavailable. Basic .NET 10 CLI and filesystem checks passed;
+this does not establish support for every kernel-dependent feature. SDK tests
+under a numeric UID need a private `XDG_RUNTIME_DIR`. See the runner README and
+the deployment assessment for exact acceptance scope and remaining checks.
+
 Deployed-service acceptance credentials belong outside the repository in
 `%USERPROFILE%\.yabt\service-acceptance\providers.local.json` on this VM. Keep
 this location outside AppData to avoid MSIX app-data redirection. See
