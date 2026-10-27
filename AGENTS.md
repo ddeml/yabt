@@ -44,6 +44,14 @@ before production.
 Address the documented recovery downloads and large-blob history-move fallback
 before starting the full, potentially months-long initial backup.
 
+Richard already owns three Seagate ST20000NTZ01 20 TB IronWolf Pro HDDs and is
+considering a second NAS at a friend's dance school. This is a possible off-site
+destination, not a purchased or deployed replacement for the Azure pilot. Three
+equal drives with single parity provide 40 TB decimal, about 36.38 TiB before
+overhead; confirm source logical bytes and history headroom before sizing it.
+Prefer local initial seeding before relocation. The friend's faster connection
+does not remove the source home's 40 Mbit/s upload limit.
+
 WebDAV and pCloud work is backlogged by Richard's decision on 2026-10-27. Keep
 the existing implementation and diagnostic evidence, but do not make their
 remaining compatibility or source/destination integration work a prerequisite

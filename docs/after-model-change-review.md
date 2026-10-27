@@ -1639,6 +1639,77 @@ online and prove interrupted-operation behavior before adopting cold storage.
 [offsite-b2-personal]: https://www.backblaze.com/computer-backup/docs/en/supported-backup-data
 [offsite-jotta]: https://docs.jottacloud.com/en/articles/3271114-reduced-upload-speed
 
+#### Enclosure shortlist with Richard's existing HDDs (2026-10-27)
+
+Richard already owns three Seagate ST20000NTZ01 20 TB drives. A friend's dance
+school may host the backup NAS and reportedly has a better Internet connection.
+No enclosure budget or purchase has been agreed. This substantially reduces the
+upfront cost compared with the earlier illustrative complete-system budget.
+
+Seagate's [exact-model datasheet][nas-owned-drives] identifies ST20000NTZ01 as
+IronWolf Pro, SATA, CMR, 512e, and 7,200 rpm. Do not silently substitute a similar
+ST20000NT001 entry when checking a NAS compatibility list. Synology verification
+of the exact SKU has not been established. The current
+[Synology drive policy][nas-drive-policy] permits unlisted HDDs for installation
+and new pools on DS Plus models with DSM 7.3+, except drives explicitly listed
+as incompatible. This permission is distinct from model-specific certification
+and full vendor support.
+
+The proposed default is a **Synology DS925+**, with four SATA bays, a Ryzen
+V1500B, 4 GB ECC RAM expandable to 32 GB, Btrfs, and Container Manager support.
+The observed Cyberport enclosure listing was EUR 769 including VAT. The
+**DS425+** is the budget alternative, observed at EUR 579 from Cyberport and
+EUR 622 from Alternate: four bays, J4125, 2 GB non-ECC RAM expandable to 6 GB.
+Both have ample network capability for the 40 Mbit/s WAN constraint. The DS925+
+premium primarily buys memory headroom, ECC, and CPU resources, rather than
+faster Internet backup. Recheck checkout prices, availability, exact SKU, and
+drive policy before buying. [Official comparison][nas-model-comparison],
+[DS925+ listing][nas-ds925-price], [DS425+ listing][nas-ds425-price].
+
+A five-bay DS1525+ is worth considering for further drive growth or eventual
+dual parity, rather than for this WAN rate. Keep the exact model distinct from
+the DS1525neo+, which has different memory specifications. Alternative-brand
+examples were the QNAP TS-464-8G at EUR 699 including VAT and UGREEN DXP4800 Plus
+at EUR 579 in its German store. The QNAP saving over the DS925+ is modest;
+UGREEN offers more hardware for the price, with a different administration
+environment. Current YABT acceptance has not been established for any of them.
+[QNAP offer][nas-qnap-price], [UGREEN offer][nas-ugreen-price].
+
+Use a four-bay enclosure at minimum. Three equal 20 TB drives in SHR-1/RAID5
+give 40 TB decimal, about 36.38 TiB before system/filesystem overhead. If the
+source's displayed 34 TB actually means 34 TiB of protected content, only about
+2.38 TiB remains before overhead, history, snapshots, and staging. Inventory
+actual protected bytes; do not promise comfortable headroom from volume usage.
+A fourth 20 TB drive in SHR-1/RAID5 increases nominal usable capacity to 60 TB,
+about 54.57 TiB. Four drives in SHR-2/RAID6 would still yield only 40 TB.
+
+Proposed deployment: build and test the pool locally, copy the initial dataset
+over the LAN, verify restored samples, then relocate the NAS. The dance school's
+better connection does not remove the home's 40 Mbit/s upload bottleneck for
+later backups. It can help remote restores, subject to the home's download
+rate; collecting the NAS is another full-recovery route. Keep it on a separated
+network with VPN access, controlled physical access, ventilation, and a small
+UPS. Keep retained versions/snapshots under credentials unavailable to ordinary
+source clients. With existing disks, EUR 769 spread over five years is about
+EUR 13/month before electricity, replacements, and any hosting contribution.
+
+For YABT, consider running the writer on the backup NAS with native local archive
+storage and read-only source access over the VPN. This is a design direction,
+not accepted remote-filesystem compatibility: validate source mount semantics,
+native identity checks, interruption recovery, and actual container resources.
+Synology's existing Hyper Backup/Hyper Backup Vault remains an alternative with
+its documented remote-NAS and initial-seeding workflows, if its repository
+format is acceptable. Do not deploy or initialize Richard's drives without a
+separate implementation request and confirming any existing contents.
+
+[nas-owned-drives]: https://www.seagate.com/content/dam/seagate/en/content-fragments/products/datasheets/ironwolf-pro-z-skus/ironwolf-pro-z-skus-DS16-1-2501US-en_US.pdf
+[nas-drive-policy]: https://kb.synology.com/en-global/DSM/tutorial/Drive_compatibility_policies
+[nas-model-comparison]: https://www.synology.com/en-us/products/compare/DS1525%2B/DS1823xs%2B/DS425%2B/DS925%2B
+[nas-ds925-price]: https://www.cyberport.de/pc-und-zubehoer/nas-das/nas-systeme/pdp/3F15-2LF/Synology-Diskstation-DS925--NAS-System-4-Bay.html
+[nas-ds425-price]: https://www.cyberport.de/pc-und-zubehoer/nas-das/synology/pdp/3F15-2LH/Synology-Diskstation-DS425--NAS-System-4-Bay.html
+[nas-qnap-price]: https://www.cyberport.de/pc-und-zubehoer/nas-das/nas-systeme/qnap/pdp/3f43-1wy/qnap-ts-464-8g-nas-system-4-bay.html
+[nas-ugreen-price]: https://ai-de.ugreen.com/products/ugreen-nasync-dxp4800-plus-network-attached-storage
+
 #### Proposed delivery sequence
 
 Proposed next delivery slices, pending agreement:
