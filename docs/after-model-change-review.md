@@ -1520,6 +1520,125 @@ deliberate verification/restore budget and test representative restored bytes.
 [nas-credit-faq]: https://learn.microsoft.com/en-us/visualstudio/subscriptions/faq/subscriber/azure/
 [nas-copy-blob]: https://learn.microsoft.com/en-us/rest/api/storageservices/copy-blob-from-url
 
+#### Lower-cost off-site alternatives (research, 2026-10-27)
+
+Richard requested cheaper off-site options after confirming the Visual Studio
+credit cannot fund production. A trusted second physical location may be
+available; include both hosted storage and an owned remote NAS. No replacement
+provider, subscription, hardware purchase, or deployment has been selected.
+
+Compare the full 34 trillion bytes through 34 TiB, without assuming compression
+or deduplication savings. Capacity estimates exclude history, metadata,
+operations, and recovery unless specified. Quoted USD remains USD; EUR figures
+are before VAT unless explicitly marked. Reconfirm rates and usable-byte units
+before ordering. Internet-only destinations retain the ideal 79-87 day initial
+upload floor at 40 Mbit/s.
+
+The strongest candidates from primary provider documentation are:
+
+- **Two Hetzner BX41 Storage Boxes:** each advertises 20 TB at EUR 40.60/month
+  excluding VAT. Together that is EUR 81.20/month net, or EUR 96.63 with 19%
+  German VAT, including unlimited traffic. Partition all source data explicitly
+  across two independent archive roots; this provides one 40 TB allocation,
+  not two full backup copies. Confirm exact usable bytes and reserve history
+  capacity. RAID and checksums protect disks on one host; the service is not
+  mirrored across other servers. Snapshots share the allocation. SFTP, rsync,
+  Borg, SMB, and WebDAV access exist, but the restricted shell cannot run an
+  arbitrary YABT process. Current YABT compatibility needs acceptance and
+  possibly provider work. [Plan][offsite-hetzner],
+  [storage architecture][offsite-hetzner-architecture],
+  [supported tools][offsite-hetzner-tools].
+- **OVH Cold Archive v2:** approximately EUR 53-58/month at the published
+  EUR 0.0016644/GiB/month rate. It is offline, with a 180-day minimum and a
+  restoration workflow. Published retrieval is EUR 0.009/GiB, about EUR 285-313
+  for the full dataset; outbound traffic/API calls are free under the quoted
+  European schedule. Add temporary Standard storage during recovery. This is
+  a promising low-bill alternative if delayed recovery is acceptable, but needs
+  S3 and explicit tier/rehydration support. [Pricing][offsite-ovh].
+- **AWS S3 Glacier Deep Archive, Ireland:** USD 0.00099/GiB/month gives about
+  USD 31-34/month. Frankfurt is significantly more expensive. Ireland bulk
+  retrieval plus Internet download is approximately USD 2,829-3,107 for the
+  complete dataset, assuming the global free outbound allowance is unused;
+  add requests and temporary online storage. Rehydration commonly takes up to
+  48 hours for bulk retrieval, before downloading. Minimum billed retention is
+  180 days and per-object metadata/request overhead matters for small files.
+  Low standing cost therefore needs a separate disaster-recovery reserve.
+  [Capacity/retrieval catalog][offsite-aws-capacity],
+  [transfer catalog][offsite-aws-transfer], [rules][offsite-aws-pricing].
+- **Owned NAS at a trusted second location:** seed locally, move the device,
+  then send incremental changes over a VPN. This avoids the initial WAN upload
+  and permits physical collection for a major restore. Provision usable space
+  for all data plus history, not merely 34 TB raw. As an explicit illustration,
+  40-80 W continuously at an assumed EUR 0.35/kWh costs about EUR 10-20/month.
+  An assumed EUR 2,000 hardware purchase spread over five years adds EUR 33/month;
+  that is a budgeting example, not a researched hardware quote. Add replacement
+  disks, maintenance, and any hosting/connectivity cost. Retained versions and
+  restricted deletion access remain necessary. Synology documents remote NAS
+  backup and local export/relink workflows. [Remote NAS][offsite-remote-nas],
+  [seeding and restore format][offsite-hyper-backup].
+
+Azure Archive remains a comparable capacity-only option at the previously
+queried EUR 51-56/month. It avoids adding another cloud provider but still needs
+tier/rehydration handling, and its retrieval/outbound charges remain material.
+An offline tier is not a configuration-only substitute for current YABT storage.
+
+Other options checked do not clearly improve the steady-state capacity bill:
+
+- Backblaze B2 now starts at USD 6.95/TB per 30 days, roughly USD 236-260/month
+  for this dataset, with free egress up to three times average stored data.
+  Wasabi is USD 7.99/TiB per 30 days, roughly USD 247-272/month, with a 90-day
+  minimum and limits on its free-egress policy. Both may simplify recovery
+  budgeting. [B2][offsite-b2], [Wasabi][offsite-wasabi].
+- IDrive e2's 40 TB annual offer is USD 1,190 for the first year, then USD 2,380
+  per year: roughly USD 99/month initially and USD 198/month thereafter. Avoid
+  treating a first-year promotion as the permanent cost. [e2][offsite-idrive-e2].
+- OVH One Zone Infrequent Access is about EUR 127-139/month, similar to Azure
+  Cold capacity. Its full retrieval is about EUR 127-139 with published free
+  outbound traffic, so it is interesting for recovery costs. [OVH][offsite-ovh].
+- IDrive Personal advertises a 50 TB plan at USD 49.99/month equivalent on annual
+  billing, with a first-year discount. This is not a confirmed native Synology
+  offer: current accounts use a separately paid NAS add-on. A desktop client
+  reading a mapped NAS share is documented, but plan eligibility, actual
+  workload, recovery behavior, and the bridging computer need validation.
+  Do not present that plan as an S3/YABT target. [Plans][offsite-idrive-personal],
+  [current NAS terms][offsite-idrive-nas].
+
+Backblaze Computer Backup excludes NAS/network drives, and Jottacloud Personal
+progressively throttles uploads above 5 TB. Their inexpensive unlimited plans
+are not validated solutions for this 34 TB NAS workload.
+[Backblaze exclusions][offsite-b2-personal], [Jottacloud][offsite-jotta].
+
+For online hosted storage, start by evaluating Storage Boxes. If the second
+location is suitable, compare an owned NAS over a three-to-five-year horizon.
+For a smaller standing cloud bill and infrequent restores, evaluate OVH Cold
+Archive alongside Azure Archive; AWS Deep Archive needs a much larger restore
+reserve. These are alternatives to discuss, not authorization to buy or migrate.
+
+YABT currently has filesystem, Azure Blob, and backlogged WebDAV providers; no
+S3 or SFTP provider or offline-tier workflow exists. A network mount does not
+automatically satisfy its locking, identity, and atomic staging requirements.
+Existing restic/Borg support on Storage Boxes and Synology Hyper Backup are
+deployment alternatives, with their repository formats as an explicit tradeoff
+against YABT's directly browsable ordinary-file layout. Keep current metadata
+online and prove interrupted-operation behavior before adopting cold storage.
+
+[offsite-hetzner]: https://www.hetzner.com/storage/storage-box/bx41/
+[offsite-hetzner-architecture]: https://docs.hetzner.com/storage/storage-box/general/
+[offsite-hetzner-tools]: https://docs.hetzner.com/storage/storage-box/access/access-ssh-rsync-borg/
+[offsite-ovh]: https://www.ovhcloud.com/fr/public-cloud/prices/
+[offsite-aws-capacity]: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3GlacierDeepArchive/current/eu-west-1/index.json
+[offsite-aws-transfer]: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/current/eu-west-1/index.json
+[offsite-aws-pricing]: https://aws.amazon.com/s3/pricing/
+[offsite-remote-nas]: https://kb.synology.com/en-my/DSM/tutorial/How_to_back_up_your_data_to_a_remote_Synology_NAS_or_file_server_with_Hyper_Backup
+[offsite-hyper-backup]: https://kb.synology.com/en-au/DSM/help/HyperBackup/data_backup_create?version=6
+[offsite-b2]: https://www.backblaze.com/cloud-storage/pricing
+[offsite-wasabi]: https://wasabi.com/pricing/faq
+[offsite-idrive-e2]: https://www.idrive.com/s3-storage-e2/pricing
+[offsite-idrive-personal]: https://www.idrive.com/pricing
+[offsite-idrive-nas]: https://www.idrive.com/synology-backup-faq
+[offsite-b2-personal]: https://www.backblaze.com/computer-backup/docs/en/supported-backup-data
+[offsite-jotta]: https://docs.jottacloud.com/en/articles/3271114-reduced-upload-speed
+
 #### Proposed delivery sequence
 
 Proposed next delivery slices, pending agreement:
