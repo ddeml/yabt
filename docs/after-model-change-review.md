@@ -1342,8 +1342,10 @@ WebDAV source or restore destination.
 
 The primary use case is Synology NAS filesystem data backed up to Azure Blob
 Storage by a Linux container on the NAS, followed by scheduled incremental runs.
-Richard initially described 34 GB; the DSM UI shows 34 TB used. Confirm whether
-the intended dataset is the whole used volume or a smaller selected subset.
+Richard confirmed that the intended backup covers the full approximately 34 TB
+dataset. The earlier 34 GB figure was a unit mistake. Inventory the shares and
+payloads to establish actual logical bytes; volume usage alone is not an exact
+file-content total. Do not silently omit data from this scope.
 The filesystem-to-Azure CLI resolver, streaming and
 spillable content, metadata-based incremental comparison, remote archive lock,
 SDK retries, folder progress, and current-live filesystem restore already
@@ -1372,6 +1374,24 @@ need directory identities; approved links additionally require `STATX_MNT_ID`
 support. If needed, implement compatible identity checks at the provider/native
 boundary while preserving the existing hard-link protections.
 
+At 34 TB, the initial upload may run for days or weeks. For scale only, treating
+34 TB as 34 trillion bytes and assuming continuous useful payload throughput,
+100 Mbit/s takes about 31.5 days, 400 Mbit/s about 7.9 days, and 1 Gbit/s about
+3.1 days. These are ideal lower bounds at those rates, not predictions of this
+NAS or Internet connection. Measure useful throughput on representative files,
+including small-file overhead, before estimating the real initial duration.
+
+The larger confirmed scope makes sustained lock renewal, persistent progress,
+network interruption, process termination, and restart acceptance essential to
+the pilot. Determine file count, largest file/package, and daily changes before
+deciding whether partial-object upload continuation or traversal optimization
+is needed. Total bytes alone do not justify an algorithm rewrite. Size scratch
+for simultaneously staged objects and indexes, not a second copy of all 34 TB.
+Estimate Azure capacity, history growth, request costs, verification reads, and
+restore transfer/retrieval costs using the intended region, redundancy, and
+tier before the full run. Include source consistency and snapshot lifetime in
+the plan for a potentially long initial backup.
+
 Proposed next delivery slices, pending agreement:
 
 1. Verify runtime/native compatibility on the inspected NAS and confirm the
@@ -1388,11 +1408,11 @@ Proposed next delivery slices, pending agreement:
    metadata and provide separate writable persistent progress/log storage and
    disk-backed scratch space. Prepare the required source descriptor/policies
    before mounting read-only. Match the container user to NAS read permissions.
-3. Resolve necessary selection semantics before backing up entire shares.
+3. Inventory all source shares needed to cover the complete dataset. Resolve
+   any explicit exclusions with Richard rather than reducing scope silently.
    Include/exclude patterns currently warn and are ignored. Do not promise that
    Synology-generated folders, recycle bins, or other unwanted content will be
-   excluded. Selected source subtrees can avoid some unwanted data; implement
-   filters if the intended selection requires them.
+   excluded. Implement filters if an agreed selection requires them.
 4. Exercise the actual CLI container against an isolated Azure prefix: initial
    backup, unchanged run, additions/changes/removals, lock renewal across a long
    upload, network failure, graceful stop, forced termination, restart with

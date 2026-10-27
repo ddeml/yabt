@@ -19,8 +19,10 @@ backup repository format.
 
 The current delivery priority is Richard's Synology NAS filesystem data to Azure
 Blob Storage: an initial backup followed by scheduled incremental runs, with
-YABT running on the NAS in a Linux container. Validate the actual NAS runtime,
-filesystem, selected dataset, and data shape before choosing deployment details.
+YABT running on the NAS in a Linux container. Richard confirmed that the intended
+backup covers the full approximately 34 TB dataset, not a 34 GB subset. Validate
+the actual NAS runtime, filesystem, dataset inventory, and data shape before
+choosing deployment details. Do not silently exclude data to reduce scope.
 Linux/ext4 acceptance on the development VM does not establish Synology
 acceptance. See the deployment assessment in
 `docs/after-model-change-review.md` for the inspected NAS baseline and remaining
