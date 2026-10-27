@@ -17,12 +17,15 @@ portable and Linux-compatible where practical.
 The system is a long-term durable archival replication tool, not a proprietary
 backup repository format.
 
-The current delivery priority is Richard's Synology NAS filesystem data to Azure
-Blob Storage: an initial backup followed by scheduled incremental runs, with
-YABT running on the NAS in a Linux container. Richard confirmed that the intended
-backup covers the full approximately 34 TB dataset, not a 34 GB subset. Validate
-the actual NAS runtime, filesystem, dataset inventory, and data shape before
-choosing deployment details. Do not silently exclude data to reduce scope.
+Richard's current deployment plan is a new NAS with new HDDs as the primary at
+home, with the existing Synology DS1817+ and its existing HDDs repurposed as the
+off-site backup at a friend's dance school. A five-bay DS1525+ is the current
+enclosure recommendation, not a confirmed purchase. Azure Blob remains an
+implemented provider and available pilot target; do not assume paid production
+Azure storage has been selected. The backup covers the full approximately 34 TB
+dataset, not a 34 GB subset. Validate the actual NAS runtime, filesystem, dataset
+inventory, and data shape before choosing deployment details. Do not silently
+exclude data to reduce scope.
 Linux/ext4 acceptance on the development VM does not establish Synology
 acceptance. See the deployment assessment in
 `docs/after-model-change-review.md` for the inspected NAS baseline and remaining
@@ -42,14 +45,17 @@ An account in the same Visual Studio subscription does not change the credit's
 eligibility. Confirm a suitable paid subscription and actual account pricing
 before production.
 Address the documented recovery downloads and large-blob history-move fallback
-before starting the full, potentially months-long initial backup.
+before starting any full, potentially months-long initial Azure backup.
 
-Richard already owns three Seagate ST20000NTZ01 20 TB IronWolf Pro HDDs and is
-considering a second NAS at a friend's dance school. This is a possible off-site
-destination, not a purchased or deployed replacement for the Azure pilot. Three
-equal drives with single parity provide 40 TB decimal, about 36.38 TiB before
-overhead; confirm source logical bytes and history headroom before sizing it.
-Prefer local initial seeding before relocation. The friend's faster connection
+Richard already owns three Seagate ST20000NTZ01 20 TB IronWolf Pro HDDs for the
+new primary. Three equal drives with single parity provide 40 TB decimal, about
+36.38 TiB before overhead. A fourth 20 TB drive is recommended for primary
+headroom and Migration Assistant's destination-capacity requirement, but has
+not been purchased. The existing NAS showed 34 TB used of 48.9 TB; confirm exact
+volume and file-content bytes. Keep its data until the new primary and recovery
+path are verified. Establish the backup locally before relocating the old NAS.
+Do not assume its existing files already form a valid YABT archive or that it
+has space for another complete copy beside them. The friend's faster connection
 does not remove the source home's 40 Mbit/s upload limit.
 
 WebDAV and pCloud work is backlogged by Richard's decision on 2026-10-27. Keep

@@ -1643,19 +1643,22 @@ online and prove interrupted-operation behavior before adopting cold storage.
 
 Richard already owns three Seagate ST20000NTZ01 20 TB drives. A friend's dance
 school may host the backup NAS and reportedly has a better Internet connection.
-No enclosure budget or purchase has been agreed. This substantially reduces the
-upfront cost compared with the earlier illustrative complete-system budget.
+Richard clarified the roles: the **new NAS and new HDDs become the primary at
+home**; the **existing DS1817+ and existing HDDs become the off-site backup**.
+The earlier assumption that the new enclosure would move off-site is
+superseded. No enclosure purchase or migration has been authorized. The
+following hardware and migration assessment reflects those corrected roles.
 
 Seagate's [exact-model datasheet][nas-owned-drives] identifies ST20000NTZ01 as
-IronWolf Pro, SATA, CMR, 512e, and 7,200 rpm. Do not silently substitute a similar
-ST20000NT001 entry when checking a NAS compatibility list. Synology verification
-of the exact SKU has not been established. The current
-[Synology drive policy][nas-drive-policy] permits unlisted HDDs for installation
-and new pools on DS Plus models with DSM 7.3+, except drives explicitly listed
-as incompatible. This permission is distinct from model-specific certification
-and full vendor support.
+IronWolf Pro, SATA, CMR, 512e, and 7,200 rpm. Do not silently substitute a
+similar ST20000NT001 entry when checking a NAS compatibility list. Synology
+verification of the exact SKU has not been established. The current [Synology
+drive policy][nas-drive-policy] permits unlisted HDDs for installation and new
+pools on DS Plus models with DSM 7.3+, except drives explicitly listed as
+incompatible. This permission is distinct from model-specific certification and
+full vendor support.
 
-The proposed default is a **Synology DS925+**, with four SATA bays, a Ryzen
+The earlier four-bay recommendation was a **Synology DS925+**, with a Ryzen
 V1500B, 4 GB ECC RAM expandable to 32 GB, Btrfs, and Container Manager support.
 The observed Cyberport enclosure listing was EUR 769 including VAT. The
 **DS425+** is the budget alternative, observed at EUR 579 from Cyberport and
@@ -1666,14 +1669,18 @@ faster Internet backup. Recheck checkout prices, availability, exact SKU, and
 drive policy before buying. [Official comparison][nas-model-comparison],
 [DS925+ listing][nas-ds925-price], [DS425+ listing][nas-ds425-price].
 
-A five-bay DS1525+ is worth considering for further drive growth or eventual
-dual parity, rather than for this WAN rate. Keep the exact model distinct from
-the DS1525neo+, which has different memory specifications. Alternative-brand
-examples were the QNAP TS-464-8G at EUR 699 including VAT and UGREEN DXP4800 Plus
-at EUR 579 in its German store. The QNAP saving over the DS925+ is modest;
-UGREEN offers more hardware for the price, with a different administration
-environment. Current YABT acceptance has not been established for any of them.
-[QNAP offer][nas-qnap-price], [UGREEN offer][nas-ugreen-price].
+With Richard's preference for five bays, the proposed choice is now the
+**DS1525+**, with 8 GB ECC RAM and room for growth or eventual dual parity. An
+observed [Galaxus enclosure offer][nas-ds1525-price] was EUR 1,075 including
+VAT. The faster primary also benefits local workloads, independently of WAN
+backup speed. Keep the exact model distinct from the DS1525neo+, which ships
+with 4 GB non-ECC RAM but can be upgraded to ECC using supported modules.
+Alternative-brand examples were the QNAP TS-464-8G at EUR 699 including VAT and
+UGREEN DXP4800 Plus at EUR 579 in its German store. The QNAP saving over the
+DS925+ is modest; UGREEN offers more hardware for the price, with a different
+administration environment. Current YABT acceptance has not been established
+for any of them. [QNAP offer][nas-qnap-price], [UGREEN
+offer][nas-ugreen-price].
 
 Use a four-bay enclosure at minimum. Three equal 20 TB drives in SHR-1/RAID5
 give 40 TB decimal, about 36.38 TiB before system/filesystem overhead. If the
@@ -1683,24 +1690,60 @@ actual protected bytes; do not promise comfortable headroom from volume usage.
 A fourth 20 TB drive in SHR-1/RAID5 increases nominal usable capacity to 60 TB,
 about 54.57 TiB. Four drives in SHR-2/RAID6 would still yield only 40 TB.
 
-Proposed deployment: build and test the pool locally, copy the initial dataset
-over the LAN, verify restored samples, then relocate the NAS. The dance school's
-better connection does not remove the home's 40 Mbit/s upload bottleneck for
-later backups. It can help remote restores, subject to the home's download
-rate; collecting the NAS is another full-recovery route. Keep it on a separated
-network with VPN access, controlled physical access, ventilation, and a small
-UPS. Keep retained versions/snapshots under credentials unavailable to ordinary
-source clients. With existing disks, EUR 769 spread over five years is about
-EUR 13/month before electricity, replacements, and any hosting contribution.
+For the new primary, recommend a fourth 20 TB drive before migration, subject
+to the actual inventory and budget. With four drives in SHR-1, the fifth bay
+remains available for capacity expansion or planned conversion to SHR-2. Five
+20 TB drives in SHR-2 provide 60 TB decimal, about 54.57 TiB before overhead.
+Do not fill every bay with an SHR-1 expansion and then assume an in-place
+conversion has a free additional drive available.
 
-For YABT, consider running the writer on the backup NAS with native local archive
-storage and read-only source access over the VPN. This is a design direction,
-not accepted remote-filesystem compatibility: validate source mount semantics,
-native identity checks, interruption recovery, and actual container resources.
-Synology's existing Hyper Backup/Hyper Backup Vault remains an alternative with
-its documented remote-NAS and initial-seeding workflows, if its repository
-format is acceptable. Do not deploy or initialize Richard's drives without a
-separate implementation request and confirming any existing contents.
+Synology Migration Assistant is the first migration tool to evaluate for this
+old-to-new Synology transition. Both model families are listed, and the current
+source DSM version meets the minimum. Its destination storage pools must exceed
+the **total capacity of source volumes**, not just their used data. Therefore
+the three-drive 40 TB decimal layout cannot accommodate the inspected 48.9 TB
+source volume through this method. A four-drive layout is a plausible fit;
+confirm exact source volumes, destination usable pool capacity, package
+support, and current migration requirements first. A file-level migration is a
+separate option but needs explicit handling of accounts, permissions,
+applications, and container data. YABT's ordinary-file backup is not a full DSM
+migration tool. [Migration Assistant requirements][nas-migration-assistant].
+
+Proposed sequence: build the new primary locally, migrate and verify data plus
+services, then cut over clients. Stop source writes and services at the final
+migration boundary before redirecting clients. Preserve the original NAS data
+until the new primary and a recovery path have been verified. While both
+devices are still local, establish and test versioned backup to the old NAS;
+then relocate the **old DS1817+**. Its existing file tree is not automatically
+a valid YABT archive. Plan adoption or reseeding explicitly; its remaining
+space cannot hold another full 34 TB copy alongside the current data. Preserve
+a verified recovery copy before destructive repurposing.
+
+The existing backup NAS's inspected total capacity is about 48.9 TB, below the
+new primary's potential four-drive capacity. It covers the current dataset with
+some history margin, but does not guarantee backup capacity as the primary
+grows. Track source growth and retained history together without excluding data
+silently. The existing NAS and disk health, supported DSM/security updates, and
+the older kernel's native identity compatibility remain deployment checks.
+
+The dance school's better connection does not remove the home's 40 Mbit/s
+upload bottleneck for later backups. It can help remote restores, subject to
+the home's download rate; collecting the NAS is another full-recovery route.
+Keep it on a separated network with VPN access, controlled physical access,
+ventilation, and a small UPS. Keep retained versions/snapshots under
+credentials unavailable to ordinary source clients. Enclosure cost is now a
+primary-NAS upgrade; account separately for an additional primary drive, both
+NAS devices' power, replacement disks, and any off-site hosting contribution.
+
+For YABT, consider running the writer on the old backup NAS with native local
+archive storage and read-only access to the new primary over the VPN. This is a
+design direction, not accepted remote-filesystem compatibility: validate source
+mount semantics, native identity checks, interruption recovery, and actual
+container resources. Synology's existing Hyper Backup/Hyper Backup Vault
+remains an alternative with documented remote-NAS and initial-seeding
+workflows, if its repository format is acceptable. Do not deploy or initialize
+Richard's drives without a separate implementation request and confirming any
+existing contents.
 
 [nas-owned-drives]: https://www.seagate.com/content/dam/seagate/en/content-fragments/products/datasheets/ironwolf-pro-z-skus/ironwolf-pro-z-skus-DS16-1-2501US-en_US.pdf
 [nas-drive-policy]: https://kb.synology.com/en-global/DSM/tutorial/Drive_compatibility_policies
@@ -1709,10 +1752,14 @@ separate implementation request and confirming any existing contents.
 [nas-ds425-price]: https://www.cyberport.de/pc-und-zubehoer/nas-das/synology/pdp/3F15-2LH/Synology-Diskstation-DS425--NAS-System-4-Bay.html
 [nas-qnap-price]: https://www.cyberport.de/pc-und-zubehoer/nas-das/nas-systeme/qnap/pdp/3f43-1wy/qnap-ts-464-8g-nas-system-4-bay.html
 [nas-ugreen-price]: https://ai-de.ugreen.com/products/ugreen-nasync-dxp4800-plus-network-attached-storage
+[nas-ds1525-price]: https://www.galaxus.de/de/s1/product/synology-ds1525-0-tb-nas-59021374
+[nas-migration-assistant]: https://kb.synology.com/en-global/DSM/tutorial/How_to_migrate_between_Synology_NAS_DSM_6_0_Migration_Asst
 
 #### Proposed delivery sequence
 
-Proposed next delivery slices, pending agreement:
+The following Azure delivery slices remain available if Azure is selected.
+The current NAS-to-NAS deployment and migration proposal is described above;
+neither sequence has been started.
 
 1. Verify runtime/native compatibility on the inspected NAS and confirm the
    selected shares, file count, largest files, upload bandwidth, and available
