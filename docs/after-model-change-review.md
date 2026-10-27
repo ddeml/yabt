@@ -1374,12 +1374,12 @@ need directory identities; approved links additionally require `STATX_MNT_ID`
 support. If needed, implement compatible identity checks at the provider/native
 boundary while preserving the existing hard-link protections.
 
-At 34 TB, the initial upload may run for days or weeks. For scale only, treating
-34 TB as 34 trillion bytes and assuming continuous useful payload throughput,
-100 Mbit/s takes about 31.5 days, 400 Mbit/s about 7.9 days, and 1 Gbit/s about
-3.1 days. These are ideal lower bounds at those rates, not predictions of this
-NAS or Internet connection. Measure useful throughput on representative files,
-including small-file overhead, before estimating the real initial duration.
+Richard subsequently reported an ideal upstream rate of 40 Mbit/s. At that
+rate, 34 trillion bytes require about 78.7 days of uninterrupted transfer;
+34 TiB require about 86.5 days. These are ideal lower bounds, before protocol
+overhead, small-file operations, competing traffic, retries, or source changes.
+Plan for a months-long initial run. Measure useful throughput on representative
+files before estimating its actual duration.
 
 The larger confirmed scope makes sustained lock renewal, persistent progress,
 network interruption, process termination, and restart acceptance essential to
@@ -1392,6 +1392,130 @@ restore transfer/retrieval costs using the intended region, redundancy, and
 tier before the full run. Include source consistency and snapshot lifetime in
 the plan for a potentially long initial backup.
 
+#### Pilot destination and cost constraints
+
+Richard authorized container `archive` in account `yabtdevhafner` for the NAS
+pilot. Use an isolated prefix; this is distinct from the existing deployed
+service acceptance container `archivetest`. The container name does not select
+the Azure Archive access tier. No account settings or local credentials were
+changed as part of this assessment, and no NAS upload was started.
+
+A separate production storage account is sensible for separate credentials,
+lifecycle settings, and cost attribution. Standard Blob Storage charges are
+usage-based; another ordinary account does not add a fixed account rental fee.
+Enabled services and features can add charges. A second account does not create
+another subscription credit allowance. Production provisioning remains pending.
+
+Richard's available monthly allowance is EUR 150, with little desired overrun.
+The allowance's origin and eligibility remain to be confirmed. If it is the
+Visual Studio monthly Azure credit, Microsoft limits that benefit to individual
+development and testing; do not assume it funds ongoing production backup.
+See Microsoft's [Visual Studio Azure credit FAQ][nas-credit-faq].
+
+Indicative capacity-only pricing queried on 2026-10-27 from Microsoft's public
+[Retail Prices API][nas-retail-api]: Standard General Block Blob v2, West Europe,
+LRS, consumption pricing, first capacity band. West Europe/LRS is an estimate
+assumption, not a verified production-account configuration. EUR API prices are
+reference estimates; confirm the subscription's actual offer and current prices
+before deployment. Azure bills storage in binary GB (GiB), so the range below
+covers 34 trillion bytes through 34 TiB; inventory must establish actual bytes.
+
+The query used `currencyCode=EUR` with the following filter, then selected the
+LRS capacity and retrieval meters with `tierMinimumUnits=0`:
+
+```text
+serviceName eq 'Storage' and armRegionName eq 'westeurope'
+and priceType eq 'Consumption' and productName eq 'General Block Blob v2'
+```
+
+| Access tier | EUR/GiB/month | Approximate full-capacity EUR/month |
+| --- | ---: | ---: |
+| Hot | 0.0172 | 545-599 |
+| Cool | 0.0088 | 279-306 |
+| Cold | 0.0040 | 127-139 |
+| Archive | 0.0016 | 51-56 |
+
+These figures exclude history, metadata, requests, retrieval, outbound transfer,
+optional services, and applicable taxes. Initial storage charges grow as data
+arrives. Cold leaves little headroom at full capacity; history grows as live
+files change or disappear. There is no basis yet to promise a EUR 150 total.
+Redundancy beyond LRS needs a separate estimate. See
+[Blob Storage pricing][nas-blob-pricing] for billing units and cost components.
+
+Cold data remains online but has a 90-day minimum billable retention period;
+early deletion, overwrite, or tier changes can incur additional charges.
+Archive is offline, has a 180-day minimum, and requires rehydration before
+payload reads. YABT has no tier-selection or rehydration workflow currently.
+Do not apply Archive automatically to live objects or history backing objects
+that YABT may need to read. See [Azure access tiers][nas-access-tiers].
+
+At the queried Cold retrieval price of EUR 0.0264/GiB, one full read costs about
+EUR 836-919 in retrieval charges alone, before outbound bandwidth and requests.
+This applies to a complete restore or full byte-for-byte cloud verification,
+and illustrates the cost of unnecessary recovery reads. Server-side copying
+avoids NAS transfer but can still incur Azure read/retrieval/write charges.
+
+#### Cloud read and history-move gaps found during cost assessment
+
+The source audit found two production prerequisites at this bandwidth and size:
+
+1. Interrupted backup recovery can download the already-uploaded portion again.
+   `OperationProgressJournal` stores unit paths and completion state, without
+   per-object fingerprints, hashes, or target versions. An initial backup has
+   no final change manifest until successful completion. A modifying run deletes
+   its previous manifest after invalidation, and `ArchiveManifestStore` refuses
+   invalidated evidence. With no trusted previous entry, same-length target
+   objects are compared by reading their bytes. Completed objects survive and
+   need not be uploaded again when equal, but folder scheduling alone does not
+   make restart transfer-efficient. The reread can approach the entire completed
+   portion of a long initial run.
+2. Azure history moves of blobs larger than 256 MiB fall back to attempting a
+   full download and re-upload. `AzureBlobObjectStore.TryCopyAndDeleteAsync` calls
+   `SyncCopyFromUriAsync`, whose installed SDK and
+   [Copy Blob From URL documentation][nas-copy-blob] impose that limit. Any copy
+   exception selects `MoveByDownloadUploadDeleteAsync` unless caller cancellation
+   has been requested.
+   This transfers the old bytes through the NAS in addition to uploading changed
+   replacement content. The synchronous API's size limit is a predictable cause,
+   not only a hypothetical network failure.
+
+Proposed remedies, not yet implemented or approved as durable-format designs:
+
+- Publish bounded archive-side evidence for each completed folder/package,
+  binding source fingerprints, actual hashes/lengths, projection identity, and
+  opaque provider-owned target version evidence. Resume rediscovers source and
+  policies and validates current source and target evidence before skipping
+  payload comparison. Missing or stale evidence falls back to reads. Keep the
+  local SQLite journal disposable, explicit byte verification authoritative,
+  and unrelated cleanup/final manifest publication behind full success. A crash
+  before a folder checkpoint may reread that folder, as previously accepted.
+- Use the Azure SDK's server-side copy operation for large history moves, with
+  source ETag and create-only destination conditions. Confirm completion before
+  guarded source deletion; make cancellation, ambiguous completion, and retry
+  safe. Prefer the existing SDK operation abstraction over a custom transfer
+  engine. Arbitrary copy failures should not silently trigger a bulk round trip.
+- Keep frequently rewritten locks and other control metadata in Hot storage;
+  select stable-payload tiers deliberately through provider/runtime settings.
+  YABT currently sets no access tier on uploads or copies. Setting the entire
+  account default to Cold also affects newly created controls. Validate the
+  complete metadata/history lifecycle and costs before choosing a policy.
+
+Normal successful incremental runs can avoid unchanged payload downloads using
+the valid change manifest; they still list metadata and read control documents.
+Same-length changes with different fingerprints can trigger target reads.
+Measure request counts and transferred bytes for initial, unchanged, changed,
+interrupted, and restored workloads in the pilot. Do not use a full 34 TB
+byte-for-byte download as an unbudgeted routine acceptance step. Include a
+deliberate verification/restore budget and test representative restored bytes.
+
+[nas-retail-api]: https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices
+[nas-blob-pricing]: https://azure.microsoft.com/en-us/pricing/details/storage/blobs/
+[nas-access-tiers]: https://learn.microsoft.com/en-us/azure/storage/blobs/access-tiers-overview
+[nas-credit-faq]: https://learn.microsoft.com/en-us/visualstudio/subscriptions/faq/subscriber/azure/
+[nas-copy-blob]: https://learn.microsoft.com/en-us/rest/api/storageservices/copy-blob-from-url
+
+#### Proposed delivery sequence
+
 Proposed next delivery slices, pending agreement:
 
 1. Verify runtime/native compatibility on the inspected NAS and confirm the
@@ -1399,9 +1523,9 @@ Proposed next delivery slices, pending agreement:
    scratch space. Start with mirror representation unless a folder has a clear
    reason for packaging. Normal incremental runs still traverse metadata and
    process the root manifest; they do not use a filesystem change journal.
-   Completed objects survive restarts, but partial-file/partial-ZIP upload
-   continuation across processes is not implemented. Size scratch storage for
-   the largest replayed object plus indexes; nested packages may need more.
+   Completed objects survive restarts, with the costly comparison caveat above;
+   partial-file/partial-ZIP upload continuation is not implemented. Size scratch
+   for the largest replayed object plus indexes; nested packages may need more.
 2. Package the published CLI in a production .NET runtime container and supply
    deployment/configuration examples. The existing Docker image is an SDK test
    environment. Mount source data read-only; keep credentials outside archive
@@ -1413,13 +1537,18 @@ Proposed next delivery slices, pending agreement:
    Include/exclude patterns currently warn and are ignored. Do not promise that
    Synology-generated folders, recycle bins, or other unwanted content will be
    excluded. Implement filters if an agreed selection requires them.
-4. Exercise the actual CLI container against an isolated Azure prefix: initial
-   backup, unchanged run, additions/changes/removals, lock renewal across a long
-   upload, network failure, graceful stop, forced termination, restart with
-   persistent progress, and restore into a separate filesystem directory.
+4. Resolve the recovery-read, large history-copy, and tier-selection gaps above.
+   Validate their failure safety and transfer/request costs before the full run.
+   Confirm credit eligibility, region, redundancy, history growth, and a budget
+   for verification and disaster recovery. Agree production account settings.
+5. Exercise the actual CLI container against an isolated prefix in
+   `yabtdevhafner/archive`: initial backup, unchanged run, additions, changes,
+   removals, lock renewal across a long upload, network failure, graceful stop,
+   forced termination, restart with persistent progress, and restore into a
+   separate filesystem directory.
    Verify restored bytes. Configure and test CLI termination and container stop
    grace together; current command-line defaults must not be assumed adequate.
-5. Run a representative NAS pilot, then the full initial backup and a restore
+6. Run a representative NAS pilot, then the full initial backup and a restore
    drill. Measure elapsed time, peak memory, scratch usage, and incremental
    request/transfer behavior. Use an external scheduler such as DSM Task
    Scheduler for periodic executions, preserve the command exit code, prevent
