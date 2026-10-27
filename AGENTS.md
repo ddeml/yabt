@@ -28,14 +28,19 @@ acceptance. See the deployment assessment in
 `docs/after-model-change-review.md` for the inspected NAS baseline and remaining
 compatibility checks.
 
-Richard reports an ideal upstream rate of 40 Mbit/s and an available monthly
-Azure allowance of EUR 150, with little desired overrun. Plan against all 34 TB,
-including history growth, operations, retrieval, and outbound transfer costs.
+Richard reports an ideal upstream rate of 40 Mbit/s and a monthly Visual Studio
+Azure credit of EUR 150, with little desired out-of-pocket spending. That benefit
+is limited to individual development/testing; do not subtract it from production
+backup costs. A paid production budget/subscription remains to be agreed. Plan
+against all 34 TB, including history growth, operations, retrieval, and outbound
+transfer costs.
 The authorized NAS pilot target is container `archive` in `yabtdevhafner`, using
 an isolated test prefix. Existing service acceptance uses `archivetest`; keep
 that separate. A separate production account is under consideration, not yet
 provisioned. Container naming does not select the Azure Archive access tier.
-Confirm the credit's eligibility and actual account pricing before production.
+An account in the same Visual Studio subscription does not change the credit's
+eligibility. Confirm a suitable paid subscription and actual account pricing
+before production.
 Address the documented recovery downloads and large-blob history-move fallback
 before starting the full, potentially months-long initial backup.
 

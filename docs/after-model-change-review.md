@@ -1406,11 +1406,15 @@ usage-based; another ordinary account does not add a fixed account rental fee.
 Enabled services and features can add charges. A second account does not create
 another subscription credit allowance. Production provisioning remains pending.
 
-Richard's available monthly allowance is EUR 150, with little desired overrun.
-The allowance's origin and eligibility remain to be confirmed. If it is the
-Visual Studio monthly Azure credit, Microsoft limits that benefit to individual
-development and testing; do not assume it funds ongoing production backup.
-See Microsoft's [Visual Studio Azure credit FAQ][nas-credit-faq].
+Richard confirmed that the monthly EUR 150 allowance is the Visual Studio Azure
+credit, with little desired out-of-pocket spending. Microsoft limits this
+benefit to individual development/testing and requires a paid subscription for
+production workloads. The YABT development and integration pilot can use the
+benefit; ongoing production backup must have a separate paid budget. Creating
+another storage account within the Visual Studio subscription does not change
+that restriction. Do not subtract the credit from the production estimate or
+assume Richard has approved EUR 150/month of paid spending. See Microsoft's
+[Visual Studio Azure credit FAQ][nas-credit-faq].
 
 Indicative capacity-only pricing queried on 2026-10-27 from Microsoft's public
 [Retail Prices API][nas-retail-api]: Standard General Block Blob v2, West Europe,
@@ -1437,8 +1441,10 @@ and priceType eq 'Consumption' and productName eq 'General Block Blob v2'
 
 These figures exclude history, metadata, requests, retrieval, outbound transfer,
 optional services, and applicable taxes. Initial storage charges grow as data
-arrives. Cold leaves little headroom at full capacity; history grows as live
-files change or disappear. There is no basis yet to promise a EUR 150 total.
+arrives. Cold capacity alone would be approximately EUR 127-139/month of paid
+production usage, before the listed extras. History grows as live files change
+or disappear. There is no basis yet to promise a EUR 150 total, and that figure
+is a comparison point rather than an agreed out-of-pocket production budget.
 Redundancy beyond LRS needs a separate estimate. See
 [Blob Storage pricing][nas-blob-pricing] for billing units and cost components.
 
@@ -1539,8 +1545,9 @@ Proposed next delivery slices, pending agreement:
    excluded. Implement filters if an agreed selection requires them.
 4. Resolve the recovery-read, large history-copy, and tier-selection gaps above.
    Validate their failure safety and transfer/request costs before the full run.
-   Confirm credit eligibility, region, redundancy, history growth, and a budget
-   for verification and disaster recovery. Agree production account settings.
+   Agree a paid production budget and suitable subscription, then confirm
+   region, redundancy, history growth, verification, and disaster recovery costs.
+   Agree production account settings before provisioning or the full upload.
 5. Exercise the actual CLI container against an isolated prefix in
    `yabtdevhafner/archive`: initial backup, unchanged run, additions, changes,
    removals, lock renewal across a long upload, network failure, graceful stop,
