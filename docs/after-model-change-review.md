@@ -14,8 +14,7 @@ change, for follow-up work in **Codex-Sandbox-01**.
   document.
 - Status: **R01-R09 and I01-I03 are implemented for their documented scopes;
   I04 implementation, local contracts, Linux/ext4 acceptance, and deployed Azure
-  acceptance are complete; pCloud WebDAV consistency compatibility remains
-  unresolved**.
+  acceptance are complete; unresolved WebDAV and pCloud work is backlogged**.
   Recording the baseline did not
   implement the fixes. R09 was added during the follow-up discussion on
   2026-09-21.
@@ -68,7 +67,7 @@ were not claimed as completed runtime reproductions in the review.
 | I01 | Improvement | ZIP buffers accumulate across a backup | Generated large-stream and projection-lifetime regression tests | Implemented |
 | I02 | Improvement | ZIP restore repeatedly parses the central directory | Entry-read instrumentation and large-manifest round-trip tests | Implemented |
 | I03 | Improvement | Current-live restore traverses history unnecessarily | Traversal-count and unreadable-subtree regression tests | Implemented |
-| I04 | Improvement | Synchronizer responsibilities and provider test coverage | Component extraction, provider contracts, recovery fault tests, Linux/ext4 and deployed Azure acceptance | Implemented; pCloud post-write visibility blocks remaining acceptance |
+| I04 | Improvement | Synchronizer responsibilities and provider test coverage | Component extraction, provider contracts, recovery fault tests, Linux/ext4 and deployed Azure acceptance | Implemented for accepted scopes; WebDAV/pCloud acceptance backlogged |
 
 P1 means address before relying on the affected archival operation. P2 means a
 concrete correctness or usability defect. Investigate means the execution path
@@ -1305,9 +1304,9 @@ fail. Ten controlled handler checks covered these boundaries, including a
 persistent-207 timeout at 30.03 seconds. All 54 ordinary WebDAV regression tests
 also passed. This cleanup-only wait does not change production semantics.
 
-**Proposed next scope:** Add bounded provider-owned handling of delayed strong
-validators and visibility after acknowledged writes/moves/deletes. Do not put
-pCloud-specific delays into the synchronizer or make tests sleep before using
+**Backlogged scope (2026-10-27):** Add bounded provider-owned handling of delayed
+strong validators and visibility after acknowledged writes/moves/deletes. Do
+not put pCloud-specific delays into the synchronizer or make tests sleep before using
 the provider. Bind bytes to the same strong validator used by the conditional
 mutation; never combine an earlier unvalidated read with a later ETag, replace
 `If-Match` with unconditional mutation, or interpret a temporary failure as an
@@ -1331,6 +1330,91 @@ performance, or storage-provider durability guarantees. The WebDAV CLI resolver
 remains separate unfinished integration work; these tests intentionally inject
 the configured provider into the synchronization API.
 
+### Delivery priority: Synology NAS to Azure (2026-10-27)
+
+Richard has moved pCloud and WebDAV as a whole to the backlog. pCloud is the
+only currently intended WebDAV use case, principally as a source. Keep the
+observed failures open; deferral does not establish provider compatibility.
+Also defer WebDAV source selection, descriptor/policy resolution, and restore
+destination integration. Existing service round trips use a filesystem source,
+a remote archive, and a filesystem restore destination; they do not cover a
+WebDAV source or restore destination.
+
+The primary use case is Synology NAS filesystem data backed up to Azure Blob
+Storage by a Linux container on the NAS, followed by scheduled incremental runs.
+Richard initially described 34 GB; the DSM UI shows 34 TB used. Confirm whether
+the intended dataset is the whole used volume or a smaller selected subset.
+The filesystem-to-Azure CLI resolver, streaming and
+spillable content, metadata-based incremental comparison, remote archive lock,
+SDK retries, folder progress, and current-live filesystem restore already
+exist. Linux/ext4 and deployed Azure acceptance support this direction, but do
+not establish production-container or Synology acceptance.
+
+Read-only DSM inspection on 2026-10-27 established this deployment baseline:
+
+- Synology DS1817+, Intel Atom C2538, four cores at 2.4 GHz, 16 GB RAM.
+- DSM 7.1.1-42962 Update 9; Docker package 20.10.3-1308 is running.
+- Volume 1 uses Btrfs on RAID 5, with 34 TB used of 48.9 TB shown by DSM.
+- Snapshot Replication is offered for installation, not currently installed.
+
+No NAS configuration was changed and no workload was deployed. The UI inspection
+did not establish the kernel version, file count, largest file, selected shares,
+or sustained upload bandwidth. Do not assume that the development VM's modern
+kernel and Docker behavior apply to this NAS. Containers share the host kernel.
+
+The first compatibility check must exercise the actual CLI/runtime image,
+persistent progress, and a tiny filesystem restore on real Btrfs bind mounts.
+`NativeFileIdentityReader.ReadLinux` requires `statx` file identity and link-count
+evidence without a fallback. Missing evidence disables the optional progress
+journal with a warning, but blocks filesystem restore controls and staging
+commits. Ordinary source traversal without descendant directory links does not
+need directory identities; approved links additionally require `STATX_MNT_ID`
+support. If needed, implement compatible identity checks at the provider/native
+boundary while preserving the existing hard-link protections.
+
+Proposed next delivery slices, pending agreement:
+
+1. Verify runtime/native compatibility on the inspected NAS and confirm the
+   selected shares, file count, largest files, upload bandwidth, and available
+   scratch space. Start with mirror representation unless a folder has a clear
+   reason for packaging. Normal incremental runs still traverse metadata and
+   process the root manifest; they do not use a filesystem change journal.
+   Completed objects survive restarts, but partial-file/partial-ZIP upload
+   continuation across processes is not implemented. Size scratch storage for
+   the largest replayed object plus indexes; nested packages may need more.
+2. Package the published CLI in a production .NET runtime container and supply
+   deployment/configuration examples. The existing Docker image is an SDK test
+   environment. Mount source data read-only; keep credentials outside archive
+   metadata and provide separate writable persistent progress/log storage and
+   disk-backed scratch space. Prepare the required source descriptor/policies
+   before mounting read-only. Match the container user to NAS read permissions.
+3. Resolve necessary selection semantics before backing up entire shares.
+   Include/exclude patterns currently warn and are ignored. Do not promise that
+   Synology-generated folders, recycle bins, or other unwanted content will be
+   excluded. Selected source subtrees can avoid some unwanted data; implement
+   filters if the intended selection requires them.
+4. Exercise the actual CLI container against an isolated Azure prefix: initial
+   backup, unchanged run, additions/changes/removals, lock renewal across a long
+   upload, network failure, graceful stop, forced termination, restart with
+   persistent progress, and restore into a separate filesystem directory.
+   Verify restored bytes. Configure and test CLI termination and container stop
+   grace together; current command-line defaults must not be assumed adequate.
+5. Run a representative NAS pilot, then the full initial backup and a restore
+   drill. Measure elapsed time, peak memory, scratch usage, and incremental
+   request/transfer behavior. Use an external scheduler such as DSM Task
+   Scheduler for periodic executions, preserve the command exit code, prevent
+   overlapping jobs, and arrange failure reporting and log retention.
+
+Source consistency and recovery scope must remain explicit. A read-only mount
+does not freeze files being changed by other NAS processes. A stable Btrfs
+snapshot is a possible input when supported by the actual NAS; live databases
+need application-consistent preparation. Current archives preserve file bytes,
+names, modification times, and empty directories, but not a complete Synology
+system image, ownership/ACL/xattr state, or original link topology. Historical
+bytes are retained, while selecting a historical version through restore is
+still unimplemented. Whether these are prerequisites depends on the selected
+data and required recovery behavior.
+
 ## Suggested Codex-Sandbox-01 sequence
 
 1. Check out the handoff commit and read `AGENTS.md` plus this document.
@@ -1344,10 +1428,10 @@ the configured provider into the synchronization API.
 4. R05-R09 are implemented. R08 uses deterministic coordination to verify
    cancellation ownership rather than timing-dependent sleeps.
 5. I01-I03, the I04 implementation, Linux/ext4, and deployed Azure acceptance
-   are complete. Design provider-owned handling of pCloud's delayed visibility
-   and WebDAV multi-status responses, then finish WebDAV acceptance. Follow up
-   with the remaining large-tree work described under I04. Reuse the committed
-   runners for later regressions.
+   are complete for their documented scopes. WebDAV and pCloud are backlogged.
+   Prioritize the NAS-to-Azure delivery slices above; revisit further large-tree
+   optimization when representative measurements justify it. Reuse the
+   committed runners for later regressions.
 6. Update each finding's status with the fixing commit and verification
    evidence. Do not mark an item resolved merely because the pre-existing suite
    passes.

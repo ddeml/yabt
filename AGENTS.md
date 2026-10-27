@@ -17,6 +17,20 @@ portable and Linux-compatible where practical.
 The system is a long-term durable archival replication tool, not a proprietary
 backup repository format.
 
+The current delivery priority is Richard's Synology NAS filesystem data to Azure
+Blob Storage: an initial backup followed by scheduled incremental runs, with
+YABT running on the NAS in a Linux container. Validate the actual NAS runtime,
+filesystem, selected dataset, and data shape before choosing deployment details.
+Linux/ext4 acceptance on the development VM does not establish Synology
+acceptance. See the deployment assessment in
+`docs/after-model-change-review.md` for the inspected NAS baseline and remaining
+compatibility checks.
+
+WebDAV and pCloud work is backlogged by Richard's decision on 2026-10-27. Keep
+the existing implementation and diagnostic evidence, but do not make their
+remaining compatibility or source/destination integration work a prerequisite
+for the NAS-to-Azure use case. Revisit that work when explicitly prioritized.
+
 ## User Context
 
 Richard is the main user and human maintainer. He is a seasoned developer with
