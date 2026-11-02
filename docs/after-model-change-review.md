@@ -1458,6 +1458,75 @@ live-data consistency, a complete DSM migration, or the future new-primary to
 off-site-backup VPN/mount topology. Inventory and a bounded representative data
 pilot remain necessary before the full backup.
 
+#### Live-data inventory kernel panic (2026-11-02)
+
+The first metadata-only inventory completed one share and entered the encrypted
+share before the NAS crashed. This was a standalone Python inventory reader,
+not a YABT backup or .NET process. No policy changes or real-data backup ran.
+The completed share contained 248,237 files and 10,283,228,495,334 logical bytes;
+the full dataset total remains unestablished. Preflight volume usage was
+37,433,497,223,168 bytes, or 34.05 TiB, distinct from logical backup size.
+
+Investigation preserved `/var/log/pstore/oops` and `panic`. Their event headers
+identify 09:25:58 CET and show this sequence:
+
+1. Btrfs `update_existing_ref` warns in `fs/btrfs/delayed-ref.c:583`, while a
+   background worker updates delayed inode metadata.
+2. `__btrfs_run_delayed_refs` hits a kernel BUG in
+   `fs/btrfs/extent-tree.c:2572`.
+3. A further `kthread_data` fault occurs, followed by a watchdog hard-lockup
+   kernel panic. DSM then reports an improper shutdown and starts a scrub.
+
+The archived trace-body timestamps disagree with their event headers. Use the
+headers, observed SSH interruption and independently recorded boot time for
+incident timing; do not infer another later crash from those body timestamps.
+The faulting processes are kernel workers, not the inventory process. The
+scan is a credible trigger, but the evidence does not establish the exact
+initiating operation or distinguish a kernel defect, filesystem inconsistency
+or hardware contribution. Do not dismiss causality merely because the reader
+does not explicitly write payloads.
+
+The reader used one CPU, nice 19 and idle I/O priority, but had no hard memory
+or throughput limit. Its Python state was bounded by traversal depth, a small
+extension table and 40 largest-file entries; this did not bound kernel caches
+or asynchronous filesystem work. Upstream Linux 3.10.108 eCryptfs enumeration
+uses a separately opened lower file and calls lower-directory `file_accessed`.
+Upper `O_NOATIME` therefore does not establish suppression of lower Btrfs atime
+updates. This is a plausible path to delayed inode updates, not proof that
+Synology's patched code took that path during this incident.
+
+Read-only post-crash status showed all eight RAID members present and all eight
+drives passing their existing SMART health checks, with no pending,
+reallocated or offline-uncorrectable sectors. That does not prove filesystem
+or RAM integrity. Btrfs reports one persistent corruption error, with other
+device-error counters zero. An older May 2026 scrub checksum error exists;
+the counter cannot be attributed to this crash. The automatic scrub had
+processed 4.17 TiB without reported errors at the status check, but was still
+running. No additional scrub, self-test, repair, update or reboot was started.
+
+Keep full inventory and real-data pilots deferred. First preserve and review
+the scrub outcome and obtain Synology guidance on the captured BUG and the
+appropriate supported DSM fix or filesystem investigation. Do not treat a
+lower scan rate or a container as a fix for a shared-kernel crash. Any later
+bounded pilot needs an agreed recovery plan, explicit rate/resource limits
+and observability before resuming broad traversal.
+
+Private evidence and support-request draft are retained locally under
+`artifacts/synology-acceptance/reboot-20261102/`; partial directory statistics
+and proposed ZIP boundaries are under `inventory-20261102/` beside it. Raw logs,
+source filenames and credentials are not committed. The synthetic acceptance
+results above remain valid for their limited scope; they did not exercise
+this large encrypted live tree.
+
+Relevant upstream code:
+[eCryptfs readdir][nas-ecryptfs-file],
+[lower-file open flags][nas-ecryptfs-kthread], and
+[VFS directory access accounting][nas-vfs-readdir].
+
+[nas-ecryptfs-file]: https://raw.githubusercontent.com/gregkh/linux/v3.10.108/fs/ecryptfs/file.c
+[nas-ecryptfs-kthread]: https://raw.githubusercontent.com/gregkh/linux/v3.10.108/fs/ecryptfs/kthread.c
+[nas-vfs-readdir]: https://raw.githubusercontent.com/gregkh/linux/v3.10.108/fs/readdir.c
+
 #### Pilot destination and cost constraints
 
 Richard authorized container `archive` in account `yabtdevhafner` for the NAS
@@ -1889,8 +1958,10 @@ data and required recovery behavior.
 5. I01-I03, the I04 implementation, Linux/ext4, and deployed Azure acceptance
    are complete for their documented scopes. WebDAV and pCloud are backlogged.
    Native Synology/Btrfs CLI, filesystem and process-recovery checks also passed
-   for the synthetic scope documented above. Prioritize the current new-primary
-   and existing off-site NAS plan; Azure remains an optional pilot. Revisit
+   for the synthetic scope documented above. Resolve the subsequent live-data
+   inventory kernel-panic investigation before another broad NAS scan or a
+   real-data pilot. Prioritize the current new-primary and existing off-site
+   NAS plan; Azure remains an optional pilot. Revisit
    further large-tree optimization when representative measurements justify it.
    Reuse the committed runners for later regressions.
 6. Update each finding's status with the fixing commit and verification

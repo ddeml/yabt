@@ -1021,6 +1021,20 @@ this does not establish support for every kernel-dependent feature. SDK tests
 under a numeric UID need a private `XDG_RUNTIME_DIR`. See the runner README and
 the deployment assessment for exact acceptance scope and remaining checks.
 
+The live-data metadata inventory on 2026-11-02 triggered or coincided with a
+confirmed NAS kernel panic while traversing the encrypted share. Persisted
+crash records show Btrfs delayed-reference/inode-update failures followed by a
+watchdog hard lockup; they do not identify the initiating userspace operation.
+Keep broad live-data scans and real-data pilots deferred while the cause and
+recovery plan remain unresolved. Low priority and metadata-only access do not
+prove low impact: eCryptfs enumeration can update lower-filesystem access
+metadata even when the upper directory uses `O_NOATIME`. Upstream behavior is
+evidence of a possible mechanism, not proof for Synology's patched kernel.
+Preserve diagnostic evidence, inspect existing status without starting repairs
+or stress tests, and distinguish the automatic post-crash scrub from an
+agent-started operation. See the dated incident section in the deployment
+assessment. Raw logs and private inventory paths stay in ignored local artifacts.
+
 Deployed-service acceptance credentials belong outside the repository in
 `%USERPROFILE%\.yabt\service-acceptance\providers.local.json` on this VM. Keep
 this location outside AppData to avoid MSIX app-data redirection. See
