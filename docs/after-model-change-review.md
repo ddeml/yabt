@@ -1500,14 +1500,21 @@ drives passing their existing SMART health checks, with no pending,
 reallocated or offline-uncorrectable sectors. That does not prove filesystem
 or RAM integrity. Btrfs reports one persistent corruption error, with other
 device-error counters zero. An older May 2026 scrub checksum error exists;
-the counter cannot be attributed to this crash. The automatic scrub had
-processed 4.17 TiB without reported errors at the status check, but was still
-running. No additional scrub, self-test, repair, update or reboot was started.
+the counter cannot be attributed to this crash.
 
-Keep full inventory and real-data pilots deferred. First preserve and review
-the scrub outcome and obtain Synology guidance on the captured BUG and the
-appropriate supported DSM fix or filesystem investigation. Do not treat a
-lower scan rate or a container as a fix for a shared-kernel crash. Any later
+On 2026-11-15, a read-only status check confirmed that the automatic Btrfs
+scrub finished on November 2 after 9h 11m 53s. It covered 34.11 TiB with
+zero read, checksum, verification, corrected or uncorrectable errors. The
+report also recorded data without checksums. DSM logged completion of
+the following RAID scrub on November 3 at 09:44:13 CET. All eight members
+were present, the array was idle, and the Btrfs corruption counter remained
+at one. The cause of the delayed-reference kernel panic remains unresolved.
+
+Keep full inventory and real-data pilots deferred. For data whose only copy
+is on the NAS, prioritize small, named rescue batches to independent storage
+and verify each batch at the destination. Obtain Synology guidance on the
+captured BUG before broad traversal. A lower scan rate or a container still
+uses the same kernel and filesystem. Any later
 bounded pilot needs an agreed recovery plan, explicit rate/resource limits
 and observability before resuming broad traversal.
 
