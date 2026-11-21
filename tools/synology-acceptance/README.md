@@ -91,3 +91,33 @@ reports no PID-limit support. These are host-specific deployment observations,
 not changes to the VM acceptance baseline.
 
 [runtime-directory]: https://github.com/dotnet/runtime/issues/135726
+
+## Workstation SSH and SFTP access
+
+`ssh_remote.py` provides `connect()` and `run(client, command, sudo=False)` for
+private deployment and diagnostic scripts. It uses Paramiko with the local
+OpenSSH alias `hsoffice-nas`, shared with HsOffice. That alias must specify one
+identity file, one pinned `UserKnownHostsFile`, a hostname and a user. Unknown or
+changed host keys fail closed; there is no password, SSH-agent or discovered-key
+fallback. Keep workstation addresses, private keys and credentials outside Git.
+
+CodexSandbox01's existing `artifacts/synology-acceptance/remote.py` delegates to
+this versioned module while retaining its command-file CLI and Paramiko/SFTP
+client interface. Its existing local `ssh-libs` supplies Paramiko. The private
+`check-access.py` probe also uses this pinned key connection and no longer
+automatically accepts or saves an unknown host key.
+
+SSH works without `DSM_CODEX_PASSWORD`. The returned Paramiko client retains its
+SFTP interface, but the current NAS rejects the SFTP subsystem under both key and
+legacy password authentication. Existing transfer scripts stream data through SSH
+exec channels and do not require SFTP. No NAS file service was enabled. Privileged commands still need
+that operator environment variable under the existing NAS sudo policy. It is
+sent only through SSH stdin, never passed as a command argument. No passwordless
+sudo permissions were introduced. Recheck the NAS per-user authorized-key setting
+after a DSM upgrade, which may regenerate SSH configuration.
+
+With Paramiko available, run the offline transport tests with
+`python -B -m unittest discover -s tools/synology-acceptance -p test_ssh_remote.py`.
+For a live read-only check, connect and run `hostname` or read a known system
+file through an SSH exec channel. Do not run inventory, recovery, upload or container scripts merely
+to test authentication; their separate authorization and NAS incident limits apply.
